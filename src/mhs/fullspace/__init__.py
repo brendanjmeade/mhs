@@ -34,10 +34,18 @@ obs/source pair: 18 s for a 1000 x 1000 matrix, ~31 min for 10k x 10k. Usable
 now, and the reason ``mhs.kernels.assemble`` is written so these calls can be
 replaced by numba kernels one at a time behind the parity gate.
 
+``api`` and ``pointwise`` were added after the first six: ``api`` gives the
+nodal-order-general displacement / stress / force entry points over the kernels,
+which is what lets the derivation gates exercise p = 1 and p = 2 (``mhs``'s own
+assembly is order-0 today), and ``pointwise`` gives the point kernels the
+lam/mu-pairing demonstration needs. Both are numpy-only and import nothing
+outside this package.
+
 Upstream: moss-org ``src/clq/`` @ ad0e992 (2026-10-03). Pinned by sha256 in
 ``tests/gates/parity/oracle_manifest.json`` under the ``mhs_oracle.clq`` names;
 the shipped copies are pinned separately, so a change to either side is visible.
 """
-from . import defaults, frame, kernels, moments, primitives, shape
+from . import api, defaults, frame, kernels, moments, pointwise, primitives, shape
 
-__all__ = ["defaults", "frame", "kernels", "moments", "primitives", "shape"]
+__all__ = ["api", "defaults", "frame", "kernels", "moments", "pointwise",
+           "primitives", "shape"]
