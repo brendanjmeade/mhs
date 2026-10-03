@@ -1,0 +1,62 @@
+{
+ "mhs_oracle.clq": {
+  "path": "src/mhs_oracle/clq/__init__.py",
+  "sha256": "bdac969273ce503abb52c8f27211080fe85632a669a5539cb11774ced12ebe3f",
+  "sha256_upstream": "bdac969273ce503abb52c8f27211080fe85632a669a5539cb11774ced12ebe3f",
+  "upstream": "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.clq.api": {
+  "path": "src/mhs_oracle/clq/api.py",
+  "sha256": "eaee9c45127209448f40bdc87085e1107b8964aa73f34ec55e8d02204f95a037",
+  "sha256_upstream": "eaee9c45127209448f40bdc87085e1107b8964aa73f34ec55e8d02204f95a037",
+  "upstream": "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.clq.defaults": {
+  "path": "src/mhs_oracle/clq/defaults.py",
+  "sha256": "58f5d429927367d416f3ee9388a6f55b9647d05f9ae6a129a572747e581eb43a",
+  "sha256_upstream": "58f5d429927367d416f3ee9388a6f55b9647d05f9ae6a129a572747e581eb43a",
+  "upstream": "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.clq.frame": {
+  "path": "src/mhs_oracle/clq/frame.py",
+  "sha256": "38e3d338b33c9dc280a1854d25fb38dbc4e44efe5d51ae5aca266a849d900da8",
+  "sha256_upstream": "38e3d338b33c9dc280a1854d25fb38dbc4e44efe5d51ae5aca266a849d900da8",
+  "upstream": "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.clq.kernels": {
+  "path": "src/mhs_oracle/clq/kernels.py",
+  "sha256": "0941ee4faaa057e3b2dd5726735b155f3474d94a88530ba4306576ddbdf2ab05",
+  "sha256_upstream": "0941ee4faaa057e3b2dd5726735b155f3474d94a88530ba4306576ddbdf2ab05",
+  "upstream": "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.clq.moments": {
+  "path": "src/mhs_oracle/clq/moments.py",
+  "sha256": "0aceb3eb778a545c4e6496d44468083a77f6275de554a105c30b387821269ae9",
+  "sha256_upstream": "0aceb3eb778a545c4e6496d44468083a77f6275de554a105c30b387821269ae9",
+  "upstream": "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.clq.pointwise": {
+  "path": "src/mhs_oracle/clq/pointwise.py",
+  "sha256": "444703dd9c95fcb552f9c2fdd2701357a7cb7750e06c8d2dedd1a730244d7d90",
+  "sha256_upstream": "444703dd9c95fcb552f9c2fdd2701357a7cb7750e06c8d2dedd1a730244d7d90",
+  "upstream": "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.clq.primitives": {
+  "path": "src/mhs_oracle/clq/primitives.py",
+  "sha256": "26fa709dc89fa35d9dcf0ae0ce1f9b6097ce89d41f7075dd3c4db88f1047ba1e",
+  "sha256_upstream": "26fa709dc89fa35d9dcf0ae0ce1f9b6097ce89d41f7075dd3c4db88f1047ba1e",
+  "upstream": "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.clq.quadrature": {
+  "path": "src/mhs_oracle/clq/quadrature.py",
+  "sha256": "eef5d5c1c61c0c28b25f2b8ca17b41845c417922e7fd61bab8c04847f8389fdb",
+  "sha256_upstream": "eef5d5c1c61c0c28b25f2b8ca17b41845c417922e7fd61bab8c04847f8389fdb",
+  "upstream": "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.clq.shape": {
+  "path": "src/mhs_oracle/clq/shape.py",
+  "sha256": "8a726f0da37902e4dd87ba112b73606815786288e57e6c5949af82362da4e770",
+  "sha256_upstream": "8a726f0da37902e4dd87ba112b73606815786288e57e6c5949af82362da4e770",
+  "upstream": "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+ }
+}

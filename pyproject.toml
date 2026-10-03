@@ -1,0 +1,96 @@
+# WHY THE VENDORED ORACLE IS NAMED `mhs_oracle` AND NOT `moss_kernel` / `clq`:
+# it is a vendored copy of moss-org's src/moss_kernel/ and src/clq/, and moss-org
+# installs those directories under those names via an editable .pth that puts
+# /Users/meade/Desktop/moss-org/src on sys.path for every process on the
+# development machine. Two packages sharing one name cannot both be imported --
+# one shadows the other silently, and the parity clause would then compare a copy
+# against ITSELF and still print PASS, with the residual merely dropping from
+# ~1e-12 to ~1e-16, which no tolerance rejects. That is not hypothetical; it is
+# moss-org's recorded failure (tests/gates/mbem/verify_oracle_provenance.py:7-15).
+# Worse here: it would silently test against whatever moss-org is checked out at.
+# The rename turned out to be free for clq, which uses relative imports
+# throughout, so all 10 files vendor BYTE-IDENTICALLY -- the provenance gate pins
+# both the vendored and the upstream sha256 and asserts they still agree. The
+# moss half has three absolute intra-package imports and will need an edit; that
+# record is the one where the two hashes differ, which is itself the audit.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mhs"
+version = "0.1.0"
+description = "Mollified Mindlin half-space triangular-dislocation Green's functions, as matrices"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Brendan Meade", email = "brendanjmeade@gmail.com" }]
+keywords = ["half space", "Mindlin", "triangular dislocation", "elasticity",
+            "geodesy", "Green's functions", "mollified"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+# TWO RUNTIME DEPENDENCIES, and the omissions are the design.
+#  * sympy is NOT here. `import moss_kernel.mindlin_kernels` costs a measured
+#    14.25 s because it builds and lambdifies ~90 symbolic matrices at module
+#    scope. The shipped path must never pay that, and `verify_import_hygiene`
+#    asserts sympy is absent from sys.modules after `import mhs`.
+#  * matplotlib is NOT here. The vendored mollified_elastic_kernels.py imports
+#    pyplot at module scope for plotting self-tests only. Same gate.
+#  * scipy is NOT here. Every closed form is elementary; the gates' Gauss rules
+#    come from numpy.polynomial.legendre.leggauss.
+#  * threadpoolctl is NOT here. mbem needs it because la/hop.py pins BLAS to one
+#    thread inside a block thread pool; mhs calls no BLAS. If that changes it is
+#    a hard dependency from that commit -- mbem's was missing while the dev
+#    environment happened to supply it, and a fresh install broke on the first
+#    compressed solve and nowhere earlier.
+dependencies = ["numpy", "numba"]
+
+[project.optional-dependencies]
+# EACH GATE BELOW FAILS RATHER THAN SKIPS WITHOUT ITS EXTRA, so these are test
+# REQUIREMENTS, not conveniences.
+#
+# `oracle` anchors every gate that imports the SYMPY half of the vendored oracle
+# (tests/gates/parity, tests/gates/oracle). sympy because mindlin_kernels.py
+# needs it at module scope; matplotlib because mollified_elastic_kernels.py
+# imports pyplot at module scope. 14.25 s per import is its price, which is why
+# CI does not install it per push. The vendored clq half is numpy-only and needs
+# no extra -- its parity gates run on every push.
+oracle = ["sympy", "matplotlib"]
+# `tde` anchors verify_cutde_limit: the eps -> 0 comparison against
+# cutde.halfspace through mhs.tdcs, the only check that can catch a
+# strike/dip/normal mix-up or a dip-sign flip. cutde imports cheaply, so this
+# one IS installed on every push.
+tde = ["cutde"]
+# pytest alone, deliberately: `pip install -e .[test,tde]` must stay a fast
+# install that runs the whole every-push suite.
+test = ["pytest"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+# Listed explicitly rather than found, so tests/gates/ and studies/ are never
+# packaged by accident -- they are scripts run by path, not importable units.
+packages = ["mhs", "mhs.fullspace", "mhs.kernels", "mhs_oracle",
+            "mhs_oracle.clq"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `--import-mode=importlib` through addopts, NOT an `importmode` ini key: there
+# is no such ini option, and pytest 9.0.2 answers one with a PytestConfigWarning
+# ("Unknown config option: importmode") and then carries on in the default
+# prepend mode. Writing it the other way documents a protection that is not in
+# place -- which is precisely the stale-claim failure this comment was written to
+# avoid, reproduced once before being caught. Together with the suite-qualified
+# module name in test_gates._import_gate, this is what keeps colliding gate
+# filenames distinct.
+addopts = ["--import-mode=importlib"]
+# The gates must never be collected by import: verify_import_hygiene and
+# verify_oracle_provenance assert on a PRISTINE module table, and gates rebind
+# defaults.* around a clause. norecursedirs is the belt to test_gates.py's braces.
+norecursedirs = ["tests/gates"]
+markers = ["slow: takes over 60 s"]
