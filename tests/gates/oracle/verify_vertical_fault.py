@@ -16,7 +16,8 @@ upstream derivation notes document, and where the ``I7`` seed's accuracy bound
 is ABSOLUTE rather than relative. Vertical faults are the commonest geometry in
 practice, so this is not a corner case.
 
-Four clauses, and the fourth retires a motivation the roadmap had wrong:
+Five clauses. The fourth bounds the cost of the image quadrature; the fifth
+finds where it fails outright, which is the case the package exists for:
 
   [a] THE GEOMETRY, measured rather than assumed: the vertical triangle's image
       plane contains the observer (offset 0 to rounding) and the dipping one's
@@ -43,15 +44,11 @@ Four clauses, and the fourth retires a motivation the roadmap had wrong:
       an inherited defect in the kernel -- and when that closed form lands, this
       configuration at small eps/L is precisely where it has to earn its keep.
 
-  [d] A SURFACE-REACHING FAULT IS NOT THE HARD CASE, measured. The roadmap's
-      stated reason for wanting closed-form image integration was that the
-      near-singular surface-breaking configuration is reachable only in closed
-      form. It is not: the hybrid decomposition -- closed-form direct term plus
-      quadrature on the image CORRECTION -- is machine-accurate at n_quad = 16
-      for a triangle whose vertex sits exactly on z = 0, and the VERTICAL
-      geometry of clause [a] is the better of the two. See part_d for why, for
-      the eps-independence that explains it, and for the domain boundary that
-      the first draft of this measurement mistook for a near-singularity.
+  [d] WHAT THE IMAGE QUADRATURE COSTS, AND WHERE IT STOPS WORKING. Displacement
+      at an on-element centroid is machine-accurate at n_quad = 16 even for a
+      triangle reaching z = 0 -- but that is the benign corner, and reading it
+      as "the surface case is fine" was wrong. Clause [e] measures the quantity
+      the package exists to produce.
 
 Needs the ``[oracle]`` extra; importing the Mindlin kernels costs ~14 s.
 
@@ -93,6 +90,17 @@ TOL_COPLANAR = 1e-12      # the image-plane offset of a vertical triangle
 # Measured 8.1e-15 vertical, 1.4e-14 dipping, at n_quad = 16.
 TOL_SURFACE = 1e-12
 TOL_EPS_SPREAD = 10.0     # measured spread over a 16x eps range; see [d]
+# Clause [e]: on-fault stress near the surface trace. eps as a FRACTION of h.
+EPS_FINE = 0.01           # fine enough to resolve the fault; quadrature fails
+EPS_COARSE = 0.1          # wide enough to hide the touching image; it converges
+# These gate the LAST INCREMENT, which is a different quantity from an error
+# against a reference and is necessarily larger: the 32 -> 64 increment reflects
+# the error at 32, not at 64. Measured 2.5e-6 at delta/eps = 10 and 7.6e-5 for
+# the coarse-eps escape, against 2.4e-1 on the trace -- four orders of
+# separation, so the discriminator is not delicate.
+TOL_CONVERGED = 1e-3
+TRIP_STAGNATE = 1.0e-2    # measured 2.4e-2 at delta/eps = 1, 2.4e-1 at delta=0
+TARGET_CLOSED_FORM = 1e-10
 
 
 def unit_normal(t):
@@ -238,13 +246,14 @@ def part_d(rep) -> None:
           DIFFERENT entry point as a near-singularity, and concluded the
           surface case was unreachable -- the opposite of what d-above shows.
 
-    What survives of the case for closed-form image integration is therefore
-    PERFORMANCE, not capability, and it has to be costed against the SHIPPED
-    direct term (``mhs.fullspace``, vectorised over observers, 3.4-8.0 us per
-    obs/source pair) rather than this oracle's scalar Python recursion at
-    2895 us. Costed against the latter the ceiling looks like 5.5x; against the
-    former the image quadrature dominates and the ceiling is an order of
-    magnitude. Only the second comparison means anything.
+    THE COST, aggregated over a realistic mesh rather than quoted from the worst
+    pair: on a surface-breaking vertical fault of 32 triangles at eps/h = 0.1,
+    reaching 1e-10 relative needs a mean of 101 quadrature points per pair
+    against the 16 a buried fault needs -- 6.3x -- with n_quad = 32 confined to
+    the 1.3% of pairs that are self-interactions in the top row.
+
+    That 6.3x is the PERFORMANCE case, and on its own it would not justify a
+    closed form. Clause [e] is the reason one is worth building anyway.
     """
     from mhs_oracle.moss.mindlin_triangle import (
         integrate_mindlin_dd_kernel_analytical as hybrid)
@@ -347,6 +356,107 @@ def part_d(rep) -> None:
                    f"({caught[:70] or 'NOT refused'}) -- which is the whole "
                    f"reason _coerce checks the convention on the vertices "
                    f"instead of trusting the kernel to notice")
+    part_e(rep)
+
+
+def part_e(rep) -> None:
+    """ON-FAULT STRESS NEAR THE SURFACE TRACE: where quadrature stops working.
+
+    This is the clause that justifies closed-form image integration, and it is
+    about the quantity the package exists to produce: **stress on a fault**, at
+    an on-element collocation point, for a fault that reaches the free surface.
+
+    THE GEOMETRY. Reflect a surface-breaking vertical triangle. The image is
+    coplanar with it (clause [a]) and the two SHARE the z = 0 edge. An observer
+    on the element at clearance ``delta`` below that edge is therefore at
+    distance O(delta) from the image triangle, inside a stress kernel that goes
+    like ``1/r^3``. As ``delta -> 0`` the image integrand becomes singular at an
+    interior quadrature point, and Gauss-Legendre has nothing to offer.
+
+    WHAT GOVERNS IT IS delta/eps, not delta and not h -- the same structure the
+    upstream full-space work found for collocation clearance from element edges.
+    The mollification smears the image over a width eps, so an observer more
+    than a few eps clear of the trace never sees the singularity, and one closer
+    than eps sees nothing else.
+
+    THE DIAGNOSTIC IS REFERENCE-FREE, deliberately. When the rule stagnates a
+    high-n_quad "reference" is wrong too, so an error measured against it is
+    only a LOWER bound -- the first draft of this measurement quoted such
+    numbers (0.96 at n_quad = 8 falling to 0.58 at 64, against an n_quad = 128
+    reference) and they understate the problem. What is gated instead is the
+    LAST INCREMENT, ``|sigma(64) - sigma(32)| / |sigma(64)|``: negligible for a
+    converging rule, O(1) for a stagnating one, and no reference needed.
+
+    THE ESCAPE, AND WHY IT IS NOT ONE. At eps = 0.1 h the same geometry
+    converges -- the band is wide enough to hide the touching image. So
+    quadrature can always be rescued by raising eps. But eps is a RESOLUTION
+    FLOOR: raising it to buy quadrature accuracy smears the fault structure
+    being resolved, trading a numerical error for a modelling compromise.
+    Removing that trade is what the closed form is for, and it is the reason
+    the 6.3x of clause [d] is not the case for building one.
+
+    TARGET FOR THE CLOSED FORM, stated now so it is not negotiated later: the
+    last increment below 1e-10 at every delta/eps in the ladder INCLUDING
+    delta = 0, at eps = 0.01 h. When that lands the stagnation clause below
+    fails, and the commit that lands it must invert it.
+    """
+    from mhs_oracle.moss.mindlin_triangle import (
+        integrate_mindlin_stress_kernel_analytical as sig)
+
+    #: Vertical, top edge ON the free surface: the image shares that edge.
+    T = np.array([[0.0, 0.0, 0.0],
+                  [0.0, 1.0, 0.0],
+                  [0.0, 0.5, -1.0]])
+    nn = unit_normal(T)
+
+    def last_increment(delta: float, eps: float) -> tuple[float, float]:
+        """(last increment, |sigma|) for an observer delta below the trace."""
+        c = np.array([0.0, 0.5, -delta])
+        a = sig(c, T[0], T[1], T[2], nn, MU, NU, eps, n_quad=32)
+        b = sig(c, T[0], T[1], T[2], nn, MU, NU, eps, n_quad=64)
+        return relmax(a, b), float(np.abs(b).max())
+
+    print("\n[e] ON-FAULT STRESS NEAR THE SURFACE TRACE -- the case the "
+          "package exists for")
+    print("    Vertical fault reaching z = 0; observer ON the element at "
+          "clearance delta.")
+    print("    Diagnostic is the LAST INCREMENT n_quad 32 -> 64, so no "
+          "reference is assumed.")
+    print(f"\n    eps = {EPS_FINE:g} h  (fine enough to resolve the fault)")
+    print(f"      {'delta':>9} {'delta/eps':>10} {'last increment':>16} "
+          f"{'|sigma|':>10}")
+    fine = {}
+    for delta in (0.1, 0.01, 0.0):
+        inc, mag = last_increment(delta, EPS_FINE)
+        fine[delta] = inc
+        print(f"      {delta:9.3f} {delta / EPS_FINE:10.2f} {inc:16.2e} "
+              f"{mag:10.4f}")
+
+    rep.check(f"e clear of the trace (delta/eps = {0.1 / EPS_FINE:g}) the rule "
+              f"DOES converge", fine[0.1], TOL_CONVERGED,
+              "so the failure below is specific to the trace, not a general "
+              "defect of the quadrature")
+    rep.check_bool(f"e ON the trace it STAGNATES (last increment > "
+                   f"{TRIP_STAGNATE:g})", fine[0.0] > TRIP_STAGNATE,
+                   f"({fine[0.0]:.2e} at delta = 0) -- 64x the points does not "
+                   f"help, because the image triangle TOUCHES the observer. "
+                   f"The closed form must invert this clause; target "
+                   f"< {TARGET_CLOSED_FORM:.0e} at every delta.")
+    rep.check_bool("e the stagnation is governed by delta/eps",
+                   fine[0.01] > TRIP_STAGNATE > fine[0.1],
+                   f"(delta/eps = 1 gives {fine[0.01]:.2e}, delta/eps = "
+                   f"{0.1 / EPS_FINE:g} gives {fine[0.1]:.2e}) -- clearance in "
+                   f"units of eps, not h, is the parameter")
+
+    coarse_inc, _ = last_increment(0.0, EPS_COARSE)
+    print(f"\n    eps = {EPS_COARSE:g} h  (the band now hides the touching "
+          f"image)")
+    print(f"      {0.0:9.3f} {0.0:10.2f} {coarse_inc:16.2e}")
+    rep.check(f"e raising eps to {EPS_COARSE:g} h rescues the quadrature",
+              coarse_inc, TOL_CONVERGED,
+              "the ONLY escape quadrature has -- and eps is a resolution "
+              "floor, so it buys accuracy by smearing the fault structure "
+              "being resolved")
 
 
 if __name__ == "__main__":
