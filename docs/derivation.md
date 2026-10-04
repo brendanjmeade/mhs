@@ -179,3 +179,71 @@ improvement was measured first against the quantity it was designed to improve
 (a residual that should be zero) and only later against the quantity a caller
 reads. The first framing said 50×, the second says 1.7×. The second is the one
 that decides.
+
+
+---
+
+# Step 8b: the Q-family rationalises, and what is left is two quadratics
+
+Recorded before the work, because the first finding changes what the work IS.
+
+## The Q-family has no transcendentals
+
+The image kernel's Q-family carries ``1/Q^q`` with ``Q = R2 - D3``, which looks
+like a new transcendental family needing its own primitives. It is not. Since
+
+    R2^2 = D1^2 + D2^2 + D3^2 + eps^2      so      R2^2 - D3^2 = W
+
+with ``W = D1^2 + D2^2 + eps^2``, the denominator rationalises:
+
+    1/Q = (R2 + D3) / W                             (residual exactly 0)
+
+so ``1/Q^q = (R2 + D3)^q / W^q``, and EVEN powers of ``R2`` then collapse
+through ``R2^2 = W + D3^2``. Only a single factor of ``R2`` survives. The whole
+Q-family is therefore
+
+    poly(D1, D2, D3, eps) / W^k   +   R2 * poly(...) / W^k
+
+-- rational, with no ``log Q`` and no ``1/Q`` anywhere. (``log Q`` appears in
+Apostol's potentials but not in ``dG/d src`` or ``d2G/d obs d src``, which is
+all the slip kernels need: the measured Q powers there are {0, 1, 2, 3} with no
+log.)
+
+## What W is, and why the geometry decides the difficulty
+
+``D1, D2`` are the HORIZONTAL components of ``D``, so ``W`` is the mollified
+squared distance from the observer to the VERTICAL LINE through the source
+point. The primitive needed is
+
+    int_T  xi1^a xi2^b / (W^k R^n) dS,      n odd
+
+a product of the existing hierarchy's denominator with powers of a SECOND
+quadratic. How hard that is depends entirely on the element's orientation:
+
+| element | W in the element's frame | consequence |
+|---|---|---|
+| horizontal | ``xi1^2 + xi2^2 + eps^2`` -- the SAME radial quadratic as ``R``, at a different height | the existing hierarchy, evaluated twice. No new primitives. |
+| vertical | one in-plane direction is vertical, and ``W`` does not depend on it | that integral is elementary |
+| general dip | two genuinely different quadratics | the new primitive family |
+
+So the roadmap's rung 1 / rung 2 split survives, and the "two quadratic forms"
+risk it flagged is real -- but it is now a RATIONAL two-quadratic integral over
+a polygon rather than an unknown transcendental class. Euler substitution on
+the conic gives log, arctan and algebraic terms; no dilogarithm barrier.
+
+## What changed about WHY to do it
+
+8b was motivated as the capability fix for on-fault stress near a surface trace.
+**That motivation is gone**: the quadrature budget law (``q_gauss_orders``)
+closed the accuracy gap -- 1e-15 at every collocation point, and 1.1e-8 at
+0.03 h below a trace at eps/h = 0.003, against O(1) before.
+
+What remains is COST, and it is large. On a realistic batch the Q-family
+quadrature is about 98% of the image kernel's runtime (12.4 ms per obs/source
+pair against the closed-form R-family's 0.23 ms), and the adaptive rule raised
+it 4.1x over the flat order it replaced. A closed-form Q-family would remove
+essentially all of it.
+
+So 8b is now a performance project with a bounded, rational target -- a better
+position than when it was a capability project with an unknown function class,
+but no longer urgent. The accuracy it was meant to buy is already banked.
