@@ -46,6 +46,13 @@ import numpy as np
 from _common import TRI, Report, relmax, shipped
 
 
+#: Measured 3.9e-16 .. 8.3e-16 for the producer over 12 L .. 300 L, against an
+#: independent 240x240 rule. The analytic path over the same span is 7.0e-14 ..
+#: 6.8e-11, which is the tripwire below.
+TOL_FAR = 1e-13
+TRIP_FAR_ANALYTIC = 1e-12
+
+
 def quad_moments(fr, obs, eps, degrees, n):
     """``M_n^(a,b)`` by Gauss quadrature on the reference triangle.
 
@@ -204,7 +211,95 @@ def main() -> bool:
               worst(tabF_0, quad_moments(fr, obs_f[[0, 2]], 0.0,
                                          tabF_0.degrees, 200)), 1e-11)
     part_series(rep)
+    part_far(rep, fr)
     return rep.finish()
+
+
+def part_far(rep, fr) -> None:
+    """THE FAR-FIELD PRODUCER, which almost nothing was checking.
+
+    Beyond ``D_STAR * L`` ``weighted_tables`` fills the tables by Gauss
+    quadrature instead of the divergence-theorem closed form, because the
+    closed form loses digits as ``(R/L)^4-5`` out there. That branch is the
+    one that matters for a PRODUCTION-SIZE matrix -- the near field is O(1)
+    work per source, so at 10k elements 99% of the pairs are far -- and before
+    this clause the whole mhs suite drove it 17 times with 37 observer rows,
+    all from one gate. ``fullspace/defaults.py`` even cites a
+    ``verify_far_field.py`` that was never ported here.
+
+    Three clauses, and the two tripwires are what make the first one mean
+    something:
+
+      - the producer matches an INDEPENDENT 240x240 rule. At order 0 the
+        per-node weighted table with a constant shape function is exactly
+        ``M_n^(a,b)``, so ``quad_moments`` above is a reference that shares no
+        code with it.
+
+      - below ``D_STAR`` the hybrid and analytic paths are BITWISE equal, which
+        is what pins the switch to the distance it is documented at rather than
+        to wherever the code happens to put it.
+
+      - far out the ANALYTIC path is materially WORSE than the producer, so the
+        switch earns its keep. Without this the first clause would also pass
+        for a hybrid that never switched.
+    """
+    moments = shipped("moments")
+    weighted_tables = moments.weighted_tables
+    kernel_degrees = moments.kernel_degrees
+
+    want = ("U", "H", "E")
+    need = kernel_degrees(0, want)
+    eps = 0.1
+    L = max(float(np.linalg.norm(TRI[i] - TRI[j]))
+            for i in range(3) for j in range(3))
+
+    def at(mult):
+        d = mult * L
+        return np.array([[0.4 + d * 0.6, 0.3 + d * 0.5, -d * 0.62]])
+
+    def table(obs, far_field):
+        W, _z, _X, _i, _h = weighted_tables(fr, obs, eps, 0, want,
+                                            far_field=far_field)
+        return W
+
+    def err(W, ref):
+        w = 0.0
+        for n, d in need.items():
+            for a in range(d + 1):
+                for b in range(d + 1 - a):
+                    w = max(w, relmax(W[n][:, 0, a, b], ref[n][:, a, b]))
+        return w
+
+    print("\n  [far] the far-field quadrature producer, beyond D_STAR * L")
+    print(f"    {'dist/L':>7s} {'producer':>11s} {'analytic':>11s}")
+    worst_far, worst_an = 0.0, 0.0
+    for mult in (12.0, 30.0, 100.0, 300.0):
+        obs = at(mult)
+        ref = quad_moments(fr, obs, eps, need, 240)
+        e_far = err(table(obs, "hybrid"), ref)
+        e_an = err(table(obs, "analytic"), ref)
+        worst_far = max(worst_far, e_far)
+        worst_an = max(worst_an, e_an)
+        print(f"    {mult:7.1f} {e_far:11.2e} {e_an:11.2e}")
+    rep.check("far-field producer vs an independent 240x240 rule",
+              worst_far, TOL_FAR,
+              "12 L to 300 L, where the hybrid split sends the quadrature "
+              "branch; 99% of a 10k-element matrix's pairs live out here")
+
+    below = at(3.0)
+    same = all(np.array_equal(table(below, "hybrid")[n],
+                              table(below, "analytic")[n]) for n in need)
+    rep.check_bool("below D_STAR the hybrid path IS the analytic path, bitwise",
+                   same,
+                   f"at 3 L with D_STAR = {shipped('defaults').D_STAR} -- "
+                   f"pins the switch to its documented distance, not to "
+                   f"wherever the code happens to put it")
+    rep.check_bool(f"far out the ANALYTIC path is materially worse "
+                   f"(> {TRIP_FAR_ANALYTIC:g})", worst_an > TRIP_FAR_ANALYTIC,
+                   f"({worst_an:.2e} against the producer's {worst_far:.2e}) "
+                   f"-- so the clause above passes because the producer is "
+                   f"right, not because a hybrid that never switched would "
+                   f"also pass it")
 
 
 def part_series(rep) -> None:

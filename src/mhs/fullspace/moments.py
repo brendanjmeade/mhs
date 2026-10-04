@@ -39,6 +39,8 @@ observers with ``sqrt(|x - centroid|^2 + eps^2) > D_STAR * L``.
 """
 from __future__ import annotations
 
+import functools
+
 from math import comb
 
 import numpy as np
@@ -396,18 +398,30 @@ def weighted_from_table(table: MomentTable, coeffs: np.ndarray, need: dict[int, 
     return W
 
 
+@functools.lru_cache(maxsize=64)
 def gauss_triangle(n: int):
     """Collapsed product Gauss-Legendre rule on the reference triangle
-    (0,0),(1,0),(0,1): returns (xi1, xi2, w) with sum(w) = 1/2."""
+    (0,0),(1,0),(0,1): returns (xi1, xi2, w) with sum(w) = 1/2.
+
+    MEMOISED: a pure function of ``n`` that runs a Legendre eigenvalue solve
+    and two meshgrids, and the producers call it on every block -- 64 times for
+    one 512 x 16 matrix, over a handful of distinct orders.
+
+    The returned arrays are READ-ONLY, because a memoised array factory that
+    hands out mutable references invites a caller to poison the cache for
+    every later one. No caller writes to them; this makes that a loud failure
+    rather than a quiet one.
+    """
     g, w = np.polynomial.legendre.leggauss(n)
     g = 0.5 * (g + 1.0)
     w = 0.5 * w
     gi, gj = np.meshgrid(g, g, indexing="ij")
     wi, wj = np.meshgrid(w, w, indexing="ij")
-    xi1 = gi.ravel()
-    xi2 = (gj * (1.0 - gi)).ravel()
-    ww = (wi * wj * (1.0 - gi)).ravel()
-    return xi1, xi2, ww
+    out = (gi.ravel(), (gj * (1.0 - gi)).ravel(),
+           (wi * wj * (1.0 - gi)).ravel())
+    for arr in out:
+        arr.flags.writeable = False
+    return out
 
 
 def quadrature_weighted_tables(frame: Frame, obs, eps: float, order: int,
@@ -431,17 +445,71 @@ def quadrature_weighted_tables(frame: Frame, obs, eps: float, order: int,
         for b in range(D1 - a):
             Nq += c0[:, a, b][None, :] * (eta[:, 0] ** a * eta[:, 1] ** b)[:, None]
     xi = eta[None, :, :] - X[:, None, :]                      # (N, Q, 2)
-    R2 = xi[..., 0] ** 2 + xi[..., 1] ** 2 + h2[:, None]
+    xi0 = xi[..., 0]
+    xi1_ = xi[..., 1]
+    R2 = xi0 * xi0 + xi1_ * xi1_ + h2[:, None]
+    if not need:
+        return {}, z, X
+
+    # THE IN-PLANE MONOMIALS DO NOT DEPEND ON n, and were being rebuilt inside
+    # the loop over it: the image spec {3:1, 5:3, 7:4, 9:5} has 49 (n, a, b)
+    # slots over the 21 distinct monomials of its top degree. Built once here,
+    # by power LADDERS rather than `**` -- the exponents are small fixed
+    # integers, where `**` is a pow() call per element.
+    dmax = max(need.values())
+    p0 = _ladder(xi0, dmax)
+    p1 = _ladder(xi1_, dmax)
+    mono: dict[tuple[int, int], np.ndarray] = {}
+    for a in range(dmax + 1):
+        for b in range(dmax + 1 - a):
+            if a and b:
+                mono[(a, b)] = wq[None, :] * p0[a] * p1[b]
+            elif a:
+                mono[(a, b)] = wq[None, :] * p0[a]
+            elif b:
+                mono[(a, b)] = wq[None, :] * p1[b]
+            else:
+                mono[(a, b)] = np.broadcast_to(wq[None, :], R2.shape)
+
+    # R^-n off ONE reciprocal square root and a ladder in R^-2, replacing a
+    # fractional pow() per element per n. Every n the kernels and the image
+    # table ask for is ODD (kernel_degrees gives {1, 3, 5, 7}, the image table
+    # {3, 5, 7, 9}), which is what lets the ladder step by two; asserted rather
+    # than assumed, because an even n would otherwise miss the dict and fail
+    # as a KeyError far from its cause.
+    assert all(n % 2 == 1 for n in need), f"even n in the far-field spec: {need}"
+    rpow: dict[int, np.ndarray] = {}
+    inv = 1.0 / np.sqrt(R2)
+    inv2 = inv * inv
+    cur = inv                                                 # n = 1
+    for n in range(1, max(need) + 1, 2):
+        if n in need:
+            rpow[n] = cur
+        cur = cur * inv2
+
     W = {}
     for n, d in need.items():
-        Rn = R2 ** (-0.5 * n)                                 # (N, Q)
+        Rn = rpow[n]
         Wn = np.zeros((X.shape[0], K, d + 1, d + 1))
         for a in range(d + 1):
             for b in range(d + 1 - a):
-                f = wq[None, :] * xi[..., 0] ** a * xi[..., 1] ** b * Rn   # (N, Q)
-                Wn[:, :, a, b] = f @ Nq
+                Wn[:, :, a, b] = (mono[(a, b)] * Rn) @ Nq
         W[n] = Wn
     return W, z, X
+
+
+def _ladder(arr: np.ndarray, kmax: int) -> list:
+    """``[1.0, arr, arr**2, ...]`` by repeated multiplication.
+
+    Slot 0 is the scalar ``1.0`` and is never read: a zero exponent is skipped
+    by the caller rather than multiplied by an array of ones.
+    """
+    out = [1.0]
+    cur = arr
+    for _ in range(kmax):
+        out.append(cur)
+        cur = cur * arr
+    return out
 
 
 def weighted_tables(frame: Frame, obs, eps: float, order: int, want,
