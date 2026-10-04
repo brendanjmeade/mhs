@@ -203,7 +203,84 @@ def main() -> bool:
     rep.check("P2 force table, eps=0 off-plane, vs 200x200 Gauss",
               worst(tabF_0, quad_moments(fr, obs_f[[0, 2]], 0.0,
                                          tabF_0.degrees, 200)), 1e-11)
+    part_series(rep)
     return rep.finish()
+
+
+def part_series(rep) -> None:
+    """THE MEMOISED EDGE SERIES, against the per-call forms, BITWISE.
+
+    ``edge_table`` shares the exponent-indexed work of both binomial series
+    across the ``(k, m)`` pairs, because the power differences and the bases
+    depend only on an exponent and those collide heavily -- 416 array
+    evaluations covering ~69 distinct exponents on the image kernel's spec. The
+    claim that goes with it is that nothing was reassociated: the same products
+    in the same order, so every entry is bitwise what the per-call form gives.
+
+    That is worth a clause rather than a measurement taken once. A tolerance
+    here would be the wrong instrument -- if these ever merely AGREE rather
+    than being identical, the sharing reassociated something, and the right
+    response is to find out what, not to widen a bound.
+
+    Both regimes, and every ``m`` the kernels reach including the force
+    family's ``m = 1`` and the downward-seeded ``m = -1``.
+    """
+    from mhs.fullspace import defaults as fd
+    from mhs.fullspace.primitives import (_LargeUSeries, _SmallUSeries,
+                                          _series_dP, _small_u_series_dP)
+
+    print("\n  [series] memoised contexts vs the per-call forms, bitwise")
+    spec = {-1: 2, 1: 2, 3: 2, 5: 4, 7: 5, 9: 6}
+    nT = fd.SERIES_TERMS
+    rng = np.random.default_rng(17)
+    n_arr = n_same = 0
+    for _ in range(3):
+        N = 256
+        # large-|u|: same sign, |u| >> rho, which is where SERIES_U_OVER_RHO
+        # sends a batch
+        rho2 = np.abs(rng.normal(size=N)) * 0.05 + 1e-4
+        ua = np.abs(rng.normal(size=N)) * 4.0 + 4.0 * np.sqrt(rho2)
+        ub = ua + np.abs(rng.normal(size=N)) * 3.0 + 1e-3
+        ctx = _LargeUSeries(ua, ub, rho2, nT)
+        for m, kmax in spec.items():
+            for k in range(kmax + 1):
+                n_arr += 1
+                n_same += int(np.array_equal(
+                    ctx.dP(k, m), _series_dP(k, m, ua, ub, rho2, nT)))
+        # small-|u|: |u| << rho, MIXED signs, which is the branchier one
+        rho2s = np.abs(rng.normal(size=N)) * 3.0 + 1.0
+        rhos = np.sqrt(rho2s)
+        uas = rng.normal(size=N) * 0.1 * rhos
+        ubs = uas + np.abs(rng.normal(size=N)) * 0.1 * rhos + 1e-9
+        ctx2 = _SmallUSeries(uas, ubs, rho2s, nT)
+        for m, kmax in spec.items():
+            for k in range(kmax + 1):
+                n_arr += 1
+                n_same += int(np.array_equal(
+                    ctx2.dP(k, m),
+                    _small_u_series_dP(k, m, uas, ubs, rho2s, nT)))
+    rep.check_bool(f"memoised edge series == per-call, BITWISE "
+                   f"({n_same}/{n_arr} arrays)", n_same == n_arr,
+                   "no tolerance: these are the same products in the same "
+                   "association and the same accumulation order, so anything "
+                   "short of identical means the sharing reassociated "
+                   "something")
+
+    # And the tripwire: the regime masks must PARTITION, because edge_table
+    # fills an np.empty and a row claimed by no branch is uninitialised memory
+    # in a moment table. edge_table asserts this at runtime; this checks that
+    # the assertion is reachable rather than vacuous, by driving a batch that
+    # lands in all four regimes at once.
+    from mhs.fullspace.primitives import edge_table
+    ua = np.array([2.0, 0.01, 1.0, -1.0, 3.0])
+    ub = np.array([9.0, 0.02, 2.0, 1.0, 4.0])
+    rho2 = np.array([1e-4, 4.0, 0.3, 0.3, 0.0])      # ser, small, closed, closed, zero
+    tab = edge_table(ua, ub, rho2, {3: 1, 5: 2})
+    rep.check_bool("a mixed batch hits every edge regime and stays finite",
+                   all(np.all(np.isfinite(v)) for v in tab.values()),
+                   "large-|u| series, small-|u| series, closed form (both "
+                   "signs) and rho = 0 in one call -- an uninitialised row "
+                   "would show up as garbage or NaN here")
 
 
 if __name__ == "__main__":

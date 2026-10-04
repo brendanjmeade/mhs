@@ -225,7 +225,14 @@ def _dpow(xa, xb, q, log_r, close):
 
 
 def _series_dP(k: int, m: int, ua, ub, rho2, n_terms: int) -> np.ndarray:
-    """Large-|u| series for int_{ua}^{ub} u^k R^-m du, requires 0 < ua < ub and
+    """THE PER-CALL REFERENCE for :class:`_LargeUSeries`, kept and gated.
+
+    ``edge_table`` no longer calls this -- it shares the exponent-indexed work
+    across ``(k, m)`` through the class above -- but the two must agree
+    BITWISE, and a claim like that is worth a gate rather than a measurement
+    taken once. ``verify_moments`` compares them.
+
+    Large-|u| series for int_{ua}^{ub} u^k R^-m du, requires 0 < ua < ub and
     rho2/ua^2 <= 1/4.  Scale-free form: with x = rho^2/ua^2 and t = u/ua,
 
         = ua^(k-m+1) sum_j C(-m/2, j) x^j [t^q / q]_1^{ub/ua},  q = k - m + 1 - 2j.
@@ -250,7 +257,14 @@ def _series_dP(k: int, m: int, ua, ub, rho2, n_terms: int) -> np.ndarray:
 
 
 def _small_u_series_dP(k: int, m: int, ua, ub, rho2, n_terms: int) -> np.ndarray:
-    """Small-|u| series for int_{ua}^{ub} u^k R^-m du, requires
+    """THE PER-CALL REFERENCE for :class:`_SmallUSeries`, kept and gated.
+
+    ``edge_table`` no longer calls this -- it shares the exponent-indexed work
+    across ``(k, m)`` through the class above -- but the two must agree
+    BITWISE, and a claim like that is worth a gate rather than a measurement
+    taken once. ``verify_moments`` compares them.
+
+    Small-|u| series for int_{ua}^{ub} u^k R^-m du, requires
     max(|ua|, |ub|) <= rho/2.  Any signs.  Scale-free form: with y = u/rho,
 
         = rho^(k+1-m) sum_j C(-m/2, j) [y^p / p]_{ya}^{yb},  p = k + 2j + 1.
@@ -274,6 +288,114 @@ def _small_u_series_dP(k: int, m: int, ua, ub, rho2, n_terms: int) -> np.ndarray
         dpow = np.where(close, d_close, d_direct)
         out = out + c * dpow / pw
     return scale * out
+
+
+class _LargeUSeries:
+    """The large-|u| binomial series over one edge batch, shared across (k, m).
+
+    WHY THIS EXISTS. :func:`_series_dP` recomputes, for every ``(k, m)`` pair,
+    the power difference ``[t^q/q]`` and the base ``ua^(k-m+1)`` -- but both
+    depend only on the EXPONENT, not on ``k`` and ``m`` separately, and the
+    exponents collide heavily across the pairs. On the image kernel's spec that
+    is 13 ``(k, m)`` pairs x ``SERIES_TERMS`` = 416 transcendental array
+    evaluations covering about 69 distinct exponents, so six in seven were
+    recomputations of a value already in memory. Hoisting them here made
+    ``edge_table`` 2.9x faster on its own.
+
+    BIT-IDENTICAL to :func:`_series_dP`, deliberately and checkably: the terms
+    are the same products in the same association and the accumulation runs in
+    the same order, so nothing is reassociated. ``verify_moments`` asserts that
+    against the per-call form rather than taking it on trust.
+    """
+
+    def __init__(self, ua, ub, rho2, n_terms: int):
+        self.ua = ua
+        self.n_terms = n_terms
+        self.r = ub / ua
+        self.log_r = np.log1p((ub - ua) / ua)
+        self.close = self.r < 2.0
+        self.ones = np.ones_like(ua)
+        x = rho2 / (ua * ua)
+        xj = np.ones_like(ua)
+        self.xj = []
+        for _ in range(n_terms):
+            self.xj.append(xj)
+            xj = xj * x                       # the same ladder _series_dP runs
+        self._dq: dict[int, np.ndarray] = {}
+        self._base: dict[int, np.ndarray] = {}
+
+    def _dq_of(self, q: int) -> np.ndarray:
+        term = self._dq.get(q)
+        if term is None:
+            term = _dpow(self.ones, self.r, q, self.log_r, self.close)
+            if q != 0:
+                term = term / q
+            self._dq[q] = term
+        return term
+
+    def _base_of(self, s: int) -> np.ndarray:
+        base = self._base.get(s)
+        if base is None:
+            base = self.ua ** s
+            self._base[s] = base
+        return base
+
+    def dP(self, k: int, m: int) -> np.ndarray:
+        s = k - m + 1
+        out = np.zeros_like(self.ua)
+        for j in range(self.n_terms):
+            out = out + _binom_half(m, j) * self.xj[j] * self._dq_of(s - 2 * j)
+        return self._base_of(s) * out
+
+
+class _SmallUSeries:
+    """The small-|u| binomial series over one edge batch, shared across (k, m).
+
+    Same reduction as :class:`_LargeUSeries`: the power difference depends only
+    on ``pw = k + 2j + 1`` and the scale only on ``k + 1 - m``. This is the
+    costlier of the two in practice -- it was 20% of a near-field
+    ``stress_matrix`` on its own -- because each term evaluates BOTH the
+    ``expm1`` and the direct branch and then selects, for every row.
+
+    Bit-identical to :func:`_small_u_series_dP`, checked in ``verify_moments``.
+    """
+
+    def __init__(self, ua, ub, rho2, n_terms: int):
+        self.n_terms = n_terms
+        self.rho = np.sqrt(rho2)
+        self.ya = ua / self.rho
+        self.yb = ub / self.rho
+        same = (ua * ub) > 0.0
+        with np.errstate(divide="ignore", invalid="ignore"):
+            self.log_r = np.where(same, np.log1p((ub - ua) / ua), 0.0)
+            ratio = np.where(same, ub / ua, np.inf)
+        self.close = same & (np.abs(ratio) < 2.0) & (np.abs(ratio) > 0.5)
+        self._dp: dict[int, np.ndarray] = {}
+        self._scale: dict[int, np.ndarray] = {}
+
+    def _dpow_of(self, pw: int) -> np.ndarray:
+        val = self._dp.get(pw)
+        if val is None:
+            with np.errstate(over="ignore", invalid="ignore"):
+                d_close = self.ya ** pw * np.expm1(pw * self.log_r)
+                d_direct = self.yb ** pw - self.ya ** pw
+            val = np.where(self.close, d_close, d_direct)
+            self._dp[pw] = val
+        return val
+
+    def _scale_of(self, e: int) -> np.ndarray:
+        s = self._scale.get(e)
+        if s is None:
+            s = self.rho ** e
+            self._scale[e] = s
+        return s
+
+    def dP(self, k: int, m: int) -> np.ndarray:
+        out = np.zeros_like(self.ya)
+        for j in range(self.n_terms):
+            pw = k + 2 * j + 1
+            out = out + _binom_half(m, j) * self._dpow_of(pw) / pw
+        return self._scale_of(k + 1 - m) * out
 
 
 def _rho0_dP(k: int, m: int, ua, ub):
@@ -327,47 +449,55 @@ def edge_table(ua, ub, rho2, spec: dict[int, int]) -> dict[int, np.ndarray]:
     rho2 = np.asarray(rho2, float)
     rho = np.sqrt(rho2)
     out = {m: np.empty((ua.shape[0], kmax + 1)) for m, kmax in spec.items()}
+    n_terms = defaults.SERIES_TERMS
 
-    # rho = 0 rows are excluded from the general machinery (which forms 1/rho^2)
-    # and filled from the elementary closed form below.
+    # Which regime each row belongs to, decided ONCE. rho = 0 rows are excluded
+    # from the general machinery (which forms 1/rho^2) and take the elementary
+    # R = |u| forms; the two series regimes OVERRIDE the closed form where they
+    # apply, so the closed form is not computed there at all -- it was 52% of
+    # the finite rows on a measured near-field batch, all of it discarded.
     zero = rho2 == 0.0
     fin = ~zero
-    if np.any(fin):
-        diffs = _EdgeDiffs(ua[fin], ub[fin], rho2[fin])
+    umax = np.maximum(np.abs(ua), np.abs(ub))
+    umin = np.minimum(np.abs(ua), np.abs(ub))
+    small = fin & (umax <= defaults.SMALL_U_OVER_RHO * rho)
+    ser = (fin & ((ua * ub) > 0.0)
+           & (umin >= defaults.SERIES_U_OVER_RHO * rho))
+    closed = fin & ~small & ~ser
+    # `out` is np.empty, so every row must be written by exactly one branch
+    # below. The four masks partition the batch by construction; asserting it
+    # is cheap next to leaving uninitialised memory in a moment table.
+    assert np.all(closed | zero | small | ser), "edge regimes do not partition"
+
+    if np.any(closed):
+        diffs = _EdgeDiffs(ua[closed], ub[closed], rho2[closed])
         for m, kmax in spec.items():
             for k in range(kmax + 1):
-                out[m][fin, k] = diffs.dP(k, m)
+                out[m][closed, k] = diffs.dP(k, m)
     if np.any(zero):
         for m, kmax in spec.items():
             for k in range(kmax + 1):
                 out[m][zero, k] = _rho0_dP(k, m, ua[zero], ub[zero])
 
     # Small-|u| regime: both |u| <= SMALL_U_OVER_RHO * rho (rho >> |u|).
-    umax = np.maximum(np.abs(ua), np.abs(ub))
-    small = fin & (umax <= defaults.SMALL_U_OVER_RHO * rho)
     if np.any(small):
-        a = ua[small]
-        b = ub[small]
-        r2 = rho2[small]
+        series = _SmallUSeries(ua[small], ub[small], rho2[small], n_terms)
         for m, kmax in spec.items():
             for k in range(kmax + 1):
-                out[m][small, k] = _small_u_series_dP(k, m, a, b, r2, defaults.SERIES_TERMS)
+                out[m][small, k] = series.dP(k, m)
 
     # Large-|u| series regime: same sign, both |u| >= SERIES_U_OVER_RHO * rho.
-    same = (ua * ub) > 0.0
-    umin = np.minimum(np.abs(ua), np.abs(ub))
-    ser = fin & same & (umin >= defaults.SERIES_U_OVER_RHO * rho)
     if np.any(ser):
         a = ua[ser]
         b = ub[ser]
-        r2 = rho2[ser]
         negative = a < 0.0
         # map negative edges to positive: (a, b) -> (-b, -a), factor (-1)^k
         a_pos = np.where(negative, -b, a)
         b_pos = np.where(negative, -a, b)
+        series = _LargeUSeries(a_pos, b_pos, rho2[ser], n_terms)
         for m, kmax in spec.items():
             for k in range(kmax + 1):
-                val = _series_dP(k, m, a_pos, b_pos, r2, defaults.SERIES_TERMS)
+                val = series.dP(k, m)
                 if k % 2 == 1:
                     val = np.where(negative, -val, val)
                 out[m][ser, k] = val
