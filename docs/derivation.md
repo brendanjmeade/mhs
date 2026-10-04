@@ -443,7 +443,14 @@ the budget law, and it reaches 1e-15 at every realistic collocation point
 (``verify_image_kernel`` clause [f]). 8b remains a performance optimisation
 worth about 171x on the Q half, not a correctness gap.
 
-## Conditioning: measured, and it comes out in favour of the closed form
+## Conditioning of the SEED FAMILY -- which turned out to be the wrong question
+
+**Superseded: this section measures a quantity that cannot see the defect.**
+Keep it for the seed family's own numbers, which stand, but its CONCLUSION is
+wrong and the section at the end of this file replaces it. Every member of this
+family depends on ``g = D3^2`` and so is blind to the SIGN of ``D3`` -- which
+is exactly where the assembled entries lose their digits. Read on only for the
+seed family in isolation.
 
 The differentiated forms lose digits with derivative order, and the loss
 depends entirely on the small parameter
@@ -473,42 +480,17 @@ collocation points that exist:
 | dip 60 | 0.100 | P1/P2 at h/6 | **1.26** |
 | dip 60 | 0.010 | P0 at h/3 | 1.81 |
 
-Never below 1.26, against a blow-up that needs ~0.3. So the roadmap's "~50%
-that it is numerically better than quadrature" RESOLVES IN FAVOUR of the closed
-form, with about half a decade of margin -- and the margin is measured rather
-than argued.
+Never below 1.26, against a blow-up that needs ~0.3 -- which is why this was
+read, wrongly, as resolving the roadmap's "~50% that it is numerically better
+than quadrature" in favour of the closed form. It does not: the ratio table is
+real but it is measured on sign-blind members, and the assembled entries fail
+in the other direction and for a different reason. See the final section.
 
-The build still needs a guard below the ratio where the loss bites, because a
-kernel that silently returns 1e+24 outside its valid region is worse than one
-that refuses. The quadrature path and its budget law are already there to fall
-back to.
+The collocation table above is still worth having: it is the measured range of
+``|D3|/sqrt(A)`` that realistic schemes produce, 1.26 to 31.6, and it is what
+any candidate closed form has to be accurate across.
 
 ## What remains, and what it is worth
-
-The separation divides by ``B - A = D3^2``, and ``D3 = z + z0`` is small exactly
-where this work matters -- an on-fault observer near a surface trace, where
-observer and source depths both approach zero. Evaluating the IDENTITY by
-subtraction would lose ``log10(W / D3^2)`` digits:
-
-    |D3|/sqrt(W)    1.0    0.3    0.1    0.03    0.01
-    digits lost     0.0    1.0    2.0    3.0     4.0
-
-That particular loss is not real -- nobody evaluates the left side by
-subtracting the right. The partial fraction is a tool for finding the
-ANTIDERIVATIVES, and the question that decides 8b is the conditioning of the
-final closed form, which cannot be assessed before deriving it. So the
-roadmap's "~50% that it is numerically better than quadrature" survives, but it
-is now localised to one identifiable place rather than being a general worry:
-``D3 -> 0``, the observer at the source's own depth.
-
-This is the same shape as the known defect in the full-space hierarchy, where
-digits go like ``(R/L)^4-5`` and ``far_field="hybrid"`` switches to quadrature
-past ``D_STAR * L``. The analogous escape exists here: fall back to quadrature
-where ``|D3|/sqrt(W)`` is small, with the budget law already in place to size
-it. So the downside of 8b failing on conditioning is bounded -- a hybrid, not a
-dead end.
-
-## What changed about WHY to do it
 
 The separation divides by ``B - A = D3^2``, and ``D3 = z + z0`` is small exactly
 where this work matters -- an on-fault observer near a surface trace, where
@@ -603,6 +585,11 @@ rational family ``int t^j dt/((t^2+A)^q (t^2+B)^p)`` and the odd-``j`` rational-
 in-``w`` family. Both have standard recursive reductions. NO ``sp.integrate``
 anywhere -- that is the whole lesson of the three failure modes.
 
+**DONE, and it was not the obstacle.** Both rows are built and verified; the
+reduction below is complete and correct, and the route still fails. The final
+section carries the measurement and the mechanism. Read it before spending any
+more effort on this table.
+
 ## Verification discipline, which caught every error here
 
   - Differentiate each result BACK to its integrand and compare NUMERICALLY.
@@ -635,3 +622,124 @@ anywhere -- that is the whole lesson of the three failure modes.
 coordinates in it are correct and verified; its ``_rational_in_t`` and
 ``_odd_j_via_R`` call ``sp.integrate`` and are the parts to replace.
 
+
+---
+
+# Step 8b: the rationalised route is CORRECT and UNUSABLE
+
+The reduction above is finished. All four hand-seed families, all five
+terminals and all 79 entries are built with no ``sp.integrate`` anywhere, and
+they are right: differentiating each one back and comparing at 60 digits gives
+
+| what | members | worst residual at 60 digits |
+|---|---|---|
+| hand seeds ``J``, ``L``, ``H``, ``SEED`` | 32 | 7.6e-47 |
+| the five terminals | 176 | 7.3e-47 |
+| the assembled ``(j, n, q)`` entries | 79 | 1.9e-43 |
+
+and the rationalisation itself, checked independently of any antiderivative,
+closes at 1.7e-60.
+
+**In float64 it is unusable, everywhere in the physical domain.** Worst
+relative residual over the 79 entries, against ``|D3|/sqrt(A)``:
+
+| \|D3\|/sqrt(A) | 0.3 | 1.0 | 1.26 | 2.0 | 3.3 | 10 | 31.6 | 100 |
+|---|---|---|---|---|---|---|---|---|
+| worst entry | 4.0e-06 | 2.6e-07 | 7.7e-07 | 1.1e-05 | 6.5e-04 | **1.6e+00** | 2.3e+04 | 3.9e+07 |
+| entries under 1e-10 | 51 | 68 | 65 | 53 | 42 | 23 | 7 | 4 |
+
+The realistic range is 1.26 to 31.6 (table above), so the collapse sits in the
+middle of it. There is no window to retreat to: the best ratio anywhere is
+2.6e-07, against the SHIPPED quadrature path's 1e-15. A closed form eight
+orders worse than the quadrature it replaces is not a speedup, it is a
+regression with a speedup attached.
+
+## The mechanism, which is proved rather than inferred
+
+``D3 = x3 + y3`` with the body at ``z <= 0`` (``matrices.py``) and
+``d3 = obs_z + src_z`` (``image.py``), so **``D3 <= 0`` always** -- and that is
+the cancelling sign. Rationalising uses
+
+    1/Q^q = (R + D3)^q / P^q          P = t^2 + A = R^2 - D3^2
+
+and for ``D3 < 0`` the numerator is ``R - |D3| = P/(R + |D3|)``, which is SMALL
+exactly when ``|D3| >> sqrt(A)``. Expanding it binomially and integrating term
+by term makes each term ``(2 rho^2)^q`` times the sum it belongs to, with
+``rho = |D3|/sqrt(A)``. Predicted loss ``2 q log10(rho) + q log10 2``:
+
+| q | rho=1.26 | 3.3 | 10 | 31.6 | measured worst at rho=1.26 / 3.3 / 10 |
+|---|---|---|---|---|---|
+| 1 | 0.5 | 1.3 | 2.3 | 3.3 | 2.0e-09 / 5.8e-08 / 3.8e-07 |
+| 2 | 1.0 | 2.7 | 4.6 | 6.6 | 5.4e-08 / 5.6e-08 / 5.1e-06 |
+| 3 | 1.5 | 4.0 | 6.9 | 9.9 | 9.2e-08 / 2.2e-06 / 6.5e-03 |
+| 4 | 2.0 | 5.4 | 9.2 | 13.2 | 7.7e-07 / 6.5e-04 / 1.6e+00 |
+
+The q-scaling matches. And the identification is a PROOF, not a correlation:
+every ``anti(j, a, e)`` depends on ``g = D3^2`` alone, so the only place the
+sign of ``D3`` can enter is the binomial ``D3^(q-i)`` factors. Measured at the
+same ratios with ``D3 > 0`` -- unphysical, but it isolates the term -- the worst
+entry is 1.3e-10 instead of 1.6e+00.
+
+Two losses stack, in opposite directions, which is why there is no good region:
+the ``1/g`` separations blow up as ``rho -> 0`` (the hazard identified earlier)
+and the binomial cancellation blows up as ``rho -> infinity`` (this one). The
+shallow minimum between them is 2.6e-07.
+
+Restricting to small ``q`` does not rescue it: ``q = 1`` is 21.7% of the 1329
+Q-family records and ``q <= 2`` is 58%, and even ``q = 1`` only reaches 2e-09.
+
+## Why the earlier conditioning study could not have caught this
+
+It measured the seed family ``int dt/(P^q R^m)``, every member of which is a
+function of ``g = D3^2``. A sign-blind family cannot exhibit a sign-dependent
+cancellation. The study was correct about what it measured and the inference
+from it was wrong -- the same shape as the four reversals already recorded
+here, and the fifth instance of the same lesson: **measure the assembled
+quantity at the parameters the caller actually uses, including the signs.**
+
+What caught it was randomising the sign of ``D3`` in the generator's
+verification sample. That was not foresight; a sampler drawing ``D3 > 0`` only
+would have reported the whole table green at 1e-10.
+
+## What is banked, and what the next route would be
+
+Reusable regardless of what replaces the rationalisation, because they are
+basis-independent and each is verified at ~1e-47:
+
+  - ``J(alpha, a) = int dt/(t^2+alpha)^a``, either sign of alpha
+  - ``L(p) = int dw/(w^2-g)^p``, atanh seed on ``w > sqrt(g)``
+  - ``H(rho) = int (t^2+B)^(rho/2) dt``, odd rho of either sign, NO ``g``
+    division anywhere -- the one family with no conditioning hazard at all
+  - ``SEED``/``seed_family(q, m) = int dt/(P^q R^m)``
+  - the two reduction identities ``S = P + g`` and ``t^2 = P - A``, and the
+    separations for ``P``/``S``, ``u``/``u+g`` and ``w^2``/``w^2-g``
+
+The identified next route is to **stop clearing ``Q`` from the denominator**.
+Partial fractions in ``R`` instead,
+
+    1/(R^n Q^q) = sum_k alpha_k/R^k + sum_l beta_l/Q^l
+
+keeps ``Q = R + |D3|`` -- a SUM at the physical sign, so nothing cancels in
+evaluating it. The ``1/R^k`` half is exactly ``H``, already built and hazard-
+free. The ``beta_l`` carry powers of ``1/D3``, so this route trades the
+large-rho collapse for a small-rho one, and it needs ``int t^j dt/Q^l``, which
+is rational in ``w = R`` for odd ``j`` but not for even ``j``.
+
+The principled version is Hermite reduction: solve for an antiderivative of the
+form ``sum c_{abc} t^a R^b Q^c`` plus a few transcendental seeds, by exact
+linear algebra on the ansatz rather than by integration. ``d/dt [t^a R^b Q^c]``
+stays inside that monomial set, so the system is finite and closes. An
+antiderivative written in ``Q`` is evaluated stably by construction, which
+removes the mechanism above rather than relocating it.
+
+Neither is costed, and neither should start without deciding it is worth it:
+**8b is a performance project**. The accuracy is already banked -- the shipped
+quadrature path under the budget law is 1e-15 at every realistic collocation
+point. What 8b buys is about 40x on the image kernel overall (the Q-family
+quadrature is 98% of its runtime), and what it has cost so far is one complete,
+correct, unusable reduction.
+
+The generator that produced it is NOT in the tree: it emits no usable table, so
+shipping it would be shipping a trap. It is in the session scratchpad as
+``gen_qsemi_table.py``, and everything in it that is worth keeping is listed
+above.
