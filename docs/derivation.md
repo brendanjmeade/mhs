@@ -131,7 +131,51 @@ never the free-surface condition: it is that closed-form integration removes the
 surface-breaking case reachable. Integrating an O(ε⁴) kernel analytically is
 worth the same as integrating an exact one; only the headline sentence changes.
 
-Whether the 2.6–50× constant is worth a second kernel path is a judgement call,
-and the measurements above are what it should be made on. At ν = 0.25 the gain
-is 2.6× for a whole new code path; at ν → 1/2, where the `(1−2ν)` image terms
-dominate, it is up to 50×.
+## Decision: ship the literal lift
+
+Made on measurement, and the measurement corrected the earlier impression.
+
+**The 2.6–50× figures above are a DIAGNOSTIC, not a user-visible gain.** The
+free-surface traction residual is a quantity that should be zero, so a ratio
+against it flatters any improvement. What a caller actually reads is the
+Green's function. Measured against the EXACT mollified kernel — the source
+convolution of classical Mindlin, which is the definition — at a buried point
+source:
+
+| observer | ν | ε | literal lift | corrected | gain |
+|---|---|---|---|---|---|
+| surface | 0.25 | 0.20 | 3.46e-3 | 6.85e-4 | 5.1× |
+| surface | 0.25 | 0.10 | 8.70e-4 | 1.69e-4 | 5.2× |
+| surface | 0.49 | 0.20 | 3.64e-3 | 1.30e-3 | 2.8× |
+| surface | 0.49 | 0.10 | 9.14e-4 | 3.22e-4 | 2.8× |
+| near-field | 0.25 | 0.20 | 1.87e-2 | 6.70e-3 | 2.8× |
+| near-field | 0.25 | 0.10 | 4.92e-3 | 2.01e-3 | 2.4× |
+| near-field | 0.49 | 0.20 | 2.16e-2 | 1.14e-2 | 1.9× |
+| near-field | 0.49 | 0.10 | 5.67e-3 | 3.43e-3 | 1.7× |
+
+**1.7× to 5.2×, and both columns are O(ε²)** — the errors fall by four per ε
+halving in each. The cost, counted as symbolic operations in the assembled
+kernel: **1,986 → 43,333, a factor of 21.8.**
+
+Three reasons that is the wrong trade:
+
+1. **21.8× the arithmetic for ≤ 5.2× the accuracy**, with no change of order.
+2. Because both are O(ε²), a 5× gain is worth about what reducing ε by 2.2×
+   buys. Under quadrature that costs ~5× more points (n_quad ∝ L/ε per
+   direction); under the closed form of step 8 it costs nothing. Either way it
+   is cheaper than 21.8×.
+3. **The lift's accuracy is not the limiting term for any realistic use.** At
+   ε = 0.1 it is 8.7e-4 on the surface — two orders below the box truncation and
+   observational error that dominated the equivalent full-space budget. Buying
+   headroom nobody is using is not an improvement.
+
+So the shipped kernel is the literal lift, and this derivation stays
+documentation. The corrected form remains useful as a *reference*: it is
+genuinely more accurate, and a gate that ever needs a better-than-lift
+comparison can build it from the recipe above.
+
+Worth naming the general lesson, since it nearly went the other way: the
+improvement was measured first against the quantity it was designed to improve
+(a residual that should be zero) and only later against the quantity a caller
+reads. The first framing said 50×, the second says 1.7×. The second is the one
+that decides.
