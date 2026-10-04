@@ -39,10 +39,12 @@ RIGHT, not merely that it reproduces another implementation.
       omitting it MOVES the answer. If it ever stopped mattering, the kernel
       would have changed.
 
-  [f] THE REMAINING GAP, gated so it cannot be forgotten: the Q-family is
-      still quadrature and does NOT converge on the trace. Step 8a closed the
-      R-family; the composite kernel is still limited there. A tripwire, so the
-      commit that lands step 8b has to invert it. See part_f.
+  [f] WHERE THE Q-FAMILY'S QUADRATURE STOPS BEING VALID, which is a much
+      narrower region than it first appeared: it needs eps/h ~ 0.01 and
+      delta/eps <~ 1 together, and no collocation scheme reaches that. At every
+      realistic collocation point on a surface-breaking element the Q-family is
+      at machine precision, so step 8b is OPTIONAL. The clause records the
+      boundary rather than demanding work. See part_f.
 
   [e] THE THREE-WAY SPLIT, bitwise. ``total - eigenstress == stress`` as an
       identity rather than a tolerance: if it ever needed one, the three entry
@@ -321,16 +323,34 @@ def part_f(rep, image) -> None:
     is 1.3e-4 where the oracle's uniform FULL-image quadrature reaches 2.8e-6,
     fifty times better, for exactly that reason.
 
-    WHAT IT MEANS FOR THE PACKAGE. On-fault stress is trustworthy at
-    delta/eps of a few or more, which covers every buried element. It is NOT
-    trustworthy within about an eps of a surface trace -- which is the
-    configuration the closed form was built for. Step 8b, the Q-family in
-    closed form, is therefore REQUIRED rather than optional, and this clause is
-    the tripwire that says so: it asserts the defect is still there, so when 8b
-    lands it FAILS and the commit that lands it must invert it.
+    WHAT IT MEANS FOR THE PACKAGE, and it is much narrower than it first
+    looked. The configuration above needs eps/h ~ 0.01 AND delta/eps <~ 1 AT
+    THE SAME TIME, i.e. a readout point a fifth of a percent of an element size
+    below the trace, with a mollification a hundredth of the element. NO
+    COLLOCATION SCHEME GOES THERE. Measured on the top element of a
+    surface-breaking fault:
 
-    Target, stated now so it is not negotiated later: last increment below
-    1e-10 at delta/eps = 0.2, which is what clause [c] already delivers for the
+        h     eps/h   scheme                delta   delta/eps   last increment
+        1.00  0.100   P0 (centroid, h/3)   0.3333        3.3   1.2e-15
+        1.00  0.100   P1/P2 (shrunk, h/6)  0.1667        1.7   8.7e-16
+        0.25  0.020   P1/P2                0.0417        8.3   5.4e-16
+
+    and sweeping delta/eps at eps/h = 0.1 it stays below 2e-10 down to
+    delta/eps = 0.1. The scaling runs the SAFE way: for a fixed scheme
+    delta/eps = (h/3)/eps GROWS as eps falls, so refining eps moves away from
+    the failure rather than toward it -- at eps/h = 0.00625, P0 sits at
+    delta/eps ~ 53.
+
+    So step 8b (the Q-family in closed form) is OPTIONAL, not required. What it
+    would buy is post-processing stress arbitrarily close to a surface trace at
+    a very fine eps, not interaction matrices. This clause records the
+    boundary of the quadrature's validity so that a future readout wandering
+    into it is caught; the first draft of it claimed 8b was required, on the
+    strength of a configuration chosen to stress the kernel rather than one a
+    caller evaluates.
+
+    Target if 8b is ever built: last increment below 1e-10 at delta/eps = 0.2
+    AND eps/h = 0.01, which is what clause [c] already delivers for the
     R-family.
     """
     TV = np.array([[0.0, 0.0, 0.0], [0.08, 1.0, 0.0], [0.03, 0.5, -1.0]])
@@ -344,11 +364,35 @@ def part_f(rep, image) -> None:
           f"{mags[0]:.1f} / {mags[1]:.1f} / {mags[2]:.1f}")
     inc = relmax(vals[1], vals[2])
     print(f"    last increment: {inc:.2e}   (target for step 8b: < 1e-10)")
-    rep.check_bool("f the Q-family STILL does not converge on the trace",
+    # The claim that matters is not that an extreme configuration fails -- it is
+    # that NO COLLOCATION POINT reaches it. Checked, not just asserted in prose.
+    print("    realistic collocation on the same surface-breaking element:")
+    print(f"      {'eps/h':>7} {'scheme':>8} {'delta/eps':>10} "
+          f"{'last increment':>15}")
+    worst_coll = 0.0
+    for eh in (0.1, 0.02):
+        for scheme, frac in (("P0", 1.0 / 3.0), ("P1/P2", 1.0 / 6.0)):
+            ev = eh * 1.0
+            oc = np.array([[0.03, 0.5, -frac]])
+            a = image.image_q_influence(oc, TV, 0, MU, LAM, ev, want=("H",),
+                                        n_quad=64)["H"][0, 0]
+            b = image.image_q_influence(oc, TV, 0, MU, LAM, ev, want=("H",),
+                                        n_quad=128)["H"][0, 0]
+            e = relmax(a, b)
+            worst_coll = max(worst_coll, e)
+            print(f"      {eh:7.3f} {scheme:>8} {frac / ev:10.1f} {e:15.2e}")
+    rep.check("f every realistic collocation point IS converged", worst_coll,
+              1e-9,
+              "which is why step 8b is OPTIONAL: for a fixed scheme "
+              "delta/eps = (h/3)/eps GROWS as eps falls, so refining eps moves "
+              "AWAY from the failure, not toward it")
+    rep.check_bool("f the quadrature does fail OUTSIDE that range "
+                   "(the boundary is real)",
                    inc > 1e-3,
-                   f"({inc:.2e}) -- step 8b is REQUIRED, not optional. When it "
-                   f"lands this clause FAILS and must be inverted. Clause [c] "
-                   f"is what the R-family already delivers here: 1e-15.")
+                   f"({inc:.2e}) at eps/h = 0.01 -- a regime NO collocation "
+                   f"scheme reaches (P0 and P1/P2 on this element measure "
+                   f"1e-15). It bounds where the quadrature stops being "
+                   f"valid, so a future readout wandering in is caught.")
 
 
 if __name__ == "__main__":
