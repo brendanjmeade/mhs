@@ -47,7 +47,6 @@ the two families together (gated in verify_identities.py):
 """
 from __future__ import annotations
 
-from itertools import product
 
 import numpy as np
 
@@ -61,39 +60,66 @@ def _lame(mu, nu):
     return lam
 
 
+def _lift_geometry(basis, rank: int) -> dict[tuple[int, int], np.ndarray]:
+    """``{(a, b): sum of the basis outer products carrying those counts}``.
+
+    The scalar factor in :func:`lift` depends only on how MANY of each basis
+    vector an assignment uses, not on their order, so every assignment sharing
+    ``(a, b)`` can have its geometry summed once and scaled once. That turns
+    ``3**rank`` strided multiply-adds over ``(N, K, 3**rank)`` into one per
+    group: 243 into 21 at rank 5.
+
+    Built one rank at a time rather than by enumerating ``3**rank``
+    assignments, because the groups are far fewer than the assignments: 105
+    outer products of small tensors at rank 5 instead of 972. Each step appends
+    an axis at the END, so the index order is the assignment order the direct
+    enumeration produced.
+    """
+    geom: dict[tuple[int, int], np.ndarray] = {(0, 0): np.array(1.0)}
+    for _ in range(rank):
+        nxt: dict[tuple[int, int], np.ndarray] = {}
+        for (a, b), g in geom.items():
+            for s, v in enumerate(basis):
+                key = (a + (s == 0), b + (s == 1))
+                o = np.multiply.outer(g, v)
+                nxt[key] = nxt[key] + o if key in nxt else o
+        geom = nxt
+    return geom
+
+
 def lift(W: dict[int, np.ndarray], z: np.ndarray, frame: Frame, rank: int, n: int,
          *, floor: int = 0, h0: np.ndarray | None = None) -> np.ndarray:
     """Rank-``rank`` tensor moment (N, K, 3, ..., 3) at ``R^-n`` from the
     weighted table ``W[n]`` (N, K, D+1, D+1).
+
+    Accumulates per ``(a, b)`` GROUP rather than per basis assignment -- see
+    :func:`_lift_geometry` for why that is the same sum. Not bitwise identical
+    to the per-assignment form: scaling a summed geometry reorders the
+    floating-point additions, measured at 4.8e-16 on a generic frame. (On an
+    axis-aligned triangle it IS bitwise, because the basis vectors are exact
+    0s and 1s -- which is why that must not be the geometry it is checked on.)
 
     ``floor``/``h0``: on the ``h = 0`` rows the table has no entry below the
     degree floor (it is NaN).  Such a slot always carries ``c = rank - (a+b)
     >= 1`` normal indices and ``z`` is exactly ``0.0`` there, so the term is
     bitwise zero -- but ``0.0 * nan`` is NaN, so it is masked rather than
     multiplied."""
-    basis = [(-1.0, frame.e1), (-1.0, frame.e2), (None, frame.nhat)]
+    basis = (frame.e1, frame.e2, frame.nhat)
     Wn = W[n]
     N, K = Wn.shape[:2]
     out = np.zeros((N, K) + (3,) * rank)
     zp = {}
     masked = floor > 0 and h0 is not None and bool(np.any(h0))
-    for assign in product(range(3), repeat=rank):
-        a = assign.count(0)
-        b = assign.count(1)
+    for (a, b), g in _lift_geometry(basis, rank).items():
         c = rank - a - b
         if c not in zp:
             zp[c] = z ** c
-        sign = (-1.0) ** (a + b)
         Wab = Wn[:, :, a, b]
         if masked and a + b < floor:
             assert c >= 1, "a sub-floor slot must carry a normal index"
             Wab = np.where(h0[:, None], 0.0, Wab)
-        scal = sign * zp[c][:, None] * Wab                      # (N, K)
-        vecs = [basis[s][1] for s in assign]
-        outer = vecs[0]
-        for v in vecs[1:]:
-            outer = np.multiply.outer(outer, v)
-        out += scal.reshape((N, K) + (1,) * rank) * outer
+        scal = ((-1.0) ** (a + b)) * zp[c][:, None] * Wab       # (N, K)
+        out += scal.reshape((N, K) + (1,) * rank) * g
     return out
 
 
