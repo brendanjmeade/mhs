@@ -549,3 +549,89 @@ essentially all of it.
 So 8b is now a performance project with a bounded, rational target -- a better
 position than when it was a capability project with an unknown function class,
 but no longer urgent. The accuracy it was meant to buy is already banked.
+
+---
+
+# Step 8b: what to do next, in enough detail to just do it
+
+The derivation is settled (above). This section is the recipe, because the
+pieces of it that were only ever in a generator docstring were lost when that
+half-working script was correctly kept out of the tree.
+
+## The target
+
+Generate ``src/mhs/kernels/_qsemi_table.py``, holding
+
+    INNER[(j, n, q)](t, A, D3)  =  int t^j dt / (R^n Q^q)
+
+with ``R = sqrt(t^2 + B)``, ``Q = R - D3``, ``A = B - D3^2``, and ``A``, ``B``,
+``D3`` all constant along strike. The definite integral over a slab is
+``F(t_hi) - F(t_lo)``.
+
+The ``(j, n, q)`` set is READ OFF ``_image_table.py`` rather than written down,
+so the two cannot drift: a monomial ``D1^a D2^b D3^c`` has ``D1, D2`` affine in
+``t`` and ``D3`` constant, so it contributes ``t^j`` for ``j = 0 .. a+b``. That
+gives **79 triples**: j in 0..4, n in 0..7, q in 1..4.
+
+## Work in (A, g), never (A, B)
+
+``g = B - A = D3^2``, declared POSITIVE, and substitute ``g -> D3^2`` only at
+emission. This is not cosmetic -- it is the difference between right and
+silently wrong answers (see the three sympy failure modes above). In these
+coordinates:
+
+    d/dA at fixed B  =  d/dA - d/dg          d/dB at fixed A  =  d/dg
+
+Getting those backwards is a silent factor, which is why every member is
+differentiated back.
+
+## The four reductions
+
+Rationalising ``1/Q^q = (R+D3)^q/(t^2+A)^q`` turns each entry into a sum over
+``i = 0..q`` of ``C(q,i) D3^(q-i) * t^j S^k/(t^2+A)^q``, with ``S = t^2+B`` and
+``k = (i-n)/2``. Then, by case:
+
+| case | route |
+|---|---|
+| ``k`` integer | rational in t -- **needs a hand seed + recursion**, see below |
+| ``j`` odd | substitute ``w = R``: ``t^j dt = (w^2-B)^((j-1)/2) w dw``, so the integrand is RATIONAL in ``w``. **Also needs a hand seed.** |
+| ``j`` even, ``k`` half-integer | ``t^2 = (t^2+A) - A`` walks j down to 0 while lowering q; a positive half-power of S walks down by ``S = (t^2+A) + g``. What is left is the seed family. |
+| ``j = 0``, ``k`` negative half-integer | the SEED FAMILY -- **done and verified, 16/16 at 1.08e-12** |
+
+So the remaining work is exactly the two rows marked "needs a hand seed": the
+rational family ``int t^j dt/((t^2+A)^q (t^2+B)^p)`` and the odd-``j`` rational-
+in-``w`` family. Both have standard recursive reductions. NO ``sp.integrate``
+anywhere -- that is the whole lesson of the three failure modes.
+
+## Verification discipline, which caught every error here
+
+  - Differentiate each result BACK to its integrand and compare NUMERICALLY.
+    ``sp.simplify`` does not return on these expressions; a numeric identity at
+    random points establishes the same thing and is instant.
+  - Sample only where the forms are USED, i.e. ``|D3|/sqrt(A) >= RATIO_FLOOR``
+    with ``RATIO_FLOOR = 0.75``. Sampling ``D3`` freely puts test points inside
+    the small-ratio region where these forms are KNOWN to lose their digits,
+    and reports failures for entries whose pieces are each correct to 1e-10.
+    The first version of the check did exactly that.
+  - Verify each entry's RATIONALISATION too, not just its antiderivative: the
+    sum of pieces must equal ``t^j/(R^n Q^q)`` once ``A = B - D3^2`` is imposed.
+    Checked independently at 1e-16 .. 1e-12 for a spread of (j, n, q).
+
+## Then the consumer
+
+  1. ``image_q_semi`` beside ``image_influence`` and ``image_q_influence``:
+     strike/dip frame, outer range split AT THE VERTICES and graded about the
+     foot, inner integrals from the table.
+  2. A guard: below ``RATIO_FLOOR`` fall back to ``image_q_influence`` and its
+     budget law. A kernel that silently returns 1e+24 outside its valid region
+     is worse than one that refuses.
+  3. Gate it against ``image_q_influence`` for agreement in the overlap, and
+     measure the speedup -- the target is the measured 171x on the Q half
+     (352 points against 60224 at 2.0e-12).
+
+## Where the partial generator is
+
+``<scratchpad>/gen_qsemi_partial.py`` -- the seed family and the (A, g)
+coordinates in it are correct and verified; its ``_rational_in_t`` and
+``_odd_j_via_R`` call ``sp.integrate`` and are the parts to replace.
+
