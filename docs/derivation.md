@@ -285,6 +285,45 @@ treatment rather than being a special case of the dipping one. Vertical faults
 are the commonest geometry and the whole motivation for this work, so that is
 the case to build first.
 
+## The vertical case is solved in principle, SEMI-analytically
+
+Vertical elements are the commonest geometry and the whole motivation, and they
+collapse further than the general argument above suggests. In a vertical
+element's own frame ``e1`` is horizontal, ``e2`` vertical and ``nhat``
+horizontal, so ``e1`` and ``nhat`` contribute nothing to the Cartesian
+z-component and
+
+    D3 = -xi2 (e2)_z = +- xi2          W = xi1^2 + z^2 + eps^2 = xi1^2 + h^2
+    R^2 = xi1^2 + xi2^2 + h^2          so  W = R^2 - xi2^2
+
+``W`` is CONSTANT in ``xi2``. The inner integral is therefore a bare
+``int xi2^b dxi2 / (xi2^2 + c^2)^(m/2)`` with ``c^2 = W``, and all eight
+representative cases close in elementary functions -- algebraic terms plus
+``asinh``.
+
+MEASURED, for ``int dS/(W R)`` over a vertical triangle with the observer ON it
+at ``h/6`` above the trace and ``eps = 0.01 h``. Reference is the same
+semi-analytic rule at nq = 400 (self-check against nq = 200: 1.3e-14):
+
+| nq | 2-D points | 2-D error | 1-D points | inner-analytic + 1-D |
+|---|---|---|---|---|
+| 8 | 64 | 3.5e-01 | 88 | 2.4e-05 |
+| 16 | 256 | 1.9e-01 | 176 | 2.8e-11 |
+| 32 | 1024 | 6.1e-03 | 352 | 2.2e-14 |
+| 64 | 4096 | 1.6e-02 | 704 | 2.5e-14 |
+
+Machine precision at 352 points, against 6e-3 at 1024 for the 2-D rule -- which
+is still non-monotonic at 4096, i.e. nowhere near converged. The remaining
+``1/W`` peak has width ``eps`` in ``xi1``, so the outer rule must be GRADED
+about the observer's foot; a plain Gauss rule on the whole range is what made a
+first attempt at this look worse than 2-D rather than better.
+
+This is semi-analytic, not a closed form: the ``xi1`` integral is still
+numerical. Doing it analytically too needs the new edge primitives, and the
+measurement above is the reason that is optional rather than necessary -- one
+dimension of the quadrature budget is already gone, which is most of the prize,
+at none of the conditioning risk below.
+
 ## The one thing not yet settled: conditioning near D3 = 0
 
 The separation divides by ``B - A = D3^2``, and ``D3 = z + z0`` is small exactly
