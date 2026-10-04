@@ -26,7 +26,10 @@ Four clauses:
       mhs. The measurement PRINTS on every run, pass or fail, so drift is visible
       before it is fatal.
 
-  [c] SURFACE. The five documented names exist, with the documented signatures.
+  [c] SURFACE. Every documented name exists, with the documented signature --
+      pinned verbatim, so an API change cannot be merged without editing this
+      gate. That is the point: a new keyword is cheap to add and expensive to
+      discover, and `order` was added to seven entry points behind this clause.
       A matrix function that quietly lost its ``out=`` would otherwise be found
       by a caller rather than by a gate.
 
@@ -122,19 +125,26 @@ def b_cost(info: dict) -> None:
 
 # --------------------------------------------------------------------- [c] ---
 EXPECTED = {
-    "disp_matrix": ["obs_pts", "tris", "material", "eps", "out"],
+    "disp_matrix": ["obs_pts", "tris", "material", "eps", "order", "out"],
     "stress_matrix": ["obs_pts", "tris", "material", "eps",
-                      "subtract_eigenstress", "parts", "out"],
-    "total_stress_matrix": ["obs_pts", "tris", "material", "eps", "out"],
-    "eigenstress_matrix": ["obs_pts", "tris", "material", "eps", "out"],
+                      "subtract_eigenstress", "parts", "order", "out"],
+    "total_stress_matrix": ["obs_pts", "tris", "material", "eps", "order",
+                            "out"],
+    "eigenstress_matrix": ["obs_pts", "tris", "material", "eps", "order",
+                           "out"],
     "elastic_strain_matrix": ["obs_pts", "tris", "material", "eps",
-                              "subtract_eigenstress", "out"],
+                              "subtract_eigenstress", "order", "out"],
+    "traction_matrix": ["obs_pts", "obs_normals", "tris", "material", "eps",
+                        "subtract_eigenstress", "order", "out"],
+    "interaction_matrix": ["tris", "material", "eps", "receiver", "source",
+                           "obs_pts", "order", "shrink",
+                           "subtract_eigenstress", "out"],
 }
 
 
 def c_surface() -> None:
     import mhs
-    print("\n[c] SURFACE: the five matrix entry points and their signatures")
+    print("\n[c] SURFACE: the matrix entry points and their signatures")
     for name, params in EXPECTED.items():
         fn = getattr(mhs, name, None)
         if not check(f"c {name} exists and is callable", callable(fn)):
@@ -142,6 +152,13 @@ def c_surface() -> None:
         got = list(inspect.signature(fn).parameters)
         check(f"c {name} signature", got == params,
               "" if got == params else f"{got} != {params}")
+    for name in ("disp_matrix", "stress_matrix", "traction_matrix",
+                 "interaction_matrix"):
+        check(f"c {name} defaults to order=0 (P0)",
+              inspect.signature(getattr(mhs, name)).parameters["order"]
+              .default == 0,
+              "P0 is the default, so n_dof == n_src and nothing written for "
+              "elements changes when the argument is ignored")
     check("c stress default subtracts the eigenstress",
           inspect.signature(mhs.stress_matrix)
           .parameters["subtract_eigenstress"].default is True,

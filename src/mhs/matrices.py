@@ -6,12 +6,21 @@ numba kernels below ``mhs.kernels`` only ever see contiguous float64 arrays and
 plain floats -- never ``None``, never a dataclass, never an array of unknown
 layout or dtype.
 
-**Index order** is ``(n_obs, <output>, n_src, 3)``, matching cutde's
+**Index order** is ``(n_obs, <output>, n_dof, 3)``, matching cutde's
 ``(n_obs, vec_dim, n_src, 3)`` so an existing call site recognises it, except
-that a tensor output keeps its full ``(3, 3)`` rather than collapsing to Voigt-6.
-That is deliberate: Voigt forces a component ordering and a factor-of-two
-question on the shear entries, and keeping the tensor means **no Voigt convention
-is stated anywhere in mhs**. A caller who wants Voigt packs it in one line.
+that a tensor output keeps its full ``(3, 3)`` rather than collapsing to
+Voigt-6. That is deliberate: Voigt forces a component ordering and a
+factor-of-two question on the shear entries, and keeping the tensor means **no
+Voigt convention is stated anywhere in mhs**. A caller who wants Voigt packs it
+in one line.
+
+**The source axis is slip DEGREES OF FREEDOM.** At ``order=p`` each element
+carries ``K = 1, 3, 6`` nodal slip vectors (P0, P1, P2) and element ``s``
+occupies columns ``s*K .. (s+1)*K`` -- element-major, node index fastest, so a
+caller reshapes to ``(n_src, K, 3)``. At the default ``order=0``, ``K == 1`` and
+``n_dof == n_src``, so nothing written for elements changes; higher order only
+makes the axis longer. The node axis is flattened rather than added because a
+return rank that depended on an argument would be worse than a longer axis.
 
 **Slip is Cartesian.** ``mhs.tdcs`` builds the rotation to the per-triangle
 (strike, dip, tensile) frame, and no function here takes it as an argument,
@@ -27,6 +36,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import chunking
+from .fullspace.shape import n_nodes
 from .kernels import assemble as _asm
 from .materials import Material
 
@@ -96,6 +106,21 @@ def _coerce(obs_pts, tris, material, eps):
     return obs, tri, float(material.mu), float(material.lam), eps_arr
 
 
+def _order(order) -> int:
+    """Validate the nodal order. 0, 1, 2 -- P0, P1, P2.
+
+    Checked here rather than deep in the kernels, where the failure would be a
+    KeyError on a moment table. The table's degrees are generated for these
+    three and nothing else.
+    """
+    p = int(order)
+    if p not in (0, 1, 2):
+        raise ValueError(
+            f"order must be 0, 1 or 2 (P0, P1, P2); got {order!r}. The nodal "
+            f"layout and the generated moment degrees exist for those three.")
+    return p
+
+
 def _coerce_normals(normals, n_obs):
     """``(n_obs, 3)`` unit normals, or one normal broadcast to every observer.
 
@@ -143,7 +168,7 @@ def _prepare_out(out, shape, n_obs, n_src, kind, parts):
 
 
 # ----------------------------------------------------------------- public ----
-def disp_matrix(obs_pts, tris, material, eps, *, out=None):
+def disp_matrix(obs_pts, tris, material, eps, *, order=0, out=None):
     """Displacement Green's function matrix.
 
     Returns ``(n_obs, 3, n_src, 3)`` where ``[o, i, s, k]`` is the ``i``-th
@@ -151,14 +176,15 @@ def disp_matrix(obs_pts, tris, material, eps, *, out=None):
     slip component ``k`` on ``tris[s]``, so ``u = einsum("oisk,sk->oi", G, slip)``.
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
-    n_obs, n_src = obs.shape[0], tri.shape[0]
-    buf = _prepare_out(out, (n_obs, 3, n_src, 3), n_obs, n_src, "disp", False)
-    _asm.assemble_halfspace_disp(obs, tri, mu, lam, eps_arr, buf)
+    p = _order(order)
+    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
+    buf = _prepare_out(out, (n_obs, 3, n_dof, 3), n_obs, n_dof, "disp", False)
+    _asm.assemble_halfspace_disp(obs, tri, mu, lam, eps_arr, buf, p)
     return buf
 
 
 def stress_matrix(obs_pts, tris, material, eps, *,
-                  subtract_eigenstress=True, parts=False, out=None):
+                  subtract_eigenstress=True, parts=False, order=0, out=None):
     """ELASTIC stress Green's function matrix, eigenstress removed by default.
 
     Returns ``(n_obs, 3, 3, n_src, 3)``; ``[o, m, n, s, k]`` is ``sigma_mn`` from
@@ -176,9 +202,10 @@ def stress_matrix(obs_pts, tris, material, eps, *,
     redo the dominant kernel.
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
-    n_obs, n_src = obs.shape[0], tri.shape[0]
-    shape = (n_obs, 3, 3, n_src, 3)
-    buf = _prepare_out(out, shape, n_obs, n_src, "stress", parts)
+    p = _order(order)
+    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
+    shape = (n_obs, 3, 3, n_dof, 3)
+    buf = _prepare_out(out, shape, n_obs, n_dof, "stress", parts)
     if parts and out is not None:
         raise ValueError("parts=True returns two arrays, so out= cannot name "
                          "the destination of both; call twice with out=, or "
@@ -189,17 +216,17 @@ def stress_matrix(obs_pts, tris, material, eps, *,
     # axis instead.
     sig = buf
     eig = np.zeros(shape, dtype=np.float64) if parts else None
-    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, sig)
+    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, sig, p)
     if subtract_eigenstress or parts:
         star = eig if parts else np.empty(shape, dtype=np.float64)
-        _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, star)
+        _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, star, p)
         if subtract_eigenstress:
             sig -= star
     return (sig, eig) if parts else sig
 
 
 def traction_matrix(obs_pts, obs_normals, tris, material, eps, *,
-                    subtract_eigenstress=True, out=None):
+                    subtract_eigenstress=True, order=0, out=None):
     """ELASTIC traction on a given plane, ``(n_obs, 3, n_src, 3)``.
 
     ``[o, i, s, k]`` is Cartesian traction component ``i`` on the plane through
@@ -218,19 +245,48 @@ def traction_matrix(obs_pts, obs_normals, tris, material, eps, *,
     builds the upward-oriented frame if you want cutde's convention.
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
-    n_obs, n_src = obs.shape[0], tri.shape[0]
+    p = _order(order)
+    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
     nrm = _coerce_normals(obs_normals, n_obs)
-    buf = _prepare_out(out, (n_obs, 3, n_src, 3), n_obs, n_src, "traction",
+    buf = _prepare_out(out, (n_obs, 3, n_dof, 3), n_obs, n_dof, "traction",
                        False)
     _asm.assemble_halfspace_traction(obs, nrm, tri, mu, lam, eps_arr, buf,
-                                     subtract_eigenstress)
+                                     subtract_eigenstress, p)
     return buf
+
+
+#: How far a nodal collocation point is pulled toward its element's centroid,
+#: in barycentric coordinates, for ``interaction_matrix`` at order > 0.
+#:
+#: At P1 the nodes ARE the vertices and at P2 three of them are edge midpoints,
+#: so reading stress at a raw node means reading it on the element's own
+#: boundary -- where the clearance from the edge is zero and the mollified
+#: kernel is at its hardest. Shrinking by 1/2 puts a P1 vertex at barycentric
+#: (2/3, 1/6, 1/6), i.e. a clearance of h/6 against the centroid's h/3, which
+#: is the configuration ``docs/derivation.md`` measures the kernel at: the
+#: minimum |D3|/sqrt(A) over a surface-breaking element is 1.67 at P1/P2
+#: against 3.33 at P0. Exposed as an argument because it is a modelling choice,
+#: not a property of the kernel, and 0 (raw nodes) is legitimate if a caller
+#: wants it.
+COLLOCATION_SHRINK = 0.5
+
+
+def _nodal_collocation(tri, order: int, shrink: float) -> np.ndarray:
+    """``(n_src * K, 3)`` collocation points, element-major like the DOFs."""
+    from .fullspace.shape import lattice
+    p = int(order)
+    bary = (np.full((1, 3), 1.0 / 3.0) if p == 0
+            else lattice(p) / p)                        # (K, 3)
+    bary = bary + float(shrink) * (1.0 / 3.0 - bary)    # toward the centroid
+    return (bary[None, :, :] @ tri).reshape(-1, 3)
 
 
 def interaction_matrix(tris, material, eps, *, receiver=("strike", "dip",
                                                          "normal"),
                        source=("strike", "dip", "tensile"),
-                       obs_pts=None, subtract_eigenstress=True, out=None):
+                       obs_pts=None, order=0,
+                       shrink=COLLOCATION_SHRINK,
+                       subtract_eigenstress=True, out=None):
     """The on-fault interaction matrix, ``(n, n, n_receiver, n_source)``.
 
     ``[i, j, a, b]`` is the traction on element ``i``'s own plane, resolved
@@ -258,27 +314,32 @@ def interaction_matrix(tris, material, eps, *, receiver=("strike", "dip",
     """
     from . import tdcs
     tri = np.asarray(tris, float).reshape(-1, 3, 3)
-    pts = tri.mean(axis=1) if obs_pts is None else obs_pts
+    p = _order(order)
+    K = n_nodes(p)
+    pts = _nodal_collocation(tri, p, shrink) if obs_pts is None else obs_pts
     obs, tri, mu, lam, eps_arr = _coerce(pts, tri, material, eps)
-    n = tri.shape[0]
-    if obs.shape[0] != n:
+    n_dof = tri.shape[0] * K
+    if obs.shape[0] != n_dof:
         raise ValueError(
-            f"interaction_matrix pairs observers with elements row by row, so "
-            f"it needs one per element: got {obs.shape[0]} observers for {n} "
-            f"triangles. For traction at unrelated points use "
+            f"interaction_matrix pairs observers with slip DOFs row by row, so "
+            f"at order {p} it needs {K} per element: got {obs.shape[0]} "
+            f"observers for {tri.shape[0]} triangles ({n_dof} DOFs). For "
+            f"traction at unrelated points use "
             f"traction_matrix(obs_pts, obs_normals, ...).")
-    frame = tdcs.slip_frame(tri)                       # (n, 3, 3), rows s/d/t
+    # One frame per ELEMENT, repeated across its nodes: the frame is a property
+    # of the plane, and every node of an element shares that plane.
+    frame = np.repeat(tdcs.slip_frame(tri), K, axis=0)   # (n_dof, 3, 3)
     rec = tdcs.component_index(receiver)
     src = tdcs.component_index(source)
-    shape = (n, n, len(rec), len(src))
-    buf = _prepare_out(out, shape, n, n, (len(rec), len(src)), False)
+    shape = (n_dof, n_dof, len(rec), len(src))
+    buf = _prepare_out(out, shape, n_dof, n_dof, (len(rec), len(src)), False)
     _asm.assemble_interaction(obs, frame[:, 2, :], frame[:, rec, :], tri,
-                              frame[:, src, :], mu, lam, eps_arr, buf,
-                              subtract_eigenstress)
+                              frame[::K][:, src, :], mu, lam, eps_arr, buf,
+                              subtract_eigenstress, p)
     return buf
 
 
-def total_stress_matrix(obs_pts, tris, material, eps, *, out=None):
+def total_stress_matrix(obs_pts, tris, material, eps, *, order=0, out=None):
     """RAW mollified stress: the elastic field PLUS the eigenstress ``C:eps*``.
 
     This is not the stress of a physical elastic medium near the element. It
@@ -289,14 +350,15 @@ def total_stress_matrix(obs_pts, tris, material, eps, *, out=None):
     split safe to rely on.
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
-    n_obs, n_src = obs.shape[0], tri.shape[0]
-    buf = _prepare_out(out, (n_obs, 3, 3, n_src, 3), n_obs, n_src,
+    p = _order(order)
+    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
+    buf = _prepare_out(out, (n_obs, 3, 3, n_dof, 3), n_obs, n_dof,
                        "stress", False)
-    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, buf)
+    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, buf, p)
     return buf
 
 
-def eigenstress_matrix(obs_pts, tris, material, eps, *, out=None):
+def eigenstress_matrix(obs_pts, tris, material, eps, *, order=0, out=None):
     """The eigenstress term ``C:eps*`` alone, as a matrix.
 
     ``H*[m,n,k] = Phi_eps (lam d_mn n_k + mu (d_mk n_n + d_nk n_m))`` with
@@ -312,15 +374,16 @@ def eigenstress_matrix(obs_pts, tris, material, eps, *, out=None):
     Identically zero at ``eps = 0``.
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
-    n_obs, n_src = obs.shape[0], tri.shape[0]
-    buf = _prepare_out(out, (n_obs, 3, 3, n_src, 3), n_obs, n_src,
+    p = _order(order)
+    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
+    buf = _prepare_out(out, (n_obs, 3, 3, n_dof, 3), n_obs, n_dof,
                        "eigenstress", False)
-    _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, buf)
+    _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, buf, p)
     return buf
 
 
 def elastic_strain_matrix(obs_pts, tris, material, eps, *,
-                          subtract_eigenstress=True, out=None):
+                          subtract_eigenstress=True, order=0, out=None):
     """ELASTIC strain Green's function matrix, as a full ``(3, 3)`` tensor.
 
     Named ``elastic_`` rather than ``strain_`` on purpose. cutde's idiom is
@@ -330,13 +393,14 @@ def elastic_strain_matrix(obs_pts, tris, material, eps, *,
     ``strain_matrix`` here for that route to start from.
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
-    n_obs, n_src = obs.shape[0], tri.shape[0]
-    buf = _prepare_out(out, (n_obs, 3, 3, n_src, 3), n_obs, n_src,
+    p = _order(order)
+    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
+    buf = _prepare_out(out, (n_obs, 3, 3, n_dof, 3), n_obs, n_dof,
                        "strain", False)
-    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, buf)
+    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, buf, p)
     if subtract_eigenstress:
         star = np.empty_like(buf)
-        _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, star)
+        _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, star, p)
         buf -= star
     # strain from stress, inverting Hooke with (mu, lam) and never through a
     # 1/(1-2nu) intermediate: tr(e) = tr(sig)/(3 lam + 2 mu), then

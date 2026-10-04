@@ -58,6 +58,18 @@ RIGHT, not merely that it reproduces another implementation.
       ways as [f]: the floor holds at every patch order, a lower floor fails,
       and the `+ order` term is needed. See part_g.
 
+  [h] THE CONTRACTED FORMS, traction and interaction, as identities against
+      stress_matrix -- plus the one clause those identities cannot see: the
+      self-interaction diagonal must be NEGATIVE, because slip relieves the
+      shear that drives it. A frame flipped in both the kernel and the
+      reference passes every identity and fails that. See part_h.
+
+  [i] P1 AND P2 THROUGH THE PUBLIC API, by the partition of unity: uniform
+      nodal slip must reproduce the P0 answer exactly, at every entry point,
+      summed over each element's K columns. Also the check that catches a
+      PARTIAL WRITE into the wider DOF buffer, with a tripwire that non-uniform
+      nodal slip really does differ. See part_i.
+
 Run from anywhere:  python tests/gates/mhs/verify_image_kernel.py
 """
 from __future__ import annotations
@@ -314,7 +326,106 @@ def main() -> bool:
                    f"the subtraction vacuous and [e] above trivially true")
     part_f(rep, image)
     part_h(rep)
+    part_i(rep)
     return rep.finish()
+
+
+def part_i(rep) -> None:
+    """P1 AND P2 THROUGH THE PUBLIC API, by the partition of unity.
+
+    At order ``p`` each element carries ``K = 1, 3, 6`` nodal slip vectors and
+    the source axis holds slip DEGREES OF FREEDOM, element-major. The shape
+    functions sum to 1, so uniform nodal values represent exactly the constant
+    slip field P0 represents -- which makes
+
+        sum over an element's K columns  ==  that element's P0 column
+
+    an identity, at every entry point, with no reference and no tolerance
+    chosen by taste. It is also the check that catches a PARTIAL WRITE: an
+    assembler that fills only the first ``n_src`` columns of an ``n_dof``-wide
+    buffer leaves zeros behind, and nothing else here would notice. That is not
+    hypothetical -- ``eigenstress_matrix`` did exactly that when the order
+    argument was threaded through its buffer but not its assembler, and this
+    clause is how it surfaced (0.57 against 1e-16 now).
+
+    The tripwire is that NON-uniform nodal slip must give a different answer,
+    because an implementation that ignored the nodal values entirely -- using
+    the P0 kernel K times -- would satisfy the identity above perfectly.
+    """
+    from mhs import (Material, disp_matrix, eigenstress_matrix,
+                     elastic_strain_matrix, interaction_matrix,
+                     stress_matrix, tdcs, total_stress_matrix,
+                     traction_matrix)
+    from mhs.fullspace.shape import n_nodes
+    from mhs.matrices import COLLOCATION_SHRINK
+
+    mat = Material(mu=MU, lam=LAM)
+    tris = np.array([TRI_SURF, TRI_DEEP])
+    eps, n = 0.1, 2
+    rng = np.random.default_rng(8)
+    obs = np.column_stack([rng.normal(size=7) * 1.5, rng.normal(size=7) * 1.5,
+                           -np.abs(rng.normal(size=7)) * 1.5 - 0.3])
+    nrm = np.repeat(tdcs.slip_frame(tris)[:1, 2, :], len(obs), axis=0)
+
+    print("\n[i] P1/P2 THROUGH THE API: the partition of unity")
+    cases = [("disp_matrix", lambda p: disp_matrix(obs, tris, mat, eps,
+                                                   order=p)),
+             ("stress_matrix", lambda p: stress_matrix(obs, tris, mat, eps,
+                                                       order=p)),
+             ("total_stress_matrix",
+              lambda p: total_stress_matrix(obs, tris, mat, eps, order=p)),
+             ("eigenstress_matrix",
+              lambda p: eigenstress_matrix(obs, tris, mat, eps, order=p)),
+             ("elastic_strain_matrix",
+              lambda p: elastic_strain_matrix(obs, tris, mat, eps, order=p)),
+             ("traction_matrix",
+              lambda p: traction_matrix(obs, nrm, tris, mat, eps, order=p))]
+    worst = 0.0
+    for name, fn in cases:
+        ref = fn(0)
+        for p in (1, 2):
+            K = n_nodes(p)
+            got = fn(p)
+            if got.shape[-2] != n * K:
+                rep.check_bool(f"i {name} has the right DOF count at P{p}",
+                               False, f"(got {got.shape}, expected a source "
+                                      f"axis of {n * K})")
+                return
+            summed = got.reshape(got.shape[:-2] + (n, K, 3)).sum(axis=-2)
+            worst = max(worst, relmax(summed, ref))
+    rep.check("i uniform nodal slip at P1/P2 reproduces P0, every entry point",
+              worst, 1e-11,
+              "summed over each element's K columns -- an identity, and the "
+              "one check that catches an assembler filling only the first "
+              "n_src columns of an n_dof buffer")
+
+    g1 = disp_matrix(obs, tris, mat, eps, order=1)
+    uniform = np.zeros((n * 3, 3))
+    uniform[:, 0] = 1.0
+    spiked = np.zeros((n * 3, 3))
+    spiked[0::3, 0] = 3.0                    # same total, concentrated
+    du = np.einsum("oisk,sk->oi", g1, uniform)
+    ds = np.einsum("oisk,sk->oi", g1, spiked)
+    rep.check_bool("i NON-uniform nodal slip gives a different field",
+                   relmax(ds, du) > 1e-3,
+                   f"({relmax(ds, du):.2e} relative) -- an implementation that "
+                   f"ignored the nodal values and used the P0 kernel K times "
+                   f"would satisfy the clause above exactly")
+
+    for p in (0, 1, 2):
+        K = interaction_matrix(tris, mat, eps, order=p, receiver="strike",
+                               source="strike")
+        d = np.diag(K[:, :, 0, 0])
+        ok = K.shape == (n * n_nodes(p), n * n_nodes(p), 1, 1)
+        rep.check_bool(f"i interaction_matrix at P{p}: DOF-shaped, diagonal "
+                       f"still negative",
+                       ok and bool(np.all(d < 0.0)),
+                       f"(shape {K.shape}, diagonal {d.min():+.3e} .. "
+                       f"{d.max():+.3e}) -- collocated at nodes shrunk "
+                       f"{100 * COLLOCATION_SHRINK:g}% toward the centroid, "
+                       f"because a raw P1 node is a VERTEX and reading stress "
+                       f"on the element's own edge is the hardest case the "
+                       f"kernel has")
 
 
 def part_h(rep) -> None:

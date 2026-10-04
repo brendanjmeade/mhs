@@ -76,6 +76,11 @@ carries is subtracted in the readout.
   externally instead of merely to a second copy of itself.
 - **Full `(3, 3)` tensors, not Voigt-6**, so no component ordering or
   factor-of-two convention is stated anywhere in this package.
+- **`order` in {0, 1, 2}** selects P0, P1 or P2 nodal slip. The source axis is
+  slip DOFs, element-major with the node index fastest, so `n_dof = n_src * K`
+  with `K = 1, 3, 6`. At the default `order=0` that is `n_src` and nothing
+  changes. Uniform nodal slip reproduces the P0 answer exactly -- gated as an
+  identity, which is also what catches a partial write into the wider buffer.
 - **`eps > 0`, scalar or one per source triangle.** There is no `"auto"`: that
   rule needs a mesh spacing, and these functions take a vertex array.
 
@@ -116,6 +121,9 @@ The better escape is usually to **ask for less**. Per obs/source pair:
 | `disp_matrix`, `traction_matrix` | 72 | 6.7 GiB |
 | `interaction_matrix`, 2 shear x 2 slip | 32 | 3.0 GiB |
 | `interaction_matrix`, strike only | 8 | 0.75 GiB |
+
+At `order > 0` the counts are per DOF rather than per element, so P1 is 9x and
+P2 is 36x the pair count of P0.
 
 Nothing about the calculation changes across those rows -- the component
 selection is only how much of the result you keep.
