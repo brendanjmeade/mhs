@@ -62,11 +62,20 @@ def check(label: str, ok: bool, note: str = "") -> bool:
 
 
 # --------------------------------------------------------------------- [a] ---
-_PROBE = textwrap.dedent("""
-    import json, sys, time
+#: The threading variables `mhs.parallel` sets for its CHILDREN. Listed here
+#: rather than imported, because the probe below must not import mhs before it
+#: has recorded the environment.
+_THREAD_ENV = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+               "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS")
+
+_PROBE = textwrap.dedent(f"""
+    import json, os, sys, time
+    keys = {_THREAD_ENV!r}
+    env_before = {{k: os.environ.get(k) for k in keys}}
     t0 = time.perf_counter(); import numba; t_numba = time.perf_counter() - t0
     t0 = time.perf_counter(); import mhs;   t_mhs   = time.perf_counter() - t0
-    print("@@" + json.dumps({
+    env_after = {{k: os.environ.get(k) for k in keys}}
+    print("@@" + json.dumps({{
         "t_numba": t_numba,
         "t_mhs": t_mhs,
         "sympy": "sympy" in sys.modules,
@@ -74,7 +83,10 @@ _PROBE = textwrap.dedent("""
         "oracle": any(m == "mhs_oracle" or m.startswith("mhs_oracle.")
                       for m in sys.modules),
         "scipy": "scipy" in sys.modules,
-    }))
+        "thread_env_touched": [k for k in keys
+                               if env_before[k] != env_after[k]],
+        "parallel_imported": "mhs.parallel" in sys.modules,
+    }}))
 """)
 
 
@@ -109,6 +121,26 @@ def a_disjointness(info: dict) -> None:
 
 
 # --------------------------------------------------------------------- [b] ---
+def a_threads(info: dict) -> None:
+    """`import mhs` must not touch the BLAS threading environment.
+
+    ``mhs.parallel`` pins those variables for its spawned CHILDREN and restores
+    them, which is a different thing from a library setting them at import time
+    -- that decides something belonging to the program using it, and the
+    decision is invisible until something else in the process gets slower.
+    Measured in the pristine probe, so a variable the developer's shell happens
+    to export cannot mask it.
+    """
+    touched = info["thread_env_touched"]
+    check("a `import mhs` touches no BLAS threading variable",
+          not touched,
+          f"changed {touched}" if touched else
+          "mhs.parallel pins them for its children and restores them")
+    check("a ... and mhs.parallel is importable without doing so",
+          info["parallel_imported"],
+          "it is imported by `import mhs`, so the clause above covers it")
+
+
 def b_cost(info: dict) -> None:
     from mhs import defaults
     over = info["t_mhs"] - info["t_numba"]
@@ -137,7 +169,7 @@ EXPECTED = {
     "traction_matrix": ["obs_pts", "obs_normals", "tris", "material", "eps",
                         "subtract_eigenstress", "order", "out"],
     "interaction_matrix": ["tris", "material", "eps", "receiver", "source",
-                           "obs_pts", "order", "shrink",
+                           "obs_tris", "obs_pts", "order", "shrink",
                            "subtract_eigenstress", "out"],
 }
 
@@ -235,6 +267,7 @@ def main() -> bool:
     print("=" * 76)
     info = probe()
     a_disjointness(info)
+    a_threads(info)
     b_cost(info)
     c_surface()
     d_conventions()

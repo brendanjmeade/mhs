@@ -70,6 +70,12 @@ RIGHT, not merely that it reproduces another implementation.
       PARTIAL WRITE into the wider DOF buffer, with a tripwire that non-uniform
       nodal slip really does differ. See part_i.
 
+  [j] PARALLEL ASSEMBLY over source chunks, as an identity: the split result
+      must be BITWISE the serial one, because each source's column block
+      depends on no other source. Plus the rectangular receiver/source case
+      the split actually drives, and that pinned_blas restores the caller's
+      environment. See part_j.
+
 Run from anywhere:  python tests/gates/mhs/verify_image_kernel.py
 """
 from __future__ import annotations
@@ -327,7 +333,107 @@ def main() -> bool:
     part_f(rep, image)
     part_h(rep)
     part_i(rep)
+    part_j(rep)
     return rep.finish()
+
+
+def part_j(rep) -> None:
+    """PARALLEL ASSEMBLY, as an identity, plus the two things around it.
+
+    ``mhs.parallel.by_source`` splits the source elements across processes.
+    Each source's column block depends on no other source -- which is why
+    ``assemble.py`` loops over sources -- so the parallel result must be
+    BITWISE the serial one, and a tolerance here would be hiding something.
+
+    Deliberately small: two workers on a handful of elements. The point is the
+    identity and the plumbing (pickling, the DOF bookkeeping, the rectangular
+    receiver/source case), not the speedup, which needs a mesh far larger than
+    a gate should build. Spawning a worker costs an interpreter start and a
+    numpy import, so this clause is bounded by that rather than by arithmetic.
+
+    Three clauses:
+
+      - the split result is bitwise the whole one, at P0 and at P1, for a
+        contracted matrix and for the interaction matrix (whose source axis is
+        axis 1, not -2, because both of its leading axes are DOF axes).
+
+      - ``pinned_blas`` RESTORES the environment, including deleting variables
+        that were absent. A library that leaves OMP_NUM_THREADS set has decided
+        something that belongs to the program using it, and that failure is
+        invisible until something else in the process gets slower.
+
+      - the RECTANGULAR case agrees with the corresponding slice of the square
+        one. That is what the parallel path actually exercises -- a chunk of
+        sources against every receiver -- so if receivers and sources were ever
+        conflated again, this is the clause that would catch it.
+    """
+    import functools
+    import os
+
+    from mhs import Material, interaction_matrix, parallel, tdcs
+    from mhs import traction_matrix
+
+    mat = Material(mu=MU, lam=LAM)
+    tris = np.array([TRI_SURF, TRI_DEEP,
+                     TRI_DEEP + np.array([0.6, -0.3, -0.4]),
+                     TRI_DEEP + np.array([-0.5, 0.7, -0.2]),
+                     TRI_SURF + np.array([1.4, 0.2, 0.0])])
+    eps = 0.1
+    obs = tris.mean(axis=1) + np.array([0.2, 0.1, -0.3])
+    nrm = np.repeat(tdcs.slip_frame(tris)[:1, 2, :], len(obs), axis=0)
+
+    print("\n[j] PARALLEL ASSEMBLY: split by source, bitwise")
+    ok = True
+    for order in (0, 1):
+        ser = traction_matrix(obs, nrm, tris, mat, eps, order=order)
+        call = functools.partial(traction_matrix, obs, nrm, material=mat,
+                                 eps=eps, order=order)
+        par = parallel.by_source(call, tris, workers=2)
+        ok = ok and par.shape == ser.shape and np.array_equal(par, ser)
+        rep.check_bool(f"j traction_matrix P{order} split over 2 processes is "
+                       f"BITWISE the serial one", np.array_equal(par, ser),
+                       f"(shape {par.shape}) -- each source's block depends on "
+                       f"no other source, so anything but identical means the "
+                       f"split changed the arithmetic")
+
+    ser_k = interaction_matrix(tris, mat, eps, receiver="strike",
+                               source="strike")
+    call_k = functools.partial(interaction_matrix, material=mat, eps=eps,
+                               obs_tris=tris, receiver="strike",
+                               source="strike")
+    par_k = parallel.by_source(call_k, tris, workers=2, source_axis=1,
+                               tris_kw="tris")
+    rep.check_bool("j interaction_matrix split over 2 processes is BITWISE "
+                   "the serial one", np.array_equal(par_k, ser_k),
+                   f"(shape {par_k.shape}) -- source axis 1, not -2, because "
+                   f"both leading axes are DOF axes")
+
+    # The rectangular case the parallel path actually drives.
+    half = interaction_matrix(tris[:2], mat, eps, obs_tris=tris,
+                              receiver="strike", source="strike")
+    rep.check_bool("j a RECTANGULAR block equals that slice of the square one",
+                   half.shape == (5, 2, 1, 1)
+                   and np.array_equal(half, ser_k[:, :2]),
+                   "receivers = all 5 elements, sources = the first 2; this is "
+                   "the shape a source chunk has, so conflating receivers with "
+                   "sources again would fail here")
+
+    env_before = {k: os.environ.get(k) for k in parallel.THREAD_ENV}
+    os.environ["OMP_NUM_THREADS"] = "7"
+    with parallel.pinned_blas(1):
+        inside = os.environ.get("OMP_NUM_THREADS")
+    restored = os.environ.get("OMP_NUM_THREADS") == "7"
+    absent_still = all(os.environ.get(k) is None
+                       for k in parallel.THREAD_ENV
+                       if env_before[k] is None and k != "OMP_NUM_THREADS")
+    os.environ.pop("OMP_NUM_THREADS", None)
+    if env_before["OMP_NUM_THREADS"] is not None:
+        os.environ["OMP_NUM_THREADS"] = env_before["OMP_NUM_THREADS"]
+    rep.check_bool("j pinned_blas sets the children's threads and RESTORES",
+                   inside == "1" and restored and absent_still,
+                   "variables that were absent are deleted again, not left at "
+                   "'1' -- otherwise this pins the caller's whole process for "
+                   "the rest of its life")
 
 
 def part_i(rep) -> None:

@@ -271,10 +271,18 @@ def traction_matrix(obs_pts, obs_normals, tris, material, eps, *,
 COLLOCATION_SHRINK = 0.5
 
 
-def _nodal_collocation(tri, order: int, shrink: float) -> np.ndarray:
-    """``(n_src * K, 3)`` collocation points, element-major like the DOFs."""
+def collocation_points(tris, order: int = 0,
+                       shrink: float = COLLOCATION_SHRINK) -> np.ndarray:
+    """``(n_src * K, 3)`` nodal collocation points, element-major like the DOFs.
+
+    What ``interaction_matrix`` uses when ``obs_pts`` is None. Public because a
+    caller who parallelises over source chunks must compute these ONCE from the
+    whole mesh and pass them in -- each chunk would otherwise collocate on its
+    own elements alone, which is a different (and much smaller) matrix.
+    """
     from .fullspace.shape import lattice
-    p = int(order)
+    tri = np.asarray(tris, float).reshape(-1, 3, 3)
+    p = _order(order)
     bary = (np.full((1, 3), 1.0 / 3.0) if p == 0
             else lattice(p) / p)                        # (K, 3)
     bary = bary + float(shrink) * (1.0 / 3.0 - bary)    # toward the centroid
@@ -284,17 +292,17 @@ def _nodal_collocation(tri, order: int, shrink: float) -> np.ndarray:
 def interaction_matrix(tris, material, eps, *, receiver=("strike", "dip",
                                                          "normal"),
                        source=("strike", "dip", "tensile"),
-                       obs_pts=None, order=0,
+                       obs_tris=None, obs_pts=None, order=0,
                        shrink=COLLOCATION_SHRINK,
                        subtract_eigenstress=True, out=None):
-    """The on-fault interaction matrix, ``(n, n, n_receiver, n_source)``.
+    """The on-fault interaction matrix, ``(n_rec_dof, n_src_dof, n_a, n_b)``.
 
-    ``[i, j, a, b]`` is the traction on element ``i``'s own plane, resolved
-    along direction ``a`` of element ``i``'s (strike, dip, tensile) frame, from
-    unit slip along direction ``b`` of element ``j``'s frame. This is the object
-    Coulomb, rate-and-state and earthquake-cycle work actually wants, and it is
-    assembled directly rather than contracted out of a stress matrix, because
-    the stress matrix for a production mesh cannot be allocated.
+    ``[i, j, a, b]`` is the traction on receiver DOF ``i``'s own plane, resolved
+    along direction ``a`` of that element's (strike, dip, tensile) frame, from
+    unit slip along direction ``b`` of source element ``j``'s frame. This is the
+    object Coulomb, rate-and-state and earthquake-cycle work actually wants, and
+    it is assembled directly rather than contracted out of a stress matrix,
+    because the stress matrix for a production mesh cannot be allocated.
 
     The frames come from :mod:`mhs.tdcs`, which states cutde's convention in one
     place; ``receiver`` additionally accepts ``"normal"`` for ``"tensile"``,
@@ -306,35 +314,48 @@ def interaction_matrix(tris, material, eps, *, receiver=("strike", "dip",
     (``receiver="strike", source="strike"``) is 0.75 GiB. Nothing else about the
     calculation changes, so the selection is purely how much of it you keep.
 
-    Observers default to the element CENTROIDS, which is where a mollified
-    kernel may be read on its own element: the eigenstress is removed and what
-    is left is finite there. Pass ``obs_pts`` to collocate somewhere else -- the
-    shrunk nodes, say -- but they are still paired with ``tris`` row by row, so
-    there must be one per element.
+    RECEIVERS NEED NOT BE THE SOURCES. ``obs_tris`` defaults to ``tris``, which
+    is the square self-interaction everyone wants first. Giving it a different
+    set makes the matrix RECTANGULAR -- stress on one fault from slip on
+    another, and the shape a caller needs when parallelising, because a chunk of
+    sources must still see every receiver (``mhs.parallel.by_source``).
+
+    Observers default to the shrunk nodes of ``obs_tris``
+    (:func:`collocation_points`), which is where a mollified kernel may be read
+    on its own element: the eigenstress is removed and what is left is finite
+    there. ``obs_pts`` overrides them and must supply ``K`` per receiver
+    element, grouped element-major, because each one is paired with its
+    element's plane and frame.
     """
     from . import tdcs
     tri = np.asarray(tris, float).reshape(-1, 3, 3)
+    rec_tri = tri if obs_tris is None else np.asarray(
+        obs_tris, float).reshape(-1, 3, 3)
     p = _order(order)
     K = n_nodes(p)
-    pts = _nodal_collocation(tri, p, shrink) if obs_pts is None else obs_pts
+    pts = collocation_points(rec_tri, p, shrink) if obs_pts is None else obs_pts
     obs, tri, mu, lam, eps_arr = _coerce(pts, tri, material, eps)
-    n_dof = tri.shape[0] * K
-    if obs.shape[0] != n_dof:
+    rec_tri = np.ascontiguousarray(rec_tri)
+    n_src_dof = tri.shape[0] * K
+    n_rec_dof = rec_tri.shape[0] * K
+    if obs.shape[0] != n_rec_dof:
         raise ValueError(
-            f"interaction_matrix pairs observers with slip DOFs row by row, so "
-            f"at order {p} it needs {K} per element: got {obs.shape[0]} "
-            f"observers for {tri.shape[0]} triangles ({n_dof} DOFs). For "
-            f"traction at unrelated points use "
-            f"traction_matrix(obs_pts, obs_normals, ...).")
+            f"interaction_matrix pairs observers with RECEIVER slip DOFs row by "
+            f"row, so at order {p} it needs {K} per receiver element: got "
+            f"{obs.shape[0]} observers for {rec_tri.shape[0]} receiver "
+            f"triangles ({n_rec_dof} DOFs). For traction at unrelated points "
+            f"use traction_matrix(obs_pts, obs_normals, ...).")
     # One frame per ELEMENT, repeated across its nodes: the frame is a property
     # of the plane, and every node of an element shares that plane.
-    frame = np.repeat(tdcs.slip_frame(tri), K, axis=0)   # (n_dof, 3, 3)
+    rec_frame = np.repeat(tdcs.slip_frame(rec_tri), K, axis=0)
+    src_frame = tdcs.slip_frame(tri)                    # one row per element
     rec = tdcs.component_index(receiver)
     src = tdcs.component_index(source)
-    shape = (n_dof, n_dof, len(rec), len(src))
-    buf = _prepare_out(out, shape, n_dof, n_dof, (len(rec), len(src)), False)
-    _asm.assemble_interaction(obs, frame[:, 2, :], frame[:, rec, :], tri,
-                              frame[::K][:, src, :], mu, lam, eps_arr, buf,
+    shape = (n_rec_dof, n_src_dof, len(rec), len(src))
+    buf = _prepare_out(out, shape, n_rec_dof, n_src_dof,
+                       (len(rec), len(src)), False)
+    _asm.assemble_interaction(obs, rec_frame[:, 2, :], rec_frame[:, rec, :],
+                              tri, src_frame[:, src, :], mu, lam, eps_arr, buf,
                               subtract_eigenstress, p)
     return buf
 

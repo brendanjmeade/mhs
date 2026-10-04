@@ -143,6 +143,44 @@ line — a gate whose two disagree is reported as a mismatch rather than trusted
 Per-suite gate counts are pinned, because a green empty suite is the one failure
 a test runner must not be able to report.
 
+## Across cores
+
+The matrix splits by source element -- each source owns a disjoint column
+slice -- so it parallelises across **processes**, not threads:
+
+```python
+import functools, mhs, mhs.parallel as mp
+
+call = functools.partial(mhs.interaction_matrix, material=mat, eps=0.1,
+                         obs_tris=tris, receiver="strike", source="strike")
+K = mp.by_source(call, tris, workers=12, source_axis=1, tris_kw="tris")
+```
+
+Measured on 800 elements (640k pairs), 16 cores, bitwise identical to serial at
+every worker count:
+
+| workers | s | us/pair | speedup | efficiency |
+|---|---|---|---|---|
+| 1 | 30.1 | 47.1 | 1.00x | 100% |
+| 2 | 16.5 | 25.7 | 1.83x | 91% |
+| 4 | 9.0 | 14.0 | 3.36x | 84% |
+| 8 | 4.7 | 7.3 | 6.41x | 80% |
+| 12 | 3.5 | 5.5 | **8.50x** | 71% |
+
+So a 10k x 10k interaction matrix is about **9 minutes**, against ~1 h on one
+core. Threads do not work here and the numbers are in `mhs/parallel.py`: 1.28x
+at two, then *worse* -- the per-source body is many small numpy calls and the
+GIL is held almost continuously.
+
+Two things that module does deliberately. It pins BLAS to one thread **in the
+children only** and restores the environment afterwards, because these matmuls
+are small and BLAS's threads fight the pool for cores (1.83x with one BLAS
+thread against 1.61x with sixteen); `import mhs` touches no threading variable,
+which a gate asserts in a pristine subprocess. And the call site must be
+guarded with `if __name__ == "__main__":`, because the workers are spawned and
+re-import it -- without that the parent sees only `BrokenProcessPool`, so
+`by_source` catches it and says what actually happened.
+
 ## CI
 
 | workflow | when | what |

@@ -29,9 +29,10 @@ cannot be allocated at production size:
     K = mhs.interaction_matrix(tris, mat, eps=0.1,
                                receiver="strike", source="strike")   # (n, n)
 """
-from . import chunking, defaults, tdcs
+from . import chunking, defaults, parallel, tdcs
 from .materials import Material
 from .matrices import (
+    collocation_points,
     disp_matrix,
     eigenstress_matrix,
     elastic_strain_matrix,
@@ -50,8 +51,10 @@ __all__ = [
     "total_stress_matrix",
     "eigenstress_matrix",
     "elastic_strain_matrix",
+    "collocation_points",
     "chunking",
     "defaults",
+    "parallel",
     "tdcs",
 ]
 

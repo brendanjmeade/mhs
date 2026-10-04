@@ -73,3 +73,10 @@ IMAGE_Q_GAUSS_MAX = 192
 #: exactly where observers cluster near a surface trace, which is the one
 #: configuration where both factors are large together.
 IMAGE_Q_BLOCK_BYTES = 64 << 20
+#: Budget for the column blocks IN FLIGHT when `mhs.parallel.by_source` builds
+#: a matrix across processes. Workers return their own block and the parent
+#: writes it in, so the peak is the output plus whatever has been computed but
+#: not yet consumed. Sizing the chunk COUNT against this bounds that second
+#: term instead of letting it scale with the worker count -- with one chunk per
+#: worker it would be the whole output a second time.
+PARALLEL_INFLIGHT_BYTES = 512 << 20
