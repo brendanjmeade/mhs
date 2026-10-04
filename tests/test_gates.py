@@ -47,7 +47,13 @@ def _gates() -> list:
     for suite in sorted(R.SUITES):
         for path in R.discover(suite):
             gid = f"{suite}/{path.stem}"
-            marks = [pytest.mark.slow] if gid in R.SLOW else []
+            # One marker per suite, so CI can select the every-push set by
+            # what it IS rather than by a substring of its id. The parity and
+            # oracle suites each pay ~14 s to import the sympy half of the
+            # vendored oracle, which is why they are nightly and not per push.
+            marks = [getattr(pytest.mark, suite)]
+            if gid in R.SLOW:
+                marks.append(pytest.mark.slow)
             out.append(pytest.param(suite, path, id=gid, marks=marks))
     return out
 

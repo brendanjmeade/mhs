@@ -93,4 +93,13 @@ addopts = ["--import-mode=importlib"]
 # verify_oracle_provenance assert on a PRISTINE module table, and gates rebind
 # defaults.* around a clause. norecursedirs is the belt to test_gates.py's braces.
 norecursedirs = ["tests/gates"]
-markers = ["slow: takes over 60 s"]
+# One marker per gate suite plus `slow`, so CI selects the every-push set as
+# `-m "mhs and not slow"` rather than by matching a substring of a test id --
+# which also deselects test_gate_count, the check that makes a green EMPTY
+# suite impossible to report.
+markers = [
+    "slow: takes over 60 s",
+    "mhs: the shipped package and the numpy-only oracle parity; every push",
+    "parity: against the SYMPY half of the vendored oracle; nightly",
+    "oracle: the vendored copies' own derivation checks; nightly",
+]

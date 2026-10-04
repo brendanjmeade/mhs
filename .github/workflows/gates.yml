@@ -1,0 +1,63 @@
+name: gates
+
+# EVERY PUSH, NO PATH FILTER. A path-filtered test job reports success for a
+# commit it never tested, and the one thing a gate suite must not do is report
+# green for work it did not run.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: ${{ matrix.os }} / py${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Never mask one platform's failure with another's. The macOS leg exists
+      # specifically to see what Linux cannot: numba `parallel=True` kernels
+      # must never be called from Python threads, and that crash is macOS-only,
+      # so a Linux-only CI would never witness a violation of the rule that
+      # most constrains kernels/assemble.py.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # The declared floor and the development version, so the supported
+        # range is checked at both ends rather than in the middle.
+        python: ["3.11", "3.13"]
+    env:
+      # Force cutde's prebuilt C++ CPU backend. Unset, it probes for CUDA and
+      # then OpenCL, which on a headless runner is a slow path to a confusing
+      # ImportError rather than to the comparison the gate wants.
+      CUTDE_USE_BACKEND: cpp
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      # `[test,tde]` and NOT `[oracle]`: sympy and matplotlib cost a measured
+      # 14.25 s per import because the vendored moss half builds ~90 symbolic
+      # matrices at module scope. Those gates are the nightly job below.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test,tde]"
+
+      - name: Import stays cheap
+        run: python -c "import mhs; print(mhs.__version__)"
+
+      # Both runners, because they assert different things and only running
+      # both keeps the cross-check meaningful: run_all.py asserts the EXIT
+      # CODE, pytest asserts the RETURN VALUE, and each cross-checks the
+      # printed verdict.
+      - name: Gates (run_all, asserts the exit code)
+        run: python tests/run_all.py --suite mhs
+
+      - name: Gates (pytest, asserts the return value)
+        run: python -m pytest -q -m "not parity and not oracle"

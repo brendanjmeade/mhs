@@ -143,6 +143,28 @@ line — a gate whose two disagree is reported as a mismatch rather than trusted
 Per-suite gate counts are pinned, because a green empty suite is the one failure
 a test runner must not be able to report.
 
+## CI
+
+| workflow | when | what |
+|---|---|---|
+| `gates.yml` | **every push and PR, no path filter** | the `mhs` suite, under both runners, on ubuntu **and macOS**, py3.11 and py3.13 |
+| `parity.yml` | nightly, or on demand | adds the `parity` and `oracle` suites, which need sympy |
+
+No path filter, because a path-filtered test job reports success for a commit it
+never tested. macOS is in the matrix for a specific reason: numba `parallel=True`
+kernels must never be called from Python threads, and that crash is macOS-only,
+so a Linux-only CI would never witness a violation of the rule that most
+constrains `kernels/assemble.py`.
+
+`CUTDE_USE_BACKEND=cpp` pins cutde's prebuilt C++ CPU backend. Unset, it probes
+for CUDA and then OpenCL, which on a headless runner is a slow path to a
+confusing `ImportError` rather than to the comparison the gate wants.
+
+The `oracle` extra is nightly and not per push because importing the sympy half
+of the vendored oracle costs a measured 14.25 s — it builds and lambdifies ~90
+symbolic matrices at module scope. The nightly job runs those under pytest
+first, so that import is paid once rather than once per subprocess.
+
 `src/mhs_oracle/` holds vendored **frozen** reference implementations, pinned by
 path and sha256. They are never improved and the shipped path never imports
 them; a gate asserts that disjointness, because an implementation shared between
