@@ -1,12 +1,16 @@
 #!/usr/bin/env python
 """The free-surface traction residual -- the baseline the derivation must beat.
 
-**This gate exists before the thing it measures.** The Cortez-consistent image
-mollification is the next piece of work, and its whole claim is that the
-free-surface condition goes from approximate to exact. A number claimed after
-the fact is worth much less than one measured against a baseline recorded
-first, so this gate records the baseline now, in the form the improvement will
-be visible in.
+**This gate was written before the thing it measures, and then the thing did
+not happen.** The Cortez-consistent image mollification was meant to take the
+free-surface condition from approximate to exact; step 7 of the plan derived it,
+measured it, and FORECLOSED it -- the Cortez blob has algebraic tails, so no
+finite-order rule is exact for non-harmonic potentials, and the condition stays
+O(eps^2) with a better constant (``docs/derivation.md``). So what was a baseline
+awaiting an improvement is now the PERMANENT statement of this kernel's accuracy
+class, and the clauses below are not provisional. Keeping the measurement in the
+form the improvement would have shown up in costs nothing and is how the
+foreclosure stays checkable.
 
 The vendored kernel mollifies by the literal lift -- ``r -> sqrt(r^2 + eps^2)``
 on both the direct and the image distance -- plus an explicit Cortez blob on the
@@ -29,18 +33,20 @@ Four clauses, and the third is the one that matters:
       at 1 the mollification would have changed character, which no absolute
       tolerance would reveal.
 
-  [c] A TRIPWIRE ASSERTING THE DEFECT IS STILL THERE. The residual must be
-      eps-DEPENDENT -- order above 1.5 and the coarsest rung above 1e-3. That
-      clause is deliberately the wrong way round for a gate, and it is the
-      point: when the Cortez-consistent derivation lands, the residual should
-      become eps-INDEPENDENT at machine precision, this clause will FAIL, and
-      the commit that lands the derivation must invert it. An improvement that
-      forces a gate to be rewritten is an improvement nobody can merge without
-      noticing. (Upstream uses the same shape -- "P0 top: median ABOVE
-      tripwire" -- to prove a check sees the defect it is about.)
+  [c] THE ACCURACY CLASS, pinned from BOTH sides. The residual must stay
+      eps-DEPENDENT -- order above 1.5, coarsest rung above 1e-3 -- which reads
+      the wrong way round for a gate and is deliberate. It was written as a
+      tripwire to make an improvement impossible to merge unnoticed; now that
+      the improvement is foreclosed, it does the complementary job of making a
+      silent change in the accuracy class impossible to merge unnoticed either.
+      If these ever fail, something real happened: either the kernel's
+      mollification changed, or someone found a route step 7 ruled out. Both
+      deserve a commit that says so. (Upstream uses the same shape -- "P0 top:
+      median ABOVE tripwire" -- to prove a check sees the defect it is about.)
 
-      Target for the inverted clause, stated now so it is not negotiated later:
-      eps-independent, below 1e-11 relative, at every nu including 0.49.
+      ``TARGET_EXACT`` is kept as the number that route would have had to reach,
+      because an abandoned target is only informative if it is still written
+      down next to what was achieved instead.
 
   [d] APOSTOL'S POTENTIALS ARE BIHARMONIC IN THE SOURCE VARIABLE, checked
       symbolically. This is the foundation the Cortez-consistent derivation
@@ -80,7 +86,7 @@ TOL_RESIDUAL = 0.60      # worst measured 4.41e-1, at nu = 0.49, eps = 0.5
 TOL_ORDER_MIN = 1.80     # measured 1.90 .. 2.00
 TRIP_ORDER = 1.50        # the defect: still eps-dependent
 TRIP_COARSE = 1.0e-3     # the defect: still large at the coarsest rung
-TARGET_EXACT = 1.0e-11   # what the Cortez-consistent version must reach
+TARGET_EXACT = 1.0e-11   # what the FORECLOSED Cortez route would have reached
 
 
 def main() -> bool:
@@ -129,14 +135,14 @@ def main() -> bool:
                        f"(min {min(orders[nu]):.2f}; the literal lift is "
                        f"O(eps^2))")
 
-    print(f"\n  [c] TRIPWIRE: the defect this gate exists to watch")
-    print(f"      The residual is still eps-DEPENDENT. When the "
-          f"Cortez-consistent image")
-    print(f"      mollification lands it must become eps-INDEPENDENT below "
-          f"{TARGET_EXACT:.0e},")
-    print(f"      these two clauses will FAIL, and the commit that lands it "
-          f"must invert")
-    print(f"      them. That is the intended behaviour, not a bug in the gate.")
+    print(f"\n  [c] THE ACCURACY CLASS: O(eps^2), and permanently so")
+    print(f"      The residual is eps-DEPENDENT and stays that way. The route "
+          f"that would have")
+    print(f"      made it eps-INDEPENDENT below {TARGET_EXACT:.0e} was derived "
+          f"and FORECLOSED in step 7")
+    print(f"      (algebraic blob tails). These clauses now guard the class "
+          f"rather than await")
+    print(f"      its improvement: a failure means the mollification changed.")
     for nu in NUS:
         rep.check_bool(f"c nu={nu:.2f}: STILL eps-dependent "
                        f"(order > {TRIP_ORDER})",
@@ -162,8 +168,11 @@ def main() -> bool:
 def part_d(rep) -> None:
     """Apostol's potentials are BIHARMONIC in the SOURCE variable.
 
-    This is what lets the Cortez-consistent derivation apply one unified rule to
-    the whole potential set instead of classifying term by term:
+    This is what LET the Cortez-consistent derivation apply one unified rule to
+    the whole potential set instead of classifying term by term. The property
+    holds -- it is checked here at 1e-16 -- and the derivation still failed, on
+    the blob's tails rather than on the potentials. Both facts are worth having:
+    the rule is sound, its blob is not.
 
         f * phi_eps = (1 - eps^2 d/d(eps^2))[f]_eps + (eps^2/2)[(1/2) lap f]_eps
 

@@ -79,17 +79,20 @@ TRIP_EIGEN_SHARE = 0.5    # and the eigenstress must be a large fraction there
 
 
 def slip_frame(tri):
-    """cutde's (strike, dip, tensile) basis as rows, in Cartesian components.
+    """cutde's (strike, dip, tensile) basis as rows, FROM THE SHIPPED MODULE.
 
-    Built from the vertices, so it is independent of anything mhs computes.
+    This was a private copy built from the vertices here, on the reasoning that
+    a reference should not import what it checks. That had it backwards. The
+    frame is a CONVENTION whose only external anchor is cutde, and with a
+    private copy this gate passed no matter what ``mhs.tdcs`` said -- so a wrong
+    frame could ship to callers while the comparison stayed green. Reading it
+    from ``mhs.tdcs`` makes the fitted-map clause below check the SHIPPED
+    convention against cutde's actual behaviour, which is the thing worth
+    knowing, and is rule 10's point: a convention written twice can disagree
+    with itself.
     """
-    n = np.cross(tri[1] - tri[0], tri[2] - tri[0])
-    n = n / np.linalg.norm(n)
-    if n[2] < 0.0:
-        n = -n
-    strike = np.array([-n[1], n[0], 0.0])
-    strike = strike / np.linalg.norm(strike)
-    return np.stack([strike, np.cross(n, strike), n])
+    from mhs import tdcs
+    return tdcs.slip_frame(np.asarray(tri, float)[None])[0]
 
 
 def _order(errs, epss):

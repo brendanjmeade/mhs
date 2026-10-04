@@ -25,20 +25,34 @@ PAIR_SHAPE = {
     "stress": (3, 3, 3),
     "strain": (3, 3, 3),
     "eigenstress": (3, 3, 3),
+    "traction": (3, 3),
 }
 
 
-def pair_bytes(kind: str, dtype=np.float64, parts: bool = False) -> int:
+def pair_shape(kind) -> tuple[int, ...]:
+    """Trailing shape per pair: a registered kind name, or an explicit tuple.
+
+    ``interaction_matrix`` passes a tuple, because its trailing shape is chosen
+    by the caller's component selection rather than fixed by the readout -- and
+    that selection is the whole point of it, since it is what takes a 10k x 10k
+    interaction from 7.2 GiB to 0.75 GiB.
+    """
+    if isinstance(kind, tuple):
+        return kind
+    if kind not in PAIR_SHAPE:
+        raise KeyError(f"unknown output kind {kind!r}; "
+                       f"expected one of {sorted(PAIR_SHAPE)}")
+    return PAIR_SHAPE[kind]
+
+
+def pair_bytes(kind, dtype=np.float64, parts: bool = False) -> int:
     """Bytes per obs/source pair for one output ``kind``.
 
     ``parts=True`` returns two arrays of that shape, so it is twice the cost --
     the ceiling must be checked against what the call will actually allocate,
     not against the shape of one of its outputs.
     """
-    if kind not in PAIR_SHAPE:
-        raise KeyError(f"unknown output kind {kind!r}; "
-                       f"expected one of {sorted(PAIR_SHAPE)}")
-    n = int(np.prod(PAIR_SHAPE[kind])) * np.dtype(dtype).itemsize
+    n = int(np.prod(pair_shape(kind))) * np.dtype(dtype).itemsize
     return 2 * n if parts else n
 
 
@@ -68,7 +82,7 @@ class ChunkPlan:
     n_chunks: int
 
 
-def chunk_plan(n_obs: int, n_src: int, kind: str = "stress",
+def chunk_plan(n_obs: int, n_src: int, kind="stress",
                dtype=np.float64, parts: bool = False,
                ceiling: int | None = None) -> ChunkPlan:
     """Plan an obs-sliced assembly that fits under ``ceiling``.
@@ -98,7 +112,7 @@ def _gib(n: int) -> str:
     return f"{n / 1024**3:.2f} GiB"
 
 
-def refuse_if_too_large(n_obs: int, n_src: int, kind: str,
+def refuse_if_too_large(n_obs: int, n_src: int, kind,
                         dtype=np.float64, parts: bool = False,
                         ceiling: int | None = None) -> None:
     """Raise with the arithmetic if this call would allocate past the ceiling.
@@ -111,8 +125,9 @@ def refuse_if_too_large(n_obs: int, n_src: int, kind: str,
     plan = chunk_plan(n_obs, n_src, kind, dtype, parts, ceiling=cap)
     if plan.bytes_total <= cap:
         return
+    label = kind if isinstance(kind, str) else f"interaction{pair_shape(kind)}"
     raise MemoryError(
-        f"{kind} matrix for {n_obs} obs x {n_src} sources would allocate "
+        f"{label} matrix for {n_obs} obs x {n_src} sources would allocate "
         f"{_gib(plan.bytes_total)}"
         f"{' (parts=True returns two arrays)' if parts else ''}, over the "
         f"{_gib(cap)} ceiling.\n"

@@ -96,6 +96,29 @@ def _coerce(obs_pts, tris, material, eps):
     return obs, tri, float(material.mu), float(material.lam), eps_arr
 
 
+def _coerce_normals(normals, n_obs):
+    """``(n_obs, 3)`` unit normals, or one normal broadcast to every observer.
+
+    Normalised HERE rather than trusted: a traction scales linearly with the
+    normal's length, so an unnormalised input is not an error anywhere -- it
+    silently rescales the answer. A near-zero normal is refused instead,
+    because that cannot be rescued by normalising.
+    """
+    arr = np.atleast_2d(np.asarray(normals, float))
+    if arr.shape == (1, 3) and n_obs != 1:
+        arr = np.repeat(arr, n_obs, axis=0)
+    if arr.shape != (n_obs, 3):
+        raise ValueError(
+            f"obs_normals has shape {np.shape(normals)}; expected "
+            f"({n_obs}, 3) to match obs_pts, or (3,) for one shared normal")
+    mag = np.linalg.norm(arr, axis=1)
+    if not np.all(mag > 1e-13):
+        raise ValueError(
+            f"obs_normals[{int(np.argmin(mag))}] has length "
+            f"{float(mag.min()):.3e} and so names no plane")
+    return arr / mag[:, None]
+
+
 def _prepare_out(out, shape, n_obs, n_src, kind, parts):
     """Validate a caller-supplied ``out=``, or budget-check an allocation.
 
@@ -173,6 +196,86 @@ def stress_matrix(obs_pts, tris, material, eps, *,
         if subtract_eigenstress:
             sig -= star
     return (sig, eig) if parts else sig
+
+
+def traction_matrix(obs_pts, obs_normals, tris, material, eps, *,
+                    subtract_eigenstress=True, out=None):
+    """ELASTIC traction on a given plane, ``(n_obs, 3, n_src, 3)``.
+
+    ``[o, i, s, k]`` is Cartesian traction component ``i`` on the plane through
+    ``obs_pts[o]`` with normal ``obs_normals[o]``, from unit Cartesian slip
+    ``k`` on ``tris[s]``. ``obs_normals`` may be one normal for all observers.
+
+    This is ``stress_matrix`` contracted with the receiver normal, but it never
+    allocates the stress: the contraction happens per source inside the
+    assembly loop, so the stored object is a THIRD the size. That is not a
+    micro-optimisation -- a 10k x 10k stress matrix is 20.1 GiB and the ceiling
+    refuses it, where this is 6.7 GiB.
+
+    Signs follow the normal you pass. Traction is ``sigma . n``, so flipping
+    ``obs_normals[o]`` flips that row; mhs does not orient it for you, because
+    which side of a surface you mean is a property of your mesh. ``mhs.tdcs``
+    builds the upward-oriented frame if you want cutde's convention.
+    """
+    obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
+    n_obs, n_src = obs.shape[0], tri.shape[0]
+    nrm = _coerce_normals(obs_normals, n_obs)
+    buf = _prepare_out(out, (n_obs, 3, n_src, 3), n_obs, n_src, "traction",
+                       False)
+    _asm.assemble_halfspace_traction(obs, nrm, tri, mu, lam, eps_arr, buf,
+                                     subtract_eigenstress)
+    return buf
+
+
+def interaction_matrix(tris, material, eps, *, receiver=("strike", "dip",
+                                                         "normal"),
+                       source=("strike", "dip", "tensile"),
+                       obs_pts=None, subtract_eigenstress=True, out=None):
+    """The on-fault interaction matrix, ``(n, n, n_receiver, n_source)``.
+
+    ``[i, j, a, b]`` is the traction on element ``i``'s own plane, resolved
+    along direction ``a`` of element ``i``'s (strike, dip, tensile) frame, from
+    unit slip along direction ``b`` of element ``j``'s frame. This is the object
+    Coulomb, rate-and-state and earthquake-cycle work actually wants, and it is
+    assembled directly rather than contracted out of a stress matrix, because
+    the stress matrix for a production mesh cannot be allocated.
+
+    The frames come from :mod:`mhs.tdcs`, which states cutde's convention in one
+    place; ``receiver`` additionally accepts ``"normal"`` for ``"tensile"``,
+    because the natural word for a traction's out-of-plane part is the one
+    normal to the plane it acts on.
+
+    SELECT COMPONENTS TO SELECT A SIZE. At 10k elements the default
+    ``3 x 3`` is 7.2 GiB, two shear components are 3.2 GiB and pure strike-slip
+    (``receiver="strike", source="strike"``) is 0.75 GiB. Nothing else about the
+    calculation changes, so the selection is purely how much of it you keep.
+
+    Observers default to the element CENTROIDS, which is where a mollified
+    kernel may be read on its own element: the eigenstress is removed and what
+    is left is finite there. Pass ``obs_pts`` to collocate somewhere else -- the
+    shrunk nodes, say -- but they are still paired with ``tris`` row by row, so
+    there must be one per element.
+    """
+    from . import tdcs
+    tri = np.asarray(tris, float).reshape(-1, 3, 3)
+    pts = tri.mean(axis=1) if obs_pts is None else obs_pts
+    obs, tri, mu, lam, eps_arr = _coerce(pts, tri, material, eps)
+    n = tri.shape[0]
+    if obs.shape[0] != n:
+        raise ValueError(
+            f"interaction_matrix pairs observers with elements row by row, so "
+            f"it needs one per element: got {obs.shape[0]} observers for {n} "
+            f"triangles. For traction at unrelated points use "
+            f"traction_matrix(obs_pts, obs_normals, ...).")
+    frame = tdcs.slip_frame(tri)                       # (n, 3, 3), rows s/d/t
+    rec = tdcs.component_index(receiver)
+    src = tdcs.component_index(source)
+    shape = (n, n, len(rec), len(src))
+    buf = _prepare_out(out, shape, n, n, (len(rec), len(src)), False)
+    _asm.assemble_interaction(obs, frame[:, 2, :], frame[:, rec, :], tri,
+                              frame[:, src, :], mu, lam, eps_arr, buf,
+                              subtract_eigenstress)
+    return buf
 
 
 def total_stress_matrix(obs_pts, tris, material, eps, *, out=None):

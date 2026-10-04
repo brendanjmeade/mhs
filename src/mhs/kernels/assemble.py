@@ -135,6 +135,89 @@ def assemble_halfspace_total_stress(obs: np.ndarray, tris: np.ndarray,
     return out
 
 
+def _eigenstress_traction(blk, tri, nrm, mu: float, lam: float) -> np.ndarray:
+    """``C:eps*`` already contracted onto the receiver planes, ``(n_obs, 3, 3)``.
+
+    The same tensor :func:`assemble_eigenstress` writes, but never materialised
+    as ``(3, 3)`` per pair -- which is the only reason the contracted forms cost
+    less than contracting their output afterwards would.
+    """
+    eye = np.eye(3)
+    phi = np.asarray(blk["E"])[:, 0]                       # (n_obs,)
+    n = _unit_normal(tri)
+    C = (lam * np.einsum("mn,k->mnk", eye, n)
+         + mu * (np.einsum("mk,n->mnk", eye, n)
+                 + np.einsum("nk,m->mnk", eye, n)))
+    return phi[:, None, None] * np.einsum("ijk,oj->oik", C, nrm)
+
+
+def _halfspace_stress_block(obs, tri, mu, lam, eps, want) -> dict:
+    """Total stress of ONE source at every observer: direct PLUS image.
+
+    Stated once, so the contracted paths cannot drift from
+    :func:`assemble_halfspace_total_stress` in which halves they add.
+    """
+    blk = fullspace_blocks(obs, tri, mu, lam, eps, want=want)
+    img = image_total(obs, tri, 0, float(mu), float(lam), float(eps),
+                      want=("H",))
+    return {"H": np.asarray(blk["H"])[:, 0] + img["H"][:, 0],
+            "E": blk.get("E")}
+
+
+def assemble_halfspace_traction(obs: np.ndarray, nrm: np.ndarray,
+                                tris: np.ndarray, mu: float, lam: float,
+                                eps_arr: np.ndarray, out: np.ndarray,
+                                subtract_eigenstress: bool = True
+                                ) -> np.ndarray:
+    """Cartesian traction into ``out`` (n_obs, 3, n_src, 3).
+
+    ``out[o, i, s, k]`` is traction component ``i`` on the plane whose normal is
+    ``nrm[o]``, at ``obs[o]``, from unit Cartesian slip ``k`` on ``tris[s]``.
+
+    THE CONTRACTION HAPPENS INSIDE THE SOURCE LOOP, which is the whole point:
+    one source's stress at every observer is ``(n_obs, 3, 3, 3)`` and is
+    discarded immediately, so the STORED object is a third of the stress
+    matrix. Contracting ``mhs.stress_matrix``'s output afterwards would mean
+    allocating that larger object first -- 20.1 GiB at 10k x 10k, which the
+    ceiling refuses, so the cheaper route is also the only reachable one.
+    """
+    want = ("H", "E") if subtract_eigenstress else ("H",)
+    for s in range(tris.shape[0]):
+        blk = _halfspace_stress_block(obs, tris[s], mu, lam, eps_arr[s], want)
+        t = np.einsum("oijk,oj->oik", blk["H"], nrm)
+        if subtract_eigenstress:
+            t = t - _eigenstress_traction(blk, tris[s], nrm, mu, lam)
+        out[:, :, s, :] = t
+    return out
+
+
+def assemble_interaction(obs: np.ndarray, nrm: np.ndarray,
+                         rec_basis: np.ndarray, tris: np.ndarray,
+                         src_basis: np.ndarray, mu: float, lam: float,
+                         eps_arr: np.ndarray, out: np.ndarray,
+                         subtract_eigenstress: bool = True) -> np.ndarray:
+    """Frame-resolved interaction into ``out`` (n_obs, n_src, n_rec, n_slip).
+
+    ``out[o, s, a, b]`` is traction resolved along ``rec_basis[o, a]`` on the
+    plane ``nrm[o]``, from unit slip along ``src_basis[s, b]`` on ``tris[s]``.
+    Both bases are Cartesian rows, so this function states no convention of its
+    own -- ``mhs.tdcs`` does, in one place, and the caller passes the result.
+
+    Contracts in the source loop for the same reason as above, and here it
+    matters more: the full ``(n, 3, 3, n, 3)`` stress is 20.1 GiB at 10k where
+    a single-component interaction is 0.75 GiB.
+    """
+    want = ("H", "E") if subtract_eigenstress else ("H",)
+    for s in range(tris.shape[0]):
+        blk = _halfspace_stress_block(obs, tris[s], mu, lam, eps_arr[s], want)
+        t = np.einsum("oijk,oj->oik", blk["H"], nrm)       # (n_obs, 3, slip)
+        if subtract_eigenstress:
+            t = t - _eigenstress_traction(blk, tris[s], nrm, mu, lam)
+        out[:, s, :, :] = np.einsum("oai,oik,bk->oab",
+                                    rec_basis, t, src_basis[s])
+    return out
+
+
 def assemble_eigenstress(obs: np.ndarray, tris: np.ndarray, mu: float,
                          lam: float, eps_arr: np.ndarray,
                          out: np.ndarray) -> np.ndarray:

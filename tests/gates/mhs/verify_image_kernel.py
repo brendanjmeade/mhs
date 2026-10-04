@@ -313,7 +313,119 @@ def main() -> bool:
                    f"(max {float(np.abs(star).max()):.3e}) -- zero would make "
                    f"the subtraction vacuous and [e] above trivially true")
     part_f(rep, image)
+    part_h(rep)
     return rep.finish()
+
+
+def part_h(rep) -> None:
+    """THE CONTRACTED FORMS, as identities -- traction and interaction.
+
+    ``traction_matrix`` and ``interaction_matrix`` exist because the object they
+    would otherwise be contracted out of cannot be allocated: a 10k x 10k stress
+    matrix is 20.1 GiB and the ceiling refuses it, where a single-component
+    interaction is 0.75 GiB. They contract INSIDE the source loop, so what has
+    to be proved is that moving the contraction there changed no arithmetic.
+
+    Every clause is an identity against ``stress_matrix``, so none needs a
+    tolerance chosen by taste -- and the last two are tripwires, because "agrees
+    with the stress matrix" would also be satisfied by a form that was not
+    actually smaller, or by a component selection that ignored its argument.
+    """
+    from mhs import (Material, chunking, interaction_matrix, stress_matrix,
+                     tdcs, traction_matrix)
+
+    mat = Material(mu=MU, lam=LAM)
+    tris = np.array([TRI_SURF, TRI_DEEP,
+                     TRI_DEEP + np.array([0.6, -0.3, -0.4]),
+                     np.array([[0.2, 0.1, -1.0], [1.1, 0.0, -1.0],
+                               [0.7, 0.8, -1.0]])])          # one HORIZONTAL
+    eps = 0.1
+    frame = tdcs.slip_frame(tris)
+
+    print("\n[h] THE CONTRACTED FORMS: traction and interaction")
+    gram = np.einsum("sab,scb->sac", frame, frame)
+    rep.check("h the slip frame is orthonormal",
+              float(np.abs(gram - np.eye(3)).max()), 1e-14,
+              "rows are [strike, dip, tensile], so the transpose is the inverse")
+    dets = np.linalg.det(frame)
+    rep.check_bool("h the slip frame is right-handed and finite everywhere",
+                   bool(np.all(np.isfinite(frame)))
+                   and float(dets.min()) > 0.999,
+                   f"(det {dets.min():+.4f} .. {dets.max():+.4f}) -- the set "
+                   f"includes a HORIZONTAL element, whose (-n_y, n_x, 0) strike "
+                   f"is the zero vector and whose frame is NaN unguarded")
+    sdt = np.array([[0.3, -0.7, 0.2], [1.0, 0.1, -0.4],
+                    [-0.2, 0.5, 0.9], [0.6, 0.6, -0.1]])
+    rep.check("h the frame round-trips slip",
+              float(np.abs(tdcs.from_cartesian(
+                  tris, tdcs.to_cartesian(tris, sdt)) - sdt).max()), 1e-14,
+              "(strike, dip, tensile) -> Cartesian -> back")
+
+    obs = tris.mean(axis=1) + np.array([0.25, 0.15, -0.35])
+    nrm = frame[:, 2, :]
+    worst = 0.0
+    for sub in (True, False):
+        S = stress_matrix(obs, tris, mat, eps, subtract_eigenstress=sub)
+        ref = np.einsum("omnsk,on->omsk", S, nrm)
+        worst = max(worst, relmax(
+            traction_matrix(obs, nrm, tris, mat, eps,
+                            subtract_eigenstress=sub), ref))
+    rep.check("h traction_matrix == stress_matrix contracted with the normal",
+              worst, 1e-13,
+              "both eigenstress settings; contracting in the source loop must "
+              "not change the arithmetic")
+
+    cen = tris.mean(axis=1)
+    t_ref = np.einsum("omnsk,on->omsk", stress_matrix(cen, tris, mat, eps), nrm)
+    k_ref = np.einsum("oai,oisk,sbk->osab", frame, t_ref, frame)
+    rep.check("h interaction_matrix == stress resolved in both frames",
+              relmax(interaction_matrix(tris, mat, eps), k_ref), 1e-13,
+              "receivers at the element centroids, where the mollified kernel "
+              "is finite once the eigenstress is removed")
+
+    sel = interaction_matrix(tris, mat, eps, receiver="strike",
+                             source="strike")
+    nsel = interaction_matrix(tris, mat, eps, receiver=("normal",),
+                              source=("tensile",))
+    rep.check_bool("h component selection picks the named slices",
+                   sel.shape == (4, 4, 1, 1)
+                   and relmax(sel[:, :, 0, 0], k_ref[:, :, 0, 0]) < 1e-13
+                   and relmax(nsel[:, :, 0, 0], k_ref[:, :, 2, 2]) < 1e-13,
+                   "strike/strike and normal/tensile against the full 3x3 -- a "
+                   "selection that ignored its argument would return the wrong "
+                   "slice, and one returning the full tensor would fail on "
+                   "shape")
+
+    # [h] THE SIGN, which none of the clauses above can see. They all compare
+    # against stress_matrix contracted with the SAME frame, so a frame or
+    # normal flipped in both places passes every one of them -- and would
+    # silently invert every cycle model built on this. Slip must RELIEVE the
+    # shear that drives it, so the self-interaction diagonal is negative. This
+    # is a physics statement with no reference and no tolerance.
+    dipping = np.array([
+        [[0.0, 0.0, -1.0], [1.0, 0.0, -1.0], [0.0, 0.6, -1.8]],
+        [[1.0, 0.0, -1.0], [1.0, 0.6, -1.8], [0.0, 0.6, -1.8]],
+        [[1.0, 0.0, -1.0], [2.0, 0.0, -1.0], [1.0, 0.6, -1.8]],
+    ])
+    for comp in ("strike", "dip"):
+        diag = np.diag(interaction_matrix(dipping, mat, 0.1, receiver=comp,
+                                          source=comp)[:, :, 0, 0])
+        rep.check_bool(f"h self-{comp} interaction is NEGATIVE "
+                       f"(slip relieves its own shear)",
+                       bool(np.all(diag < 0.0)),
+                       f"({diag.min():+.3e} .. {diag.max():+.3e} on a dipping "
+                       f"patch) -- the one clause here that a frame flipped in "
+                       f"BOTH the kernel and the reference cannot satisfy")
+
+    big = chunking.pair_bytes("stress")
+    rep.check_bool("h the contracted forms really are smaller per pair",
+                   chunking.pair_bytes("traction") * 3 == big
+                   and chunking.pair_bytes((1, 1)) * 27 == big,
+                   f"(stress {big} B, traction "
+                   f"{chunking.pair_bytes('traction')} B, 1x1 interaction "
+                   f"{chunking.pair_bytes((1, 1))} B per obs/source pair) -- so "
+                   f"20.1 GiB at 10k x 10k becomes 6.7 or 0.75, which is the "
+                   f"entire reason these entry points exist")
 
 
 def part_f(rep, image) -> None:

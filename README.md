@@ -14,6 +14,26 @@ S    = mhs.stress_matrix(obs, tris, mat, eps=0.1)   # (n_obs, 3, 3, n_src, 3)
                                                     # ELASTIC: eigenstress removed
 ```
 
+For **on-fault stress interaction** — the object Coulomb, rate-and-state and
+cycle models want — ask for it directly rather than contracting a stress matrix
+you cannot allocate:
+
+```python
+K = mhs.interaction_matrix(tris, mat, eps=0.1,          # (n, n, 3, 3)
+                           receiver=("strike", "dip", "normal"),
+                           source=("strike", "dip", "tensile"))
+
+K = mhs.interaction_matrix(tris, mat, eps=0.1,          # (n, n, 1, 1), 0.75 GiB
+                           receiver="strike", source="strike")  # at n = 10k
+
+T = mhs.traction_matrix(obs, normals, tris, mat, eps=0.1)   # (n_obs, 3, n_src, 3)
+```
+
+Both contract **inside** the assembly loop, so the stress tensor of one source
+is built and discarded rather than stored. Same arithmetic to 1e-15 (gated as an
+identity against `stress_matrix`), same speed, and 3x to 27x less memory --
+which is the difference between a request the ceiling allows and one it refuses.
+
 ## Why this exists
 
 In this configuration **nothing is solved.** The free surface lives in the
@@ -47,10 +67,13 @@ carries is subtracted in the readout.
 - **`(mu, lam)`, never `nu`.** `1/(1 - 2 nu)` diverges toward incompressibility,
   and a `lam`/`mu` swap is invisible at `nu = 1/4`. `Material.from_mu_nu` is the
   one boundary adapter. See `src/mhs/materials.py`.
-- **Cartesian slip.** `mhs.tdcs` builds the rotation to the per-triangle
-  (strike, dip, tensile) frame; no matrix function takes it, because cutde's dip
-  direction points *up* and restating that convention is how it gets restated
-  wrongly.
+- **Cartesian slip.** `mhs.tdcs` is the one statement of the per-triangle
+  (strike, dip, tensile) frame -- cutde's convention, dip pointing *up* --
+  with `to_cartesian` / `from_cartesian` to cross it. The matrix functions take
+  Cartesian slip, because a convention restated in each caller is a convention
+  restated wrongly in one of them. `interaction_matrix` reads its frames from
+  there, and so does `verify_cutde_limit`, which is what anchors the convention
+  externally instead of merely to a second copy of itself.
 - **Full `(3, 3)` tensors, not Voigt-6**, so no component ordering or
   factor-of-two convention is stated anywhere in this package.
 - **`eps > 0`, scalar or one per source triangle.** There is no `"auto"`: that
@@ -85,6 +108,18 @@ arithmetic. Escapes: `out=` (a memmap, a reused slab, or a float32 buffer to
 halve it) and input slicing, with `mhs.chunking.chunk_plan()` reporting the
 numbers without allocating.
 
+The better escape is usually to **ask for less**. Per obs/source pair:
+
+| | bytes/pair | 10k x 10k |
+|---|---|---|
+| `stress_matrix` | 216 | 20.1 GiB |
+| `disp_matrix`, `traction_matrix` | 72 | 6.7 GiB |
+| `interaction_matrix`, 2 shear x 2 slip | 32 | 3.0 GiB |
+| `interaction_matrix`, strike only | 8 | 0.75 GiB |
+
+Nothing about the calculation changes across those rows -- the component
+selection is only how much of the result you keep.
+
 ## Install and test
 
 ```bash
@@ -107,10 +142,29 @@ the new code and its oracle would make the parity check a tautology.
 
 ## Status
 
-Early. The validation layer, the byte budget, the `out=` contract and the API
-surface are complete and gated; the closed-form kernels are in progress. See the
-plan for the order of work and an honest statement of which parts are engineering
-and which are research.
+Usable, with a known cost ceiling.
+
+Working and gated: the full half-space kernel (closed-form direct and image
+R-family, adaptive quadrature for the image Q-family), all seven matrix entry
+points, the eigenstress split, and the cutde anchor. **On-fault stress is at
+machine precision** (1e-15) at every realistic collocation point, including the
+top element of a surface-breaking fault.
+
+The honest limits:
+
+- **The free-surface condition is satisfied to O(eps^2), not exactly.** Measured
+  3.3e-3 at eps/h = 0.1 and 3.3e-5 at eps/h = 0.01, falling as eps^2 (order
+  1.90-1.96 measured). This is a property of the mollified *kernel*, not of the
+  integration, and it is the number to quote: an exact free surface via the
+  potential-convolution route is foreclosed, because the Cortez blob has
+  algebraic tails. `docs/derivation.md` has the proof and the measurements.
+- **Cost.** About 1.1 ms per obs/source pair for stress, so 1k x 1k is minutes
+  and 10k x 10k is tens of hours. The image R-family is 57% of it and has an
+  unoptimised per-record inner loop; the Q-family was 89% until the same
+  restructure took it to 3%.
+- **P0 only through the public API.** The kernels support P1/P2 nodal density
+  and the gates cover all three, but the assembly path fixes order 0.
+- **No CI.** The gates are run by hand.
 
 ## License
 
