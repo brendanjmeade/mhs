@@ -231,6 +231,85 @@ risk it flagged is real -- but it is now a RATIONAL two-quadratic integral over
 a polygon rather than an unknown transcendental class. Euler substitution on
 the conic gives log, arctan and algebraic terms; no dilogarithm barrier.
 
+## The route, derived and verified
+
+Three steps, each checked symbolically to an exactly-zero residual.
+
+### 1. Rationalise Q away
+
+``1/Q = (R2 + D3)/W`` and ``R2^2 = W + D3^2``, so every ``1/Q^q`` becomes
+``(R2 + D3)^q / W^q`` and every EVEN power of ``R2`` collapses. What is left
+needs two primitive families, counted over the generated table (4419 expanded
+terms):
+
+| family | share | shape |
+|---|---|---|
+| no radical | 51% | ``int poly / W^k dS``, k up to 4 |
+| two quadratics | 49% | ``int poly / (W^k R^m) dS``, m in {-3,-1,1,3,5} |
+
+### 2. Choose axes so D3 depends on ONE in-plane coordinate
+
+``D3`` is affine over the element, so take the in-plane axis ``v1`` along its
+gradient; then ``D3 = D3(v1)`` and the other axis ``t = v2 - const`` sees
+
+    W   = t^2 + A(v1)
+    R^2 = t^2 + B(v1),        B - A = D3(v1)^2,  INDEPENDENT of t
+
+Both quadratics in ``t`` differ by a constant. That is the whole trick.
+
+### 3. Partial-fraction the two quadratics apart
+
+    1/((t^2+A)(t^2+B))   = [1/(B-A)] [ 1/(t^2+A) - 1/(t^2+B) ]
+    1/((t^2+A)^k (t^2+B)) = ordinary partial fractions in s = t^2  (k = 2, 3 checked)
+    1/((t^2+A) R)        = [1/(B-A)] [ R/(t^2+A) - 1/R ]
+
+all with residual exactly 0. Every piece is now SINGLE-quadratic: one is clq's
+own family, the other a rational function times the same radical. The
+degeneracy ``B -> A`` is REMOVABLE -- the limit is the ``A``-derivative, finite
+-- not a singularity.
+
+## What the geometry does to the difficulty
+
+``W`` is the mollified squared distance to the VERTICAL LINE through the source,
+so the element's orientation decides which coordinate it depends on:
+
+| element | structure | work |
+|---|---|---|
+| horizontal | in horizontal coordinates ``W`` and ``R`` share the SAME radial quadratic at two heights | clq's hierarchy, evaluated twice. No new primitives. |
+| vertical | one in-plane axis is vertical and ``W`` does not depend on it at all | integrate that axis first; the rest is one quadratic |
+| general dip | step 2/3 above | the separation, then single-quadratic pieces |
+
+The horizontal projection route degenerates for a VERTICAL element (the
+projection collapses to a line), which is why the vertical case gets its own
+treatment rather than being a special case of the dipping one. Vertical faults
+are the commonest geometry and the whole motivation for this work, so that is
+the case to build first.
+
+## The one thing not yet settled: conditioning near D3 = 0
+
+The separation divides by ``B - A = D3^2``, and ``D3 = z + z0`` is small exactly
+where this work matters -- an on-fault observer near a surface trace, where
+observer and source depths both approach zero. Evaluating the IDENTITY by
+subtraction would lose ``log10(W / D3^2)`` digits:
+
+    |D3|/sqrt(W)    1.0    0.3    0.1    0.03    0.01
+    digits lost     0.0    1.0    2.0    3.0     4.0
+
+That particular loss is not real -- nobody evaluates the left side by
+subtracting the right. The partial fraction is a tool for finding the
+ANTIDERIVATIVES, and the question that decides 8b is the conditioning of the
+final closed form, which cannot be assessed before deriving it. So the
+roadmap's "~50% that it is numerically better than quadrature" survives, but it
+is now localised to one identifiable place rather than being a general worry:
+``D3 -> 0``, the observer at the source's own depth.
+
+This is the same shape as the known defect in the full-space hierarchy, where
+digits go like ``(R/L)^4-5`` and ``far_field="hybrid"`` switches to quadrature
+past ``D_STAR * L``. The analogous escape exists here: fall back to quadrature
+where ``|D3|/sqrt(W)`` is small, with the budget law already in place to size
+it. So the downside of 8b failing on conditioning is bounded -- a hybrid, not a
+dead end.
+
 ## What changed about WHY to do it
 
 8b was motivated as the capability fix for on-fault stress near a surface trace.
