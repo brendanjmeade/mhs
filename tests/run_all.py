@@ -38,12 +38,15 @@ ROOT = HERE.parent
 #: suite -> (directory, expected gate count). The count is a pin, not a hint.
 SUITES = {
     "mhs": (HERE / "gates" / "mhs", 7),
-    "parity": (HERE / "gates" / "parity", 1),
-    "oracle": (HERE / "gates" / "oracle", 0),
+    "parity": (HERE / "gates" / "parity", 2),
+    "oracle": (HERE / "gates" / "oracle", 2),
 }
 
 #: ``<suite>/<stem>`` ids that take over 60 s; skipped by ``--fast``.
-SLOW: set[str] = set()
+#: verify_vertical_fault spends ~117 s almost entirely in one n_quad = 320
+#: reference (102k points per call), which is the price of establishing the
+#: quadrature budget law at eps/L = 0.046 rather than assuming it.
+SLOW: set[str] = {"oracle/verify_vertical_fault"}
 
 DEFAULT_TIMEOUT = 1800
 
