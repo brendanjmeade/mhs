@@ -375,7 +375,100 @@ measurement above is the reason that is optional rather than necessary -- one
 dimension of the quadrature budget is already gone, which is most of the prize,
 at none of the conditioning risk below.
 
-## The one thing not yet settled: conditioning near D3 = 0
+## How the inner antiderivatives are actually obtained
+
+Not by asking sympy. ``int dt/((t^2+A) sqrt(t^2+B))`` comes back UNEVALUATED
+after 124 s, under every parametrisation tried -- A and B independent, A
+substituted as ``B - D3^2``, and ``B = A + D3^2`` so that ``sqrt(B-A) = |D3|``
+is unambiguous. Nor does splitting the integrand into rational and
+single-radical pieces help: it is the one piece with a known closed form that
+sympy cannot find.
+
+So the seed is supplied BY HAND, and the family is generated from it by
+differentiation -- the same seeds-plus-recursion shape clq's own hierarchy uses:
+
+    SEED = atan( t sqrt(B-A) / (sqrt(A) sqrt(t^2+B)) ) / sqrt(A(B-A))
+         = int dt / ((t^2+A) sqrt(t^2+B))             [verified, 1.0e-15]
+
+    d/dA  climbs q:   d/dA 1/((t^2+A)^q R^m) = -q/((t^2+A)^(q+1) R^m)
+    d/dB  climbs m:   d/dB 1/((t^2+A)^q R^m) = -(m/2)/((t^2+A)^q R^(m+2))
+
+Every member verified by differentiating back and comparing NUMERICALLY, not
+with ``simplify`` -- simplify is the bottleneck (it does not return on these)
+and is not needed to establish an identity. Differentiation takes 0.0-0.1 s per
+member against sympy's 124 s failures.
+
+Even powers of ``t`` reduce through ``t^2 = (t^2+A) - A``; odd powers fall to a
+``u = t^2`` substitution, leaving rational integrals sympy does handle. The
+79 distinct ``(j, n, q)`` the table needs are read off ``_image_table.py``
+rather than written down.
+
+## Conditioning: measured, and it comes out in favour of the closed form
+
+The differentiated forms lose digits with derivative order, and the loss
+depends entirely on the small parameter
+
+    |D3| / sqrt(A),     D3 = x3 + y3,  A = (horizontal offset)^2 + eps^2
+
+``D3`` is the SUM of the observer and source depths -- it vanishes only when
+BOTH sit on the free surface -- and ``A`` is the mollified horizontal offset at
+the foot. Worst relative error over the whole ``(q, m)`` set needed, measured:
+
+| \|D3\|/sqrt(A) | worst over all (q, m) |
+|---|---|
+| 1.26 | 1.6e-11 |
+| 1.67 | 2.7e-12 |
+| 3.33 | 7.3e-13 |
+| ~1e-3 | **1e+24** (q=4, m=7) |
+
+So the form is catastrophic when the ratio is small, and the question is
+whether that is reachable. Measured over a surface-breaking element at the
+collocation points that exist:
+
+| element | eps/h | collocation | min \|D3\|/sqrt(A) |
+|---|---|---|---|
+| vertical | 0.100 | P0 at h/3 | 3.33 |
+| vertical | 0.100 | P1/P2 at h/6 | 1.67 |
+| vertical | 0.010 | P0 at h/3 | 31.6 |
+| dip 60 | 0.100 | P1/P2 at h/6 | **1.26** |
+| dip 60 | 0.010 | P0 at h/3 | 1.81 |
+
+Never below 1.26, against a blow-up that needs ~0.3. So the roadmap's "~50%
+that it is numerically better than quadrature" RESOLVES IN FAVOUR of the closed
+form, with about half a decade of margin -- and the margin is measured rather
+than argued.
+
+The build still needs a guard below the ratio where the loss bites, because a
+kernel that silently returns 1e+24 outside its valid region is worse than one
+that refuses. The quadrature path and its budget law are already there to fall
+back to.
+
+## What remains, and what it is worth
+
+The separation divides by ``B - A = D3^2``, and ``D3 = z + z0`` is small exactly
+where this work matters -- an on-fault observer near a surface trace, where
+observer and source depths both approach zero. Evaluating the IDENTITY by
+subtraction would lose ``log10(W / D3^2)`` digits:
+
+    |D3|/sqrt(W)    1.0    0.3    0.1    0.03    0.01
+    digits lost     0.0    1.0    2.0    3.0     4.0
+
+That particular loss is not real -- nobody evaluates the left side by
+subtracting the right. The partial fraction is a tool for finding the
+ANTIDERIVATIVES, and the question that decides 8b is the conditioning of the
+final closed form, which cannot be assessed before deriving it. So the
+roadmap's "~50% that it is numerically better than quadrature" survives, but it
+is now localised to one identifiable place rather than being a general worry:
+``D3 -> 0``, the observer at the source's own depth.
+
+This is the same shape as the known defect in the full-space hierarchy, where
+digits go like ``(R/L)^4-5`` and ``far_field="hybrid"`` switches to quadrature
+past ``D_STAR * L``. The analogous escape exists here: fall back to quadrature
+where ``|D3|/sqrt(W)`` is small, with the budget law already in place to size
+it. So the downside of 8b failing on conditioning is bounded -- a hybrid, not a
+dead end.
+
+## What changed about WHY to do it
 
 The separation divides by ``B - A = D3^2``, and ``D3 = z + z0`` is small exactly
 where this work matters -- an on-fault observer near a surface trace, where
