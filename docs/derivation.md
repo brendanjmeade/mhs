@@ -403,6 +403,46 @@ Even powers of ``t`` reduce through ``t^2 = (t^2+A) - A``; odd powers fall to a
 79 distinct ``(j, n, q)`` the table needs are read off ``_image_table.py``
 rather than written down.
 
+## The build's obstacle: sympy is not a dependable engine here
+
+The seed family -- ``int dt/((t^2+A)^q R^m)`` for q in 1..4 and odd m in 1..7 --
+is built from the hand-supplied seed by differentiating in A and g (with
+``g = B - A = D3^2`` held positive), and it WORKS: **16/16 verified, worst
+residual 1.08e-12, 15 s**. ``d/dA`` at fixed B is ``d/dA - d/dg`` in those
+coordinates, and ``d/dB`` at fixed A is ``d/dg``.
+
+The remaining pieces -- the rational ones and the odd-``j`` substitution -- were
+left to ``sp.integrate``, and that is where the build stopped. Sympy failed on
+them in THREE distinct ways, and the middle one is the reason this needs saying
+out loud:
+
+  1. UNEVALUATED. ``int dt/((t^2+A) sqrt(t^2+B))`` returns unevaluated after
+     124 s, under every parametrisation tried: A and B independent, A
+     substituted as ``B - D3^2``, and ``B = A + D3^2`` chosen so that
+     ``sqrt(B-A) = |D3|`` is unambiguous. This is the integral with a known
+     closed form.
+
+  2. SILENTLY WRONG. For ``int dw/(w^2 (w^2 - B + A))`` it returns
+     ``-1/(w(A-B))``, having dropped both log terms. Written as ``w^2 - g`` with
+     ``g`` declared positive it returns the correct answer (1.5e-15). So the
+     failure is a sign assumption it cannot make and does not report, and the
+     only defence is differentiating every result back -- which is why this
+     work does that rather than trusting any antiderivative it is handed.
+
+  3. INTERNAL FAILURE. ``HeuristicGCDFailed: no luck`` from
+     ``sympy.polys.heuristicgcd`` on the higher-order rational pieces.
+
+So the remaining work is to extend ROUTE 1 -- hand seeds plus differentiation
+and recursion, with no ``sp.integrate`` call anywhere -- to the rational family
+``int t^j dt/((t^2+A)^q (t^2+B)^p)`` and the odd-``j`` cases. Both have standard
+recursive reductions; the care is in writing and verifying them, not in
+discovering them.
+
+Nothing is blocked meanwhile. The shipped Q path is adaptive quadrature under
+the budget law, and it reaches 1e-15 at every realistic collocation point
+(``verify_image_kernel`` clause [f]). 8b remains a performance optimisation
+worth about 171x on the Q half, not a correctness gap.
+
 ## Conditioning: measured, and it comes out in favour of the closed form
 
 The differentiated forms lose digits with derivative order, and the loss
