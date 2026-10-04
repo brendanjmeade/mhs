@@ -1,9 +1,14 @@
 #!/usr/bin/env python
 """Verify the matrix assembly: packing, index order, additivity, and the split.
 
-The vendored full-space engine is the same bytes as the frozen oracle, so
-comparing their *numbers* proves only that a copy is a copy. What is genuinely
-untested until now is everything ``mhs`` wraps around them:
+The vendored full-space engine was the same bytes as the frozen oracle, and is
+now the same bytes PLUS one documented extension: ``moments.py``'s three
+hardcoded vertical seeds (n = 5, 7) became one loop over the same identity, so
+the ladder reaches the ``I_9`` the half-space image kernel needs. The extension
+is gated in ``verify_moments`` (the n = 9 and n = 11 clauses) and pinned bitwise
+against the untouched oracle on every full-space kernel, so comparing their
+*numbers* still proves only that a copy is a copy. What is genuinely untested
+until now is everything ``mhs`` wraps around them:
 
   [a] PACKING AND INDEX ORDER. A matrix is only useful if contracting it
       reproduces the field. ``einsum("oisk,sk->oi", G, slip)`` must equal the

@@ -304,10 +304,20 @@ class MomentTable:
             M[n] = (np.full((N, d + 1, d + 1), np.nan) if self.floor.get(n, 0) > 0
                     else np.zeros((N, d + 1, d + 1)))
         M[3][:, 0, 0] = I3
-        if 5 in M:
-            M[5][:, 0, 0] = (BD[3] + I3) / (3.0 * self.h2)
-        if 7 in M:
-            M[7][:, 0, 0] = (BD[5] + 3.0 * M[5][:, 0, 0]) / (5.0 * self.h2)
+        # Upward seeds from the vertical identity (2-n) I_n + n h^2 I_{n+2} = E_n,
+        # rearranged as  I_{n+2} = (E_n + (n-2) I_n) / (n h^2).  ONE LOOP rather
+        # than a case per n, because the half-space IMAGE kernel needs I_9: the
+        # Papkovich-Neuber form already takes one derivative and the slip-to-
+        # stress readout two more, so three derivatives act on the potentials'
+        # R^-3 term.  A fourth hardcoded case would be this identity written a
+        # fourth time.  Bitwise identical to the n = 5 and n = 7 cases it
+        # replaces -- (n-2) and n are exact small integers and the grouping is
+        # unchanged, which matters because the kernels are pinned bitwise.
+        n = 3
+        while n + 2 in M:
+            M[n + 2][:, 0, 0] = ((BD[n] + (n - 2) * M[n][:, 0, 0])
+                                 / (n * self.h2))
+            n += 2
         # downward seeds from the vertical identity (2-n) I_n + n h^2 I_{n+2} = E_n:
         #   I_1 = E_1 - h^2 I_3,  I_n = (E_n - n h^2 I_{n+2}) / (2 - n)  for n = -1, -3, ...
         # At h = 0 the coupling term vanishes identically (h^2 I_3 = -Omega h -> 0)

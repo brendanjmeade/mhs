@@ -135,6 +135,34 @@ def main() -> bool:
     rep.check("P3 table (smoke), off-plane, vs 200x200 Gauss",
               worst(tab, quad_moments(fr, obs, 0.1, tab.degrees, 200)), 1e-8)
 
+    # --- n = 9, which the HALF-SPACE IMAGE kernel needs ---------------------
+    # The seed ladder used to stop at I_7, because the full-space kernels stop
+    # at R^-7. The image kernel needs I_9: the Papkovich-Neuber form already
+    # takes one derivative and the slip-to-stress readout two more, so three
+    # derivatives act on the potentials' R^-3 term. The three hardcoded cases
+    # are now ONE LOOP over the same vertical identity, which also makes n = 11
+    # reachable -- so this clause checks the LADDER, not just the rung needed.
+    need9 = {9: 2, 7: 4, 5: 3, 3: 1}
+    obs9 = np.array([[0.60, -0.10, 0.60], [2.0, 1.5, 3.0], [-0.4, 0.0, -0.8]])
+    tab9 = MomentTable(fr, obs9, 0.1, need9)
+    rep.check_bool("the seed ladder reaches n = 9", 9 in tab9.M,
+                   f"(built n = {sorted(tab9.degrees)})")
+    rep.check("M_9 table, off-plane, vs 200x200 Gauss",
+              worst(tab9, quad_moments(fr, obs9, 0.1, tab9.degrees, 200)),
+              1e-10)
+    obs_on = np.array([v1 + 0.3 * (v2 - v1) + 0.3 * (v3 - v1), v1])
+    e_on = 0.15 * fr.L
+    tab9o = MomentTable(fr, obs_on, e_on, need9)
+    rep.check("M_9 table, ON-plane h=eps=0.15L, vs 160x160 Gauss",
+              worst(tab9o, quad_moments(fr, obs_on, e_on, tab9o.degrees, 160)),
+              1e-7)
+    # Generic, not special-cased to 9: one rung higher must build too, or the
+    # loop has been turned back into a case list.
+    tab11 = MomentTable(fr, obs9, 0.1, {11: 1, 9: 2, 7: 4, 5: 3, 3: 1})
+    rep.check("M_11 too (the ladder is a loop, not a case list)",
+              worst(tab11, quad_moments(fr, obs9, 0.1, tab11.degrees, 200)),
+              1e-10)
+
     # --- eps = 0 on the plane must raise, not return a quiet number ---------
     try:
         MomentTable(fr, np.array([v1 + 0.3 * (v2 - v1) + 0.3 * (v3 - v1)]),
