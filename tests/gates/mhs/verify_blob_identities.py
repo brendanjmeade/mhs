@@ -45,15 +45,15 @@ and at h = 2e-3 the cancellation reaches 7e-4 on a quantity whose true value is
 1e-16. Measuring exact algebra numerically was the wrong tool, and the first
 draft of this gate used it.
 
-**What this gate does NOT yet claim.** It does not evaluate a Cortez-consistent
-Mindlin kernel, because one does not exist yet. Executing the rule on the image
-potentials needs ``[ (1/2) lap f ]_eps`` -- the LIFT OF the Laplacian -- and not
-``(1/2) lap [f]_eps``, the Laplacian of the lift. Those differ: for ``1/r`` the
-second is ``-3 eps^2 / R^5`` while the first is ``0``. The difference is O(eps^2),
-multiplied by the rule's own ``eps^2/2``, so using the wrong one would leave an
-O(eps^4) error -- better than today's O(eps^2) and still not exact, which is
-precisely the kind of near-miss that reads as success. The remaining work is to
-express each ``lap_src f`` in the ``{r1, r2, Q}`` family and lift it there.
+**SCOPE, established by the derivation this gate supports.** The rule above is
+EXACT for HARMONIC ``f`` -- which is what clause [a] measures, and why the
+generator identities hold to quadrature precision. For merely BIHARMONIC ``f``
+it is only O(eps^4): measured order 3.95-4.02 on every one of Apostol's
+complete potentials, each verified biharmonic to 1e-16 or better. The ``r``
+case in clause [b] is exact because its biharmonic structure is trivial, and
+generalising from it was the mistake. Consequences, numbers and the obstruction
+are recorded in ``docs/derivation.md``; the short version is that an EXACT free
+surface is not available by this route.
 
 Run from anywhere:  python tests/gates/mhs/verify_blob_identities.py
 """
@@ -227,17 +227,15 @@ def main() -> bool:
                  "half-space kernel")
     part_a(rep)
     part_b(rep)
-    print("\n  NOT yet claimed: a Cortez-consistent Mindlin kernel. Executing "
-          "the rule on")
-    print("  the image potentials needs [lap f]_eps -- the LIFT of the "
-          "Laplacian -- and not")
-    print("  lap [f]_eps. For 1/r those are 0 and -3 eps^2/R^5: an O(eps^2) "
-          "difference,")
-    print("  multiplied by the rule's own eps^2/2, so the wrong one leaves "
-          "O(eps^4) --")
-    print("  better than today's O(eps^2) and still not exact, which is the "
-          "kind of")
-    print("  near-miss that reads as success. See the module docstring.")
+    print("\n  SCOPE: the rule is EXACT for HARMONIC f (clause [a]) and only "
+          "O(eps^4) for")
+    print("  merely BIHARMONIC f -- measured order 3.95-4.02 on Apostol's "
+          "complete")
+    print("  potentials. So an exact free surface is NOT available by this "
+          "route; the")
+    print("  traction stays O(eps^2) with a 2.6x-50x better constant. "
+          "docs/derivation.md")
+    print("  has the tables and the obstruction.")
     return rep.finish()
 
 
