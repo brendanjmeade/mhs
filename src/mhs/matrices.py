@@ -27,6 +27,7 @@ from __future__ import annotations
 import numpy as np
 
 from . import chunking
+from .kernels import assemble as _asm
 from .materials import Material
 
 __all__ = [
@@ -118,22 +119,6 @@ def _prepare_out(out, shape, n_obs, n_src, kind, parts):
     return arr
 
 
-def _not_yet(what: str):
-    raise NotImplementedError(
-        f"{what} needs the half-space image correction, which is the work in "
-        f"progress.\n"
-        f"What IS done and gated: this validation layer, the byte budget and the "
-        f"out= contract; the full-space (direct/Kelvin) closed forms in "
-        f"mhs.fullspace; and the assembly, three-way stress split and per-source "
-        f"eps in mhs.kernels.assemble.\n"
-        f"What is missing: the image term. It is deliberately NOT short-circuited "
-        f"to the full-space answer here -- that would be wrong by the entire "
-        f"free-surface effect, roughly a factor of two in surface displacement, "
-        f"which is exactly the size of error that looks plausible. "
-        f"mhs.kernels.assemble.assemble_fullspace_disp is reachable directly if "
-        f"the full-space field is what you actually want.")
-
-
 # ----------------------------------------------------------------- public ----
 def disp_matrix(obs_pts, tris, material, eps, *, out=None):
     """Displacement Green's function matrix.
@@ -145,7 +130,7 @@ def disp_matrix(obs_pts, tris, material, eps, *, out=None):
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
     n_obs, n_src = obs.shape[0], tri.shape[0]
     buf = _prepare_out(out, (n_obs, 3, n_src, 3), n_obs, n_src, "disp", False)
-    _not_yet("disp_matrix")
+    _asm.assemble_halfspace_disp(obs, tri, mu, lam, eps_arr, buf)
     return buf
 
 
@@ -175,8 +160,19 @@ def stress_matrix(obs_pts, tris, material, eps, *,
         raise ValueError("parts=True returns two arrays, so out= cannot name "
                          "the destination of both; call twice with out=, or "
                          "drop out=.")
-    _not_yet("stress_matrix")
-    return (buf, buf) if parts else buf
+    # _prepare_out returns ONE array whatever `parts` is -- that flag only
+    # widens the byte budget -- so the second buffer is allocated here. The
+    # first draft unpacked `buf` into two names and silently sliced its leading
+    # axis instead.
+    sig = buf
+    eig = np.zeros(shape, dtype=np.float64) if parts else None
+    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, sig)
+    if subtract_eigenstress or parts:
+        star = eig if parts else np.empty(shape, dtype=np.float64)
+        _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, star)
+        if subtract_eigenstress:
+            sig -= star
+    return (sig, eig) if parts else sig
 
 
 def total_stress_matrix(obs_pts, tris, material, eps, *, out=None):
@@ -193,7 +189,7 @@ def total_stress_matrix(obs_pts, tris, material, eps, *, out=None):
     n_obs, n_src = obs.shape[0], tri.shape[0]
     buf = _prepare_out(out, (n_obs, 3, 3, n_src, 3), n_obs, n_src,
                        "stress", False)
-    _not_yet("total_stress_matrix")
+    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, buf)
     return buf
 
 
@@ -216,7 +212,7 @@ def eigenstress_matrix(obs_pts, tris, material, eps, *, out=None):
     n_obs, n_src = obs.shape[0], tri.shape[0]
     buf = _prepare_out(out, (n_obs, 3, 3, n_src, 3), n_obs, n_src,
                        "eigenstress", False)
-    _not_yet("eigenstress_matrix")
+    _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, buf)
     return buf
 
 
@@ -234,5 +230,17 @@ def elastic_strain_matrix(obs_pts, tris, material, eps, *,
     n_obs, n_src = obs.shape[0], tri.shape[0]
     buf = _prepare_out(out, (n_obs, 3, 3, n_src, 3), n_obs, n_src,
                        "strain", False)
-    _not_yet("elastic_strain_matrix")
+    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, buf)
+    if subtract_eigenstress:
+        star = np.empty_like(buf)
+        _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, star)
+        buf -= star
+    # strain from stress, inverting Hooke with (mu, lam) and never through a
+    # 1/(1-2nu) intermediate: tr(e) = tr(sig)/(3 lam + 2 mu), then
+    # e = (sig - lam tr(e) I) / (2 mu).
+    tr = buf[:, 0, 0, :, :] + buf[:, 1, 1, :, :] + buf[:, 2, 2, :, :]
+    tre = tr / (3.0 * lam + 2.0 * mu)
+    for a in range(3):
+        buf[:, a, a, :, :] -= lam * tre
+    buf /= (2.0 * mu)
     return buf

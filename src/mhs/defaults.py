@@ -41,3 +41,11 @@ IMPORT_BUDGET_OVER_NUMBA_S = 1.0
 # kernels always compute in float64 registers and the store downcasts, so this
 # is a storage tolerance, not a second arithmetic.
 OUT_FLOAT32_PARITY = 1.0e-6
+
+#: Gauss points per direction for the image Q-FAMILY quadrature. The R-family
+#: is closed form; this half stays numerical because clause [d] of
+#: verify_vertical_fault measures its error as eps-INDEPENDENT (1.6x spread
+#: over a 16x eps range) -- its integrand's length scale is DEPTH, not eps, so
+#: no eps-dependent budget appears, unlike the direct term's n_quad ~ 8 L/eps.
+#: 16 reaches machine precision for an element reaching z = 0; 8 gives ~1e-7.
+IMAGE_Q_GAUSS_N = 16

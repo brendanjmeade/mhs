@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from .image import image_total
+
 from ..fullspace import kernels as _fs_kernels
 
 #: Which nodal tensor carries which readout, in the vendored engine's naming.
@@ -90,6 +92,46 @@ def assemble_fullspace_total_stress(obs: np.ndarray, tris: np.ndarray,
         H = np.asarray(fullspace_blocks(obs, tris[s], mu, lam, eps_arr[s],
                                         want=("H",))["H"])
         out[:, :, :, s, :] = H[:, 0, :, :, :]
+    return out
+
+
+def assemble_halfspace_disp(obs: np.ndarray, tris: np.ndarray, mu: float,
+                            lam: float, eps_arr: np.ndarray,
+                            out: np.ndarray) -> np.ndarray:
+    """HALF-SPACE displacement matrix into ``out`` (n_obs, 3, n_src, 3).
+
+    Direct (Kelvin, closed form) plus the image correction -- closed-form
+    R-family plus quadrature Q-family, which is the split
+    ``verify_vertical_fault`` clauses [d] and [e] measure. The two halves ADD
+    with no sign fix: clq's and moss's conventions agree to 3.5e-16 on the same
+    direct term, which is checked rather than assumed because a relative sign
+    error between them would be invisible at a symmetric configuration.
+    """
+    assemble_fullspace_disp(obs, tris, mu, lam, eps_arr, out)
+    for s in range(tris.shape[0]):
+        img = image_total(obs, tris[s], 0, float(mu), float(lam),
+                          float(eps_arr[s]), want=("U",))
+        out[:, :, s, :] += img["U"][:, 0, :, :]
+    return out
+
+
+def assemble_halfspace_total_stress(obs: np.ndarray, tris: np.ndarray,
+                                    mu: float, lam: float,
+                                    eps_arr: np.ndarray,
+                                    out: np.ndarray) -> np.ndarray:
+    """HALF-SPACE **total** stress matrix into ``out`` (n_obs, 3, 3, n_src, 3).
+
+    Total, not elastic: within ~3 eps of the element the eigenstress the
+    mollification put there dominates, and it grows like ``1/eps``. Subtract
+    :func:`assemble_eigenstress` for the elastic stress -- which is what
+    ``mhs.stress_matrix`` returns, and what any stress presented as elastic
+    must have had removed.
+    """
+    assemble_fullspace_total_stress(obs, tris, mu, lam, eps_arr, out)
+    for s in range(tris.shape[0]):
+        img = image_total(obs, tris[s], 0, float(mu), float(lam),
+                          float(eps_arr[s]), want=("H",))
+        out[:, :, :, s, :] += img["H"][:, 0, :, :, :]
     return out
 
 

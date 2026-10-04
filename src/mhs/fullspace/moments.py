@@ -445,14 +445,24 @@ def quadrature_weighted_tables(frame: Frame, obs, eps: float, order: int,
 
 
 def weighted_tables(frame: Frame, obs, eps: float, order: int, want,
-                    far_field: str = "hybrid", check_identity: bool = False):
+                    far_field: str = "hybrid", check_identity: bool = False,
+                    degrees: dict[int, int] | None = None):
     """Per-node weighted moment tables for all observation points.
 
     Returns ``(W, z, X)`` with ``W = {n: (N, K, D+1, D+1)}`` at the
-    constant-slip degrees of the requested kernels."""
+    constant-slip degrees of the requested kernels.
+
+    ``degrees`` supplies those constant-slip degrees directly, for a caller
+    whose kernel is not one of the named full-space ones -- the half-space
+    IMAGE family, whose degree spec comes from its generated monomial table.
+    Passing a spec rather than a kernel NAME is what keeps this module ignorant
+    of the image kernel: it is given a degree requirement, not knowledge of who
+    needs it. Everything else -- the near/far split at ``D_STAR``, the Gauss
+    fallback, the separate floored table for on-plane rows -- is shared, which
+    is the reason this is a parameter instead of a second dispatcher."""
     obs = np.asarray(obs, float).reshape(-1, 3)
     N = obs.shape[0]
-    need0 = kernel_degrees(0, want)
+    need0 = dict(degrees) if degrees is not None else kernel_degrees(0, want)
     if far_field not in ("hybrid", "analytic", "quadrature"):
         raise ValueError("far_field must be 'hybrid', 'analytic' or 'quadrature'")
     # eps = 0 on the plane is admissible only when every requested kernel is
@@ -480,7 +490,8 @@ def weighted_tables(frame: Frame, obs, eps: float, order: int, want,
          for n, d in need0.items()}
     identity_residual = 0.0
     if np.any(near):
-        need = kernel_degrees(order, want)
+        need = ({n: d + order for n, d in degrees.items()}
+                if degrees is not None else kernel_degrees(order, want))
         # A FLOORED table leaves its sub-floor slots NaN, which is correct only
         # for on-plane rows -- `lift` masks them there because z is exactly 0.
         # An off-plane row in the same table would multiply that NaN by a
