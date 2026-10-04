@@ -37,7 +37,7 @@ ROOT = HERE.parent
 
 #: suite -> (directory, expected gate count). The count is a pin, not a hint.
 SUITES = {
-    "mhs": (HERE / "gates" / "mhs", 9),
+    "mhs": (HERE / "gates" / "mhs", 10),
     "parity": (HERE / "gates" / "parity", 2),
     "oracle": (HERE / "gates" / "oracle", 2),
 }
