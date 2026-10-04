@@ -49,6 +49,8 @@ with ``rho^2 = d_perp^2 + h_eps^2 > 0`` constant along the edge, ``m`` odd
 """
 from __future__ import annotations
 
+import functools
+from fractions import Fraction
 from math import comb
 
 import numpy as np
@@ -60,14 +62,26 @@ from . import defaults
 # Value layer (numpy or sympy)
 # ---------------------------------------------------------------------------
 
-def _binom_half(m: int, j: int):
-    """Generalised binomial C(-m/2, j) as an exact Fraction-free float."""
-    from fractions import Fraction
+@functools.lru_cache(maxsize=None)
+def _binom_half(m: int, j: int) -> float:
+    """Generalised binomial ``C(-m/2, j)``, computed exactly, returned as float.
+
+    MEMOISED, because it is a pure function of two small integers that the edge
+    primitives call on every evaluation -- 832 calls per image-kernel
+    evaluation, each rebuilding a chain of ``j`` exact ``Fraction`` products
+    from scratch. Profiling the half-space image R-family put **61% of its
+    runtime inside ``fractions``**, all of it here.
+
+    The values are unchanged bitwise: the exact arithmetic still happens, once
+    per ``(m, j)`` instead of once per call, and the float conversion that both
+    call sites performed is now done inside. The cache cannot grow: ``m`` is odd
+    and bounded by the moment table's orders, and ``j < SERIES_TERMS``.
+    """
     a = Fraction(-m, 2)
     out = Fraction(1)
     for i in range(j):
         out *= (a - i) / (i + 1)
-    return out
+    return float(out)
 
 
 def antiderivative(k: int, m: int, u, rho2, mod=np):
@@ -226,7 +240,7 @@ def _series_dP(k: int, m: int, ua, ub, rho2, n_terms: int) -> np.ndarray:
     xj = np.ones_like(ua)
     for j in range(n_terms):
         q = k - m + 1 - 2 * j
-        c = float(_binom_half(m, j))
+        c = _binom_half(m, j)
         term = _dpow(ones, r, q, log_r, close)
         if q != 0:
             term = term / q
@@ -253,7 +267,7 @@ def _small_u_series_dP(k: int, m: int, ua, ub, rho2, n_terms: int) -> np.ndarray
     out = np.zeros_like(ua)
     for j in range(n_terms):
         pw = k + 2 * j + 1
-        c = float(_binom_half(m, j))
+        c = _binom_half(m, j)
         with np.errstate(over="ignore", invalid="ignore"):
             d_close = ya ** pw * np.expm1(pw * log_r)
             d_direct = yb ** pw - ya ** pw
