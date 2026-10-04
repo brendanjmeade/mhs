@@ -6,12 +6,17 @@ splits by radical into a direct part (``R1``), an image part (``R2``) and a
 each costs for ON-FAULT STRESS on a surface-breaking element, which is the
 quantity this package exists to produce:
 
-  - buried element: every family converges at n_quad = 4; the image is smooth
-    because its length scale is DEPTH, not eps.
-  - element reaching z = 0, observer on it within an eps of the surface trace:
-    the image triangle TOUCHES the observer -- for a vertical fault it is
-    coplanar and shares that edge -- and quadrature STAGNATES. Sixty-four times
-    the points moves the error from 0.96 to 0.58.
+  - buried element: every family converges at n_quad = 4, because the image is
+    far compared with the element and the integrand is smooth.
+  - element reaching z = 0, observer on it near the surface trace: the image
+    triangle TOUCHES the observer -- for a vertical fault it is coplanar and
+    shares that edge -- and the R-family STAGNATES under uniform refinement.
+    Sixty-four times the points moves its error from 0.96 to 0.58.
+
+The Q-family does NOT stagnate, but neither is its error eps-independent, which
+an earlier version of this module claimed on the strength of a buried-element
+measurement. It obeys a budget law (:func:`q_gauss_orders`) and is integrated
+at a per-observer order from it.
 
 The escape quadrature has is to raise eps until the band hides the touching
 image, and eps is a resolution floor, so that buys accuracy by smearing the
@@ -160,30 +165,79 @@ def _unit_normal(tri: np.ndarray) -> np.ndarray:
     return n / np.linalg.norm(n)
 
 
-def image_q_influence(obs, tri, order: int, mu: float, lam: float, eps: float,
-                      want=("U", "H"), n_quad: int | None = None):
-    """Q-family contribution, by Gauss quadrature on the element.
+def triangle_distance(obs: np.ndarray, tri: np.ndarray) -> np.ndarray:
+    """Exact distance from each observer to the closed triangle, as ``(N,)``.
 
-    NOT closed form, and clause [d] of ``verify_vertical_fault`` is the reason
-    it does not need to be: the image quadrature's error is eps-INDEPENDENT
-    (1.6x spread over a 16x eps range) because the image integrand's length
-    scale is depth rather than eps, and n_quad = 16 reaches machine precision
-    even for an element reaching ``z = 0``. It is the R-family that stagnates
-    there, reaching ``R2^-9`` against this family's ``Q^-3``.
-
-    Omitting it is not an option even so: near the trace it is roughly a fifth
-    of the on-fault stress, so dropping it would be wrong by a plausible-looking
-    amount -- the failure ``matrices._not_yet`` exists to refuse.
+    Exact rather than a vertex/centroid surrogate, because a surrogate
+    OVERestimates the distance while the quadrature budget is inversely
+    proportional to it -- so an overestimate silently starves the rule. The
+    plane distance would be a safe UNDERestimate but is useless here: for a
+    vertical fault the image triangle is COPLANAR with the element, so it is
+    zero for every observer and would demand the maximum order everywhere.
     """
     obs = np.asarray(obs, float).reshape(-1, 3)
-    tri = np.asarray(tri, float).reshape(3, 3)
-    mu = float(mu)
-    lam = float(lam)
-    nu = lam / (2.0 * (lam + mu))
-    scale_c = 2.0 * (lam + mu) / (np.pi * mu * (lam + 2.0 * mu))
-    nq = int(defaults.IMAGE_Q_GAUSS_N if n_quad is None else n_quad)
+    a, b, c = tri[0], tri[1], tri[2]
+    ab, ac = b - a, c - a
+    nrm = np.cross(ab, ac)
+    ap = obs - a
+    d20 = ap @ ab
+    d21 = ap @ ac
+    d00 = float(ab @ ab)
+    d01 = float(ab @ ac)
+    d11 = float(ac @ ac)
+    den = d00 * d11 - d01 * d01
+    v = (d11 * d20 - d01 * d21) / den
+    w = (d00 * d21 - d01 * d20) / den
+    u = 1.0 - v - w
+    inside = (u >= 0.0) & (v >= 0.0) & (w >= 0.0)
+    out = np.empty(obs.shape[0])
+    if np.any(inside):
+        out[inside] = np.abs(ap[inside] @ nrm) / np.linalg.norm(nrm)
+    if np.any(~inside):
+        sel = ~inside
+        best = np.full(int(sel.sum()), np.inf)
+        for p0, p1 in ((a, b), (b, c), (c, a)):
+            e = p1 - p0
+            t = np.clip(((obs[sel] - p0) @ e) / float(e @ e), 0.0, 1.0)
+            closest = p0[None, :] + t[:, None] * e[None, :]
+            best = np.minimum(best,
+                              np.linalg.norm(obs[sel] - closest, axis=1))
+        out[sel] = best
+    return out
 
-    frame = local_frame(tri)
+
+def q_gauss_orders(obs: np.ndarray, tri_img: np.ndarray, eps: float,
+                   frame_L: float) -> np.ndarray:
+    """Gauss order PER OBSERVER, from the measured budget law
+
+        n_quad ~ C * L / sqrt(delta^2 + eps^2)
+
+    with ``delta`` the distance to the IMAGE triangle. This is the SAME law the
+    direct term obeys -- ``n_quad ~ 8 L / eps``, gated in
+    ``oracle/verify_vertical_fault`` clause [b] -- and with the same constant:
+    the direct term's observer sits ON its own element, so ``delta = 0`` and
+    the scale is ``eps``. Here the observer is ``delta`` from the image, so the
+    scale is ``sqrt(delta^2 + eps^2)``. One law, two cases, which is why the
+    constant did not have to be fitted separately.
+
+    Measured ``C`` over delta/h in {0.02 .. 0.33} and eps/h in {0.01 .. 0.1}:
+    5.8 to 8.4 for 1e-9 relative. ``defaults.IMAGE_Q_BUDGET_C`` carries
+    headroom over the MAXIMUM rather than the mean, because starving this rule
+    is silent: the first shipped default was a flat 16 chosen from a BURIED
+    element, and it left the P1/P2 collocation point at 7e-4.
+    """
+    delta = triangle_distance(obs, tri_img)
+    scale = np.sqrt(delta * delta + float(eps) ** 2)
+    nq = np.ceil(defaults.IMAGE_Q_BUDGET_C * float(frame_L) / scale)
+    return np.clip(nq, defaults.IMAGE_Q_GAUSS_MIN,
+                   defaults.IMAGE_Q_GAUSS_MAX).astype(int)
+
+
+def _q_block(obs, tri, frame, order, nu, scale_c, eps, nq, want, n_node):
+    """Q-family moments for one group of observers at ONE Gauss order.
+
+    Returns ``(DG, DDG)``, either possibly ``None`` if not requested.
+    """
     x1, x2, w = gauss_triangle(nq)
     bary = np.stack([1.0 - x1 - x2, x1, x2], axis=1)          # (Q, 3)
     ypts = bary @ tri                                         # (Q, 3)
@@ -192,7 +246,7 @@ def image_q_influence(obs, tri, order: int, mu: float, lam: float, eps: float,
     # moments.quadrature_weighted_tables uses, so the nodal layout is clq's.
     eta = bary @ frame.p                                      # (Q, 2)
     c0 = shape_coefficients(frame, order, np.zeros((1, 2)))[0]   # (K, D, D)
-    n_node, D = c0.shape[0], c0.shape[1]
+    D = c0.shape[1]
     Nq = np.zeros((ypts.shape[0], n_node))
     for a in range(D):
         for b in range(D - a):
@@ -203,7 +257,7 @@ def image_q_influence(obs, tri, order: int, mu: float, lam: float, eps: float,
     d1 = obs[:, 0:1] - ypts[None, :, 0]
     d2 = obs[:, 1:2] - ypts[None, :, 1]
     d3 = obs[:, 2:3] + ypts[None, :, 2]
-    r2 = np.sqrt(d1 * d1 + d2 * d2 + d3 * d3 + float(eps) ** 2)
+    r2 = np.sqrt(d1 * d1 + d2 * d2 + d3 * d3 + eps ** 2)
     qq = r2 - d3
     z_obs = obs[:, 2:3]
 
@@ -214,20 +268,75 @@ def image_q_influence(obs, tri, order: int, mu: float, lam: float, eps: float,
         return (cv * scale_c) * (d1 ** a) * (d2 ** b) * (d3 ** c) \
             / (r2 ** n * qq ** q)
 
-    n_obs = obs.shape[0]
-    DG = DDG = None
+    n_sub = obs.shape[0]
+    dg = ddg = None
     if "U" in want:
-        DG = np.zeros((n_obs, n_node, 3, 3, 3))
+        dg = np.zeros((n_sub, n_node, 3, 3, 3))
         for rec in Q_DG_RECORDS:
             i, j, m, a, b, c, n, q = rec[:8]
-            DG[:, :, i, j, m] += (integrand(rec[8], a, b, c, n, q)
+            dg[:, :, i, j, m] += (integrand(rec[8], a, b, c, n, q)
                                   * wq[None, :]) @ Nq
     if "H" in want:
-        DDG = np.zeros((n_obs, n_node, 3, 3, 3, 3))
+        ddg = np.zeros((n_sub, n_node, 3, 3, 3, 3))
         for rec in Q_DDG_RECORDS:
             i, j, p, m, a, b, c, n, q = rec[:9]
-            DDG[:, :, i, j, p, m] += (integrand(rec[9], a, b, c, n, q)
+            ddg[:, :, i, j, p, m] += (integrand(rec[9], a, b, c, n, q)
                                       * wq[None, :]) @ Nq
+    return dg, ddg
+
+
+def image_q_influence(obs, tri, order: int, mu: float, lam: float, eps: float,
+                      want=("U", "H"), n_quad: int | None = None):
+    """Q-family contribution, by Gauss quadrature on the element.
+
+    NOT closed form. It does not have to be, because unlike the R-family it
+    does not stagnate: it CONVERGES, at an order set by the budget law in
+    :func:`q_gauss_orders`. ``n_quad=None`` (the default) applies that law per
+    observer and groups by the required order; an explicit ``n_quad`` forces
+    one order everywhere, which is what the gates sweep.
+
+    The order genuinely varies: at eps/h = 0.01 on a surface-breaking element
+    the law asks for 34 at the P0 collocation point, 67 at the P1/P2 one, and
+    the ceiling close to the trace. A flat 16 -- which this module shipped
+    first, chosen from a BURIED element where the error really is
+    eps-independent -- left the P1/P2 point at 7e-4 and a readout 0.03 h below
+    the trace at O(1).
+
+    Omitting the family is not an option either: near the trace it is roughly a
+    fifth of the on-fault stress, so dropping it would be wrong by a
+    plausible-looking amount -- the failure ``matrices._not_yet`` refused.
+    """
+    obs = np.asarray(obs, float).reshape(-1, 3)
+    tri = np.asarray(tri, float).reshape(3, 3)
+    mu = float(mu)
+    lam = float(lam)
+    nu = lam / (2.0 * (lam + mu))
+    scale_c = 2.0 * (lam + mu) / (np.pi * mu * (lam + 2.0 * mu))
+
+    frame = local_frame(tri)
+    tri_img = tri * _REFLECT
+    n_obs = obs.shape[0]
+    n_node = (order + 1) * (order + 2) // 2
+
+    # Per-observer Gauss order from the budget law, unless the caller forces
+    # one. Grouping by the required order is the same device weighted_tables
+    # uses for its far-field orders: accuracy where the geometry needs it,
+    # without paying for it at every observer.
+    if n_quad is None:
+        orders = q_gauss_orders(obs, tri_img, eps, frame.L)
+    else:
+        orders = np.full(n_obs, int(n_quad))
+
+    DG = np.zeros((n_obs, n_node, 3, 3, 3)) if "U" in want else None
+    DDG = np.zeros((n_obs, n_node, 3, 3, 3, 3)) if "H" in want else None
+    for nq in np.unique(orders):
+        sel = orders == nq
+        dg, ddg = _q_block(obs[sel], tri, frame, order, nu, scale_c,
+                           float(eps), int(nq), want, n_node)
+        if DG is not None:
+            DG[sel] = dg
+        if DDG is not None:
+            DDG[sel] = ddg
     return _contract(DG, DDG, _unit_normal(tri), mu, lam, want)
 
 

@@ -39,12 +39,11 @@ RIGHT, not merely that it reproduces another implementation.
       omitting it MOVES the answer. If it ever stopped mattering, the kernel
       would have changed.
 
-  [f] WHERE THE Q-FAMILY'S QUADRATURE STOPS BEING VALID, which is a much
-      narrower region than it first appeared: it needs eps/h ~ 0.01 and
-      delta/eps <~ 1 together, and no collocation scheme reaches that. At every
-      realistic collocation point on a surface-breaking element the Q-family is
-      at machine precision, so step 8b is OPTIONAL. The clause records the
-      boundary rather than demanding work. See part_f.
+  [f] THE Q-FAMILY'S QUADRATURE BUDGET LAW, and that it is obeyed. The order
+      needed is not constant -- it goes as L / sqrt(delta^2 + eps^2), the same
+      law the direct term obeys with the same constant -- and the rule derives
+      it per observer. Gated three ways: the law is obeyed, a starved order
+      still fails, and the order actually varies. See part_f.
 
   [e] THE THREE-WAY SPLIT, bitwise. ``total - eigenstress == stress`` as an
       identity rather than a tolerance: if it ever needed one, the three entry
@@ -80,6 +79,8 @@ TOL_CLOSED = 1e-10        # measured 1e-15 .. 2e-13 against the adaptive rule
 TOL_FREE_SURFACE = 2e-3   # the image's job; the direct term alone is O(1)
 TRIP_DIRECT_ONLY = 0.2    # the direct term alone must FAIL the condition
 TRIP_Q_SHARE = 0.02       # the Q-family must move the answer by at least this
+TOL_BUDGET = 1e-7         # measured 2e-15 .. 1.1e-8 with the adaptive order
+TRIP_STARVED = 1e-2       # a flat n_quad = 16 reaches O(1) near the trace
 
 
 def _gauss_tri(n):
@@ -302,97 +303,100 @@ def main() -> bool:
 
 
 def part_f(rep, image) -> None:
-    """THE REMAINING GAP, gated so it cannot be forgotten: the Q-family's
-    quadrature does not converge on the surface trace.
+    """THE QUADRATURE BUDGET LAW for the Q-family, and that it is obeyed.
 
-    Clause [c] shows the R-family in closed form is machine-accurate at every
-    clearance. That is step 8a, and it is NOT the whole kernel. The Q-family is
-    still quadrature, and refining it near the trace does not approach a limit
-    -- the value CLIMBS, because each refinement resolves more of a peak it
-    never captured:
+    The Q-family is the half left in quadrature. Unlike the R-family it does not
+    stagnate -- it converges -- but its required order is NOT constant, which an
+    earlier version of this gate asserted on the strength of a buried-element
+    measurement. It obeys
 
-        delta/eps    nq=16     nq=32     nq=64    nq=128
-            10.00    185.1    187.83   187.8378  187.8378   converged
-             1.00    624.5   1053.1    1430.4    1531.9     climbing
-             0.20    743.5   1428.9    2245.8    2540.0     climbing
+        n_quad ~ C * L / sqrt(delta^2 + eps^2),      delta = dist to the IMAGE
 
-    So splitting the families did not make the remaining half easy -- it made
-    it HARDER than the original sum. R and Q partially cancel (2.3-3.0x here),
-    and quadrature on one summand of a cancelling pair is worse conditioned
-    than quadrature on the pair: at delta/eps = 10 this kernel's last increment
-    is 1.3e-4 where the oracle's uniform FULL-image quadrature reaches 2.8e-6,
-    fifty times better, for exactly that reason.
+    and that is the SAME law the direct term obeys (``n_quad ~ 8 L / eps``,
+    clause [b] of oracle/verify_vertical_fault) with the same constant: the
+    direct term's observer sits ON its own element, so delta = 0 and the scale
+    is eps. One law, two cases -- which is why C did not have to be fitted
+    separately. Measured 5.8 to 8.4 for 1e-9 relative, over delta/h in
+    {0.02 .. 0.33} and eps/h in {0.01 .. 0.1}.
 
-    WHAT IT MEANS FOR THE PACKAGE, and it is much narrower than it first
-    looked. The configuration above needs eps/h ~ 0.01 AND delta/eps <~ 1 AT
-    THE SAME TIME, i.e. a readout point a fifth of a percent of an element size
-    below the trace, with a mollification a hundredth of the element. NO
-    COLLOCATION SCHEME GOES THERE. Measured on the top element of a
-    surface-breaking fault:
+    Three clauses, and the middle one is the point:
 
-        h     eps/h   scheme                delta   delta/eps   last increment
-        1.00  0.100   P0 (centroid, h/3)   0.3333        3.3   1.2e-15
-        1.00  0.100   P1/P2 (shrunk, h/6)  0.1667        1.7   8.7e-16
-        0.25  0.020   P1/P2                0.0417        8.3   5.4e-16
+      - the law is OBEYED: with the adaptive order the full image kernel is at
+        machine precision at every on-fault point tested, including 0.03 h below
+        a surface trace at eps/h = 0.003, where a flat 16 gave O(1).
 
-    and sweeping delta/eps at eps/h = 0.1 it stays below 2e-10 down to
-    delta/eps = 0.1. The scaling runs the SAFE way: for a fixed scheme
-    delta/eps = (h/3)/eps GROWS as eps falls, so refining eps moves away from
-    the failure rather than toward it -- at eps/h = 0.00625, P0 sits at
-    delta/eps ~ 53.
+      - a STARVED order still fails. Without this the clause above could pass
+        because the configuration is easy rather than because the law works.
 
-    So step 8b (the Q-family in closed form) is OPTIONAL, not required. What it
-    would buy is post-processing stress arbitrarily close to a surface trace at
-    a very fine eps, not interaction matrices. This clause records the
-    boundary of the quadrature's validity so that a future readout wandering
-    into it is caught; the first draft of it claimed 8b was required, on the
-    strength of a configuration chosen to stress the kernel rather than one a
-    caller evaluates.
+      - the order actually VARIES with geometry. A law that returned a constant
+        would pass the first two clauses and be no law at all.
 
-    Target if 8b is ever built: last increment below 1e-10 at delta/eps = 0.2
-    AND eps/h = 0.01, which is what clause [c] already delivers for the
-    R-family.
+    What the law replaced, for the record, since the numbers are the reason it
+    exists -- error of the full image stress ON the fault plane, flat n_quad=16
+    against the adaptive rule:
+
+        eps/h    P0 (h/3)        P1/P2 (h/6)      depth 0.03 h
+        0.100    4.4e-08 -> 5.2e-15    2.5e-04 -> 4.3e-15   9.7e-03 -> 5.0e-15
+        0.010    7.5e-08 -> 1.4e-15    6.9e-04 -> 3.4e-15   1.0e+00 -> 3.9e-09
+        0.003    7.5e-08 -> 2.6e-15    6.9e-04 -> 2.2e-15   1.1e+00 -> 1.1e-08
+
+    and it costs 4.1x the flat 16 while being 4.2x CHEAPER than a flat 64 at
+    the same accuracy.
     """
+    from mhs.fullspace.frame import local_frame
     TV = np.array([[0.0, 0.0, 0.0], [0.08, 1.0, 0.0], [0.03, 0.5, -1.0]])
-    obs = np.array([[0.037, 0.5, -0.2 * EPS_FINE]])
-    print("\n[f] THE REMAINING GAP: the Q-family's quadrature on the trace")
-    vals = [image.image_q_influence(obs, TV, 0, MU, LAM, EPS_FINE,
-                                    want=("H",), n_quad=n)["H"][0, 0]
-            for n in (32, 64, 128)]
-    mags = [float(np.abs(v).max()) for v in vals]
-    print(f"    |Q| at n_quad 32 / 64 / 128: "
-          f"{mags[0]:.1f} / {mags[1]:.1f} / {mags[2]:.1f}")
-    inc = relmax(vals[1], vals[2])
-    print(f"    last increment: {inc:.2e}   (target for step 8b: < 1e-10)")
-    # The claim that matters is not that an extreme configuration fails -- it is
-    # that NO COLLOCATION POINT reaches it. Checked, not just asserted in prose.
-    print("    realistic collocation on the same surface-breaking element:")
-    print(f"      {'eps/h':>7} {'scheme':>8} {'delta/eps':>10} "
-          f"{'last increment':>15}")
-    worst_coll = 0.0
-    for eh in (0.1, 0.02):
-        for scheme, frac in (("P0", 1.0 / 3.0), ("P1/P2", 1.0 / 6.0)):
-            ev = eh * 1.0
-            oc = np.array([[0.03, 0.5, -frac]])
-            a = image.image_q_influence(oc, TV, 0, MU, LAM, ev, want=("H",),
-                                        n_quad=64)["H"][0, 0]
-            b = image.image_q_influence(oc, TV, 0, MU, LAM, ev, want=("H",),
-                                        n_quad=128)["H"][0, 0]
-            e = relmax(a, b)
-            worst_coll = max(worst_coll, e)
-            print(f"      {eh:7.3f} {scheme:>8} {frac / ev:10.1f} {e:15.2e}")
-    rep.check("f every realistic collocation point IS converged", worst_coll,
-              1e-9,
-              "which is why step 8b is OPTIONAL: for a fixed scheme "
-              "delta/eps = (h/3)/eps GROWS as eps falls, so refining eps moves "
-              "AWAY from the failure, not toward it")
-    rep.check_bool("f the quadrature does fail OUTSIDE that range "
-                   "(the boundary is real)",
-                   inc > 1e-3,
-                   f"({inc:.2e}) at eps/h = 0.01 -- a regime NO collocation "
-                   f"scheme reaches (P0 and P1/P2 on this element measure "
-                   f"1e-15). It bounds where the quadrature stops being "
-                   f"valid, so a future readout wandering in is caught.")
+    nrm = np.cross(TV[1] - TV[0], TV[2] - TV[0])
+    nrm = nrm / np.linalg.norm(nrm)
+
+    def on_plane(depth):
+        q = np.array([0.0, 0.5, -depth])
+        q = q - nrm * float((q - TV[0]) @ nrm)
+        return q.reshape(1, 3)
+
+    print("\n[f] THE Q-FAMILY'S QUADRATURE BUDGET LAW")
+    print("    n_quad ~ C L / sqrt(delta^2 + eps^2), delta = dist to the IMAGE")
+    print(f"    {'eps/h':>7} {'point':>14} {'n_quad':>8} {'adaptive err':>14} "
+          f"{'flat 16 err':>13}")
+    worst_ad = 0.0
+    worst_flat = 0.0
+    tri_img = TV * np.array([1.0, 1.0, -1.0])
+    L = local_frame(tri_img).L
+    for eh in (0.1, 0.003):
+        for label, d in (("P0 h/3", 1.0 / 3.0), ("P1/P2 h/6", 1.0 / 6.0),
+                         ("0.03 h", 0.03)):
+            o = on_plane(d)
+            nq = int(image.q_gauss_orders(o, tri_img, eh, L)[0])
+            # Reference at FOUR TIMES the order the law asks for, not a flat
+            # 256: a flat high order costs 65k points x 1134 records per case
+            # and makes the gate unrunnable, while 4x the law is resolved
+            # wherever the law itself is right -- which the starved clause
+            # below independently confirms it is.
+            ref = image.image_total(o, TV, 0, MU, LAM, eh, want=("H",),
+                                    n_quad=min(4 * nq, 256))["H"][0, 0]
+            ad = relmax(image.image_total(o, TV, 0, MU, LAM, eh,
+                                          want=("H",))["H"][0, 0], ref)
+            fl = relmax(image.image_total(o, TV, 0, MU, LAM, eh, want=("H",),
+                                          n_quad=16)["H"][0, 0], ref)
+            worst_ad = max(worst_ad, ad)
+            worst_flat = max(worst_flat, fl)
+            print(f"    {eh:7.3f} {label:>14} {nq:8d} {ad:14.2e} {fl:13.2e}")
+    rep.check("f the law is OBEYED: adaptive order is accurate everywhere",
+              worst_ad, TOL_BUDGET,
+              "including 0.03 h below a surface trace at eps/h = 0.003, where "
+              "a flat 16 gives O(1)")
+    rep.check_bool(f"f a STARVED order still FAILS (> {TRIP_STARVED:g})",
+                   worst_flat > TRIP_STARVED,
+                   f"({worst_flat:.2e} at flat n_quad = 16) -- so the clause "
+                   f"above passes because the law works, not because the "
+                   f"configuration is easy")
+    orders = image.q_gauss_orders(
+        np.vstack([on_plane(d) for d in (1.0 / 3.0, 1.0 / 6.0, 0.01)]),
+        tri_img, 0.01, L)
+    rep.check_bool("f the order VARIES with geometry (it is a law, not a "
+                   "constant)", len(set(orders.tolist())) == len(orders),
+                   f"({orders.tolist()} for depths h/3, h/6, 0.01 h) -- a rule "
+                   f"returning a constant would pass the two clauses above and "
+                   f"be no law at all")
 
 
 if __name__ == "__main__":

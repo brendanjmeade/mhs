@@ -42,10 +42,25 @@ IMPORT_BUDGET_OVER_NUMBA_S = 1.0
 # is a storage tolerance, not a second arithmetic.
 OUT_FLOAT32_PARITY = 1.0e-6
 
-#: Gauss points per direction for the image Q-FAMILY quadrature. The R-family
-#: is closed form; this half stays numerical because clause [d] of
-#: verify_vertical_fault measures its error as eps-INDEPENDENT (1.6x spread
-#: over a 16x eps range) -- its integrand's length scale is DEPTH, not eps, so
-#: no eps-dependent budget appears, unlike the direct term's n_quad ~ 8 L/eps.
-#: 16 reaches machine precision for an element reaching z = 0; 8 gives ~1e-7.
-IMAGE_Q_GAUSS_N = 16
+#: Quadrature budget for the image Q-FAMILY (the R-family is closed form).
+#:
+#:     n_quad ~ IMAGE_Q_BUDGET_C * L / sqrt(delta^2 + eps^2)
+#:
+#: with ``delta`` the observer's distance to the IMAGE triangle. This is the
+#: SAME law the direct term obeys (n_quad ~ 8 L / eps, gated in
+#: oracle/verify_vertical_fault clause [b]) with the same constant: the direct
+#: observer sits ON its element, so delta = 0 and the scale is eps.
+#:
+#: C measured 5.8 .. 8.4 for 1e-9 relative, over delta/h in {0.02 .. 0.33} and
+#: eps/h in {0.01 .. 0.1}. The default carries headroom over the MAXIMUM, not
+#: the mean, because starving this rule is silent -- the first version of this
+#: file set a FLAT 16, chosen from a buried element where the error is
+#: eps-independent, and that left an on-fault P1/P2 collocation point at 7e-4
+#: and a readout 0.03 h below a surface trace at O(1).
+IMAGE_Q_BUDGET_C = 10.0
+#: Floor: below this the rule is cheap anyway and the law over-trims far field.
+IMAGE_Q_GAUSS_MIN = 8
+#: Ceiling. The law asks for ~400 at delta/h = 0.02, eps/h = 0.01; past this
+#: the Q-family needs a closed form rather than more points, and the cost is
+#: quadratic. Hitting it is reported rather than silently accepted.
+IMAGE_Q_GAUSS_MAX = 192
