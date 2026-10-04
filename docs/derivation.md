@@ -285,7 +285,58 @@ treatment rather than being a special case of the dipping one. Vertical faults
 are the commonest geometry and the whole motivation for this work, so that is
 the case to build first.
 
-## The vertical case is solved in principle, SEMI-analytically
+## The semi-analytic path works at EVERY orientation
+
+The inner variable is the ALONG-STRIKE direction, not the vertical one. Strike
+is horizontal AND in-plane, and ``n`` is perpendicular to it, so the observer
+and its in-plane foot share the same strike coordinate -- which puts both
+quadratics at the same centre:
+
+    W   = t^2 + A(v1)       R^2 = t^2 + B(v1)       B - A = D3(v1)^2
+
+with ``t`` along strike and ``v1`` down dip. Verified by stepping along strike
+and checking ``A``, ``B`` do not move: residual 1e-13 or better, and
+``B - A = D3^2`` to 1e-11, for a vertical element, a 70-degree dip, a
+20-degree dip and an oblique one.
+
+The vertical case below is simply where strike happens to BE the horizontal
+in-plane axis, so ``A`` loses its ``v1`` dependence too.
+
+THE INNER INTEGRAL IS ELEMENTARY. With both quadratics centred,
+
+    int dt / ((t^2+A) sqrt(t^2+B))
+        = (1/sqrt(A(B-A))) atan( t sqrt(B-A) / (sqrt(A) sqrt(t^2+B)) )
+
+and ``B - A = D3^2 >= 0`` with ``A >= eps^2 > 0``. As ``D3 -> 0`` the prefactor
+diverges while the atan vanishes; the limit is ``t/(A sqrt(t^2+B))``, so the
+degeneracy is a BRANCH in the implementation, not a singularity.
+
+THE OUTER RULE MUST BE SPLIT AT THE VERTICES, and this is the whole difference
+between a usable rule and a mediocre one. ``t_limits`` switches which pair of
+edges bounds the slab at each vertex, so the outer integrand is only PIECEWISE
+smooth, with kinks at the vertices' ``v1`` coordinates. Gauss across a kink
+converges algebraically. Measured on a dipping element, int dS/(W R),
+eps = 0.02:
+
+| | self-check nq 200 vs 400 | nq = 32 (352 pts) |
+|---|---|---|
+| graded about the foot only | 7.1e-09 | 8.8e-08 |
+| ALSO split at the vertices | **7.3e-15** | **2.0e-12** |
+
+and with the observer placed so ``D3`` crosses zero ON the element -- the
+conditioning case -- 8.9e-15 and 3.0e-13. Against 2-D Gauss at 1024 points:
+1.1e-02.
+
+A first attempt blamed the ``sqrt(B-A) = |D3|`` kink instead, and splitting
+there changed nothing: the test observers sat near the element plane, where the
+``D3 = 0`` line passes close to the foot, so that break point was already
+present. The hypothesis was not wrong so much as untested.
+
+Horizontal elements are the one orientation needing separate treatment, because
+strike is undefined there -- and they are the easy case: ``W`` and ``R`` share
+the same radial quadratic at two heights, so clq's hierarchy covers them.
+
+## The vertical case in particular
 
 Vertical elements are the commonest geometry and the whole motivation, and they
 collapse further than the general argument above suggests. In a vertical
