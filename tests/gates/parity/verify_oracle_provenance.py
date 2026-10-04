@@ -62,12 +62,34 @@ ORACLES = {
     "mhs_oracle.clq.primitives": "src/mhs_oracle/clq/primitives.py",
     "mhs_oracle.clq.quadrature": "src/mhs_oracle/clq/quadrature.py",
     "mhs_oracle.clq.shape": "src/mhs_oracle/clq/shape.py",
+    "mhs_oracle.moss": "src/mhs_oracle/moss/__init__.py",
+    "mhs_oracle.moss.analytical_batch":
+        "src/mhs_oracle/moss/analytical_batch.py",
+    "mhs_oracle.moss.analytical_kernels":
+        "src/mhs_oracle/moss/analytical_kernels.py",
+    "mhs_oracle.moss.mindlin_kernels":
+        "src/mhs_oracle/moss/mindlin_kernels.py",
+    "mhs_oracle.moss.mindlin_triangle":
+        "src/mhs_oracle/moss/mindlin_triangle.py",
+    "mhs_oracle.moss.mollified_elastic_kernels":
+        "src/mhs_oracle/moss/mollified_elastic_kernels.py",
+}
+
+#: Names whose vendored file is DELIBERATELY not byte-identical to upstream, with
+#: the reason. Anything else differing is a problem; anything here that stops
+#: differing is also a problem, since the edit would have been lost.
+EXPECTED_EDITS = {
+    "mhs_oracle.moss.mindlin_triangle":
+        "relative imports replace an absolute-plus-flat-fallback try/except "
+        "whose ImportError branch resolves by sys.path order",
+    "mhs_oracle.moss":
+        "a new docstring: upstream's describes being installed as moss_kernel",
 }
 
 #: Where the vendored copies came from, for the record. Not checkable here --
 #: the upstream tree need not exist on this machine -- which is why the upstream
 #: hashes are stored rather than computed.
-UPSTREAM = "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+UPSTREAM = "moss-org src/{clq,moss_kernel}/ @ ad0e992 (2026-10-03)"
 
 #: Names that must be absent from an oracle module, because their presence would
 #: mean the vendored copy had drifted into being the SHIPPED package. ``clq``'s
@@ -189,24 +211,39 @@ def main(write_mode: bool = False) -> bool:
         print(f"       EDITED: {n} (upstream "
               f"{pinned[n]['sha256_upstream'][:12]}, vendored "
               f"{live[n]['sha256'][:12]})")
-    # clq uses relative imports throughout, so nothing needed an edit. If that
-    # ever changes, this clause must be updated in the same commit -- which is
-    # the review moment it exists to create.
-    check("c every clq file is byte-identical to upstream", not edited,
-          f"{len(identical)}/{len(live)}"
-          if not edited else f"{len(edited)} edited: {edited}")
+    # The edited set must be EXACTLY the expected one, in both directions. An
+    # unexpected edit is a silent change to a frozen oracle; an expected edit
+    # that stopped differing means the edit was lost, which for
+    # mindlin_triangle would restore the sys.path-order import hazard.
+    unexpected = sorted(set(edited) - set(EXPECTED_EDITS))
+    missing = sorted(set(EXPECTED_EDITS) - set(edited))
+    check("c no UNEXPECTED edit to a vendored oracle", not unexpected,
+          f"{len(identical)}/{len(live)} byte-identical"
+          if not unexpected else f"unexpected: {unexpected}")
+    check("c every EXPECTED edit is still present", not missing,
+          ", ".join(sorted(EXPECTED_EDITS))
+          if not missing else f"edit lost on: {missing}")
+    for n in sorted(EXPECTED_EDITS):
+        if n in edited:
+            print(f"       {n}: {EXPECTED_EDITS[n]}")
 
     print("\n[d] THE ORACLE IS NOT THE PACKAGE")
+    # One check whether or not anything is wrong. A clause that appends nothing
+    # while passing gives no positive signal, so it can be broken or deleted and
+    # the gate's own count would not notice.
+    decorated = {}
     for name in sorted(ORACLES):
         if name not in live:
             continue
-        path = ROOT / live[name]["path"]
-        text = path.read_text()
+        text = (ROOT / live[name]["path"]).read_text()
         bad = [tok for tok in FORBIDDEN_IN_ORACLE if f"@{tok}" in text]
         if bad:
-            check(f"d {name} carries no numba decorator", False,
-                  f"found {bad} -- a numba'd oracle is no longer an "
-                  f"independent reference for a numba implementation")
+            decorated[name] = bad
+    check(f"d no oracle file carries a numba decorator ({len(live)} files)",
+          not decorated,
+          f"checked for {list(FORBIDDEN_IN_ORACLE)}" if not decorated else
+          f"{decorated} -- a numba'd oracle is no longer an independent "
+          f"reference for the numba implementation gated against it")
     check("d the oracle imports no part of mhs",
           not any("import mhs" in (ROOT / live[n]["path"]).read_text()
                   .replace("import mhs_oracle", "")

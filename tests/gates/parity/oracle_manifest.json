@@ -58,5 +58,41 @@
   "sha256": "8a726f0da37902e4dd87ba112b73606815786288e57e6c5949af82362da4e770",
   "sha256_upstream": "8a726f0da37902e4dd87ba112b73606815786288e57e6c5949af82362da4e770",
   "upstream": "moss-org src/clq/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.moss": {
+  "path": "src/mhs_oracle/moss/__init__.py",
+  "sha256": "0fe9dd05bb01d16bb5bdedc133b6dc7ead28d6437c8e76946a539be1b5abdf1d",
+  "sha256_upstream": "f82e984cf3260f0105c43be90e5d082b17854723f748ed735e4304ac97dd32f7",
+  "upstream": "moss-org src/{clq,moss_kernel}/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.moss.analytical_batch": {
+  "path": "src/mhs_oracle/moss/analytical_batch.py",
+  "sha256": "133b596e8726f52e251a48f0c9a0162961a44106cc5d33329627239e07047e7a",
+  "sha256_upstream": "133b596e8726f52e251a48f0c9a0162961a44106cc5d33329627239e07047e7a",
+  "upstream": "moss-org src/{clq,moss_kernel}/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.moss.analytical_kernels": {
+  "path": "src/mhs_oracle/moss/analytical_kernels.py",
+  "sha256": "f486fe8a15494131645e2a658cf5c4ed63b89833fad2c32b571397c3310e653d",
+  "sha256_upstream": "f486fe8a15494131645e2a658cf5c4ed63b89833fad2c32b571397c3310e653d",
+  "upstream": "moss-org src/{clq,moss_kernel}/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.moss.mindlin_kernels": {
+  "path": "src/mhs_oracle/moss/mindlin_kernels.py",
+  "sha256": "b9f6e0f81553bf0c31ff781fe44c34f7782483e882512e440a179ca5eb8d65c1",
+  "sha256_upstream": "b9f6e0f81553bf0c31ff781fe44c34f7782483e882512e440a179ca5eb8d65c1",
+  "upstream": "moss-org src/{clq,moss_kernel}/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.moss.mindlin_triangle": {
+  "path": "src/mhs_oracle/moss/mindlin_triangle.py",
+  "sha256": "0559f39b728005bea6f4d94e40d9c9d9f420537cbc73b7f181e5b4df9981544a",
+  "sha256_upstream": "668bdd219602de346ac41392d51cdde461bea632735edfd9ef714a917fe52e91",
+  "upstream": "moss-org src/{clq,moss_kernel}/ @ ad0e992 (2026-10-03)"
+ },
+ "mhs_oracle.moss.mollified_elastic_kernels": {
+  "path": "src/mhs_oracle/moss/mollified_elastic_kernels.py",
+  "sha256": "9bdae53efa620d03fb3096600a84eb5ac564bfd4eadb3633cacf62d0500cba45",
+  "sha256_upstream": "9bdae53efa620d03fb3096600a84eb5ac564bfd4eadb3633cacf62d0500cba45",
+  "upstream": "moss-org src/{clq,moss_kernel}/ @ ad0e992 (2026-10-03)"
  }
 }

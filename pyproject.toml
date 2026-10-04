@@ -76,7 +76,7 @@ package-dir = { "" = "src" }
 # Listed explicitly rather than found, so tests/gates/ and studies/ are never
 # packaged by accident -- they are scripts run by path, not importable units.
 packages = ["mhs", "mhs.fullspace", "mhs.kernels", "mhs_oracle",
-            "mhs_oracle.clq"]
+            "mhs_oracle.clq", "mhs_oracle.moss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
