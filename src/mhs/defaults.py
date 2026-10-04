@@ -64,3 +64,12 @@ IMAGE_Q_GAUSS_MIN = 8
 #: the Q-family needs a closed form rather than more points, and the cost is
 #: quadratic. Hitting it is reported rather than silently accepted.
 IMAGE_Q_GAUSS_MAX = 192
+#: Working-set budget for one Q-family block, in bytes. The 1329 records share
+#: only 236 distinct monomials, so the family is evaluated as ONE contraction
+#: against a monomial basis -- which means holding that basis, and the small
+#: fixed set of cached powers, for a whole chunk of observers at once. That
+#: working set grows as n_obs * n_quad, so the observer axis is chunked against
+#: this budget rather than left to the caller: n_quad reaches IMAGE_Q_GAUSS_MAX
+#: exactly where observers cluster near a surface trace, which is the one
+#: configuration where both factors are large together.
+IMAGE_Q_BLOCK_BYTES = 64 << 20

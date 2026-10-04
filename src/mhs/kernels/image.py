@@ -45,6 +45,8 @@ symmetric configuration.
 """
 from __future__ import annotations
 
+import functools
+
 import numpy as np
 
 from .. import defaults
@@ -233,10 +235,73 @@ def q_gauss_orders(obs: np.ndarray, tri_img: np.ndarray, eps: float,
                    defaults.IMAGE_Q_GAUSS_MAX).astype(int)
 
 
+@functools.lru_cache(maxsize=8)
+def _q_basis(want, nu):
+    """The Q-family's distinct monomials, and its coefficients against them.
+
+    The 1329 Q-family records share only 236 distinct monomials
+    ``D1^a D2^b D3^c/(R2^n Q^q)``, and -- unlike the R-family -- NO Q-family
+    coefficient depends on the observer depth: every ``pz`` in the table is
+    zero. So each record contributes one NUMBER to one output slot, and the
+    whole family is a single dense contraction against a monomial basis.
+
+    Evaluating it per record instead, as this module first did, rebuilt every
+    monomial 5.6 times over (6.8 for the second-derivative half, which is 85%
+    of the records), paid a quadrature matmul for each rebuild, and broadcast a
+    constant into an ``(N, 1)`` array 1329 times in order to multiply by it.
+
+    Returns ``(monos, C_U, C_H)``: the ``(a, b, c, n, q)`` keys in basis order,
+    and each ``C`` either ``(n_slot, n_mono)`` or ``None``. Cached on ``nu``,
+    which is the only thing the coefficients depend on.
+    """
+    monos: dict[tuple[int, ...], int] = {}
+    wide = len(Q_DG_RECORDS) + len(Q_DDG_RECORDS)
+    blocks = []
+    for key, records, n_ix in (("U", Q_DG_RECORDS, 3),
+                               ("H", Q_DDG_RECORDS, 4)):
+        if key not in want:
+            blocks.append(None)
+            continue
+        rows = np.zeros((3 ** n_ix, wide))
+        for rec in records:
+            slot = 0
+            for ix in rec[:n_ix]:
+                slot = slot * 3 + ix
+            k = monos.setdefault(tuple(rec[n_ix:n_ix + 5]), len(monos))
+            cv = 0.0
+            for _pz, pnu, num, den in rec[n_ix + 5]:
+                cv += (num / den) * (nu ** pnu)
+            rows[slot, k] += cv
+        blocks.append(rows)
+    n_mono = len(monos)
+    return (tuple(monos),
+            *(None if b is None else b[:, :n_mono].copy() for b in blocks))
+
+
+def _powers(arr, kmax):
+    """``[-, arr, arr**2, ..., arr**kmax]`` by repeated multiplication.
+
+    Not ``arr ** k``: that is a ``pow()`` call per element, and these exponents
+    are small, fixed, and reused across the basis. Slot 0 is never read -- a
+    zero exponent is skipped by the caller rather than multiplied by ones.
+    """
+    out = [None] * (kmax + 1)
+    cur = arr
+    for k in range(1, kmax + 1):
+        out[k] = cur
+        cur = cur * arr
+    return out
+
+
 def _q_block(obs, tri, frame, order, nu, scale_c, eps, nq, want, n_node):
     """Q-family moments for one group of observers at ONE Gauss order.
 
     Returns ``(DG, DDG)``, either possibly ``None`` if not requested.
+
+    The observer axis is chunked against a byte budget, because holding the
+    monomial basis for a whole chunk at once is what buys the contraction:
+    unbounded it would grow as ``n_obs * n_quad``, and the escalated Gauss
+    orders make ``n_quad`` large exactly where observers cluster.
     """
     x1, x2, w = gauss_triangle(nq)
     bary = np.stack([1.0 - x1 - x2, x1, x2], axis=1)          # (Q, 3)
@@ -252,36 +317,44 @@ def _q_block(obs, tri, frame, order, nu, scale_c, eps, nq, want, n_node):
         for b in range(D - a):
             Nq += c0[:, a, b][None, :] * (eta[:, 0] ** a
                                           * eta[:, 1] ** b)[:, None]
+    wN = wq[:, None] * Nq                   # (Q, K): fold the weights in once
 
-    # D = obs - reflected source, so D3 = obs_z + y_z
-    d1 = obs[:, 0:1] - ypts[None, :, 0]
-    d2 = obs[:, 1:2] - ypts[None, :, 1]
-    d3 = obs[:, 2:3] + ypts[None, :, 2]
-    r2 = np.sqrt(d1 * d1 + d2 * d2 + d3 * d3 + eps ** 2)
-    qq = r2 - d3
-    z_obs = obs[:, 2:3]
+    monos, c_u, c_h = _q_basis(tuple(want), nu)
+    emax = [max(m[i] for m in monos) for i in range(5)]
+    n_sub, n_q = obs.shape[0], ypts.shape[0]
+    dg = np.empty((n_sub, n_node, 3, 3, 3)) if c_u is not None else None
+    ddg = np.empty((n_sub, n_node, 3, 3, 3, 3)) if c_h is not None else None
 
-    def integrand(terms, a, b, c, n, q):
-        cv = np.zeros_like(z_obs)
-        for pz, pnu, num, den in terms:
-            cv += (num / den) * (z_obs ** pz) * (nu ** pnu)
-        return (cv * scale_c) * (d1 ** a) * (d2 ** b) * (d3 ** c) \
-            / (r2 ** n * qq ** q)
+    per_obs = 8 * (n_q * (sum(emax) + 6) + len(monos) * n_node)
+    step = max(1, int(defaults.IMAGE_Q_BLOCK_BYTES // per_obs))
+    for lo in range(0, n_sub, step):
+        sub = obs[lo:lo + step]
+        # D = obs - reflected source, so D3 = obs_z + y_z
+        d1 = sub[:, 0:1] - ypts[None, :, 0]
+        d2 = sub[:, 1:2] - ypts[None, :, 1]
+        d3 = sub[:, 2:3] + ypts[None, :, 2]
+        r2 = np.sqrt(d1 * d1 + d2 * d2 + d3 * d3 + eps ** 2)
+        p1, p2, p3 = (_powers(d1, emax[0]), _powers(d2, emax[1]),
+                      _powers(d3, emax[2]))
+        pr = _powers(1.0 / r2, emax[3])
+        pq = _powers(1.0 / (r2 - d3), emax[4])
 
-    n_sub = obs.shape[0]
-    dg = ddg = None
-    if "U" in want:
-        dg = np.zeros((n_sub, n_node, 3, 3, 3))
-        for rec in Q_DG_RECORDS:
-            i, j, m, a, b, c, n, q = rec[:8]
-            dg[:, :, i, j, m] += (integrand(rec[8], a, b, c, n, q)
-                                  * wq[None, :]) @ Nq
-    if "H" in want:
-        ddg = np.zeros((n_sub, n_node, 3, 3, 3, 3))
-        for rec in Q_DDG_RECORDS:
-            i, j, p, m, a, b, c, n, q = rec[:9]
-            ddg[:, :, i, j, p, m] += (integrand(rec[9], a, b, c, n, q)
-                                      * wq[None, :]) @ Nq
+        basis = np.empty((len(monos), sub.shape[0], n_node))
+        for k, mono in enumerate(monos):
+            facs = [pw[e] for pw, e in zip((p1, p2, p3, pr, pq), mono) if e]
+            t = facs[0] if facs else np.ones_like(r2)
+            for f in facs[1:]:
+                t = t * f
+            basis[k] = t @ wN
+
+        for cmat, out, tail in ((c_u, dg, (3, 3, 3)),
+                                (c_h, ddg, (3, 3, 3, 3))):
+            if cmat is None:
+                continue
+            flat = np.tensordot(cmat, basis, axes=([1], [0]))
+            flat *= scale_c
+            out[lo:lo + step] = np.moveaxis(flat, 0, -1).reshape(
+                sub.shape[0], n_node, *tail)
     return dg, ddg
 
 
