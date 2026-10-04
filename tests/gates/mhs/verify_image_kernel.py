@@ -51,6 +51,13 @@ RIGHT, not merely that it reproduces another implementation.
       eigenstress carries NO image contribution -- it is a pointwise statement
       about the blob and the source triangle, reading no Green's function.
 
+  [g] THE FLOOR, where the law is CLIPPED -- which is 99.7% of a real matrix's
+      quadrature points, so it sets the cost of an assembly almost by itself.
+      The law under-predicts in the far field (it asks for 1 at delta = 16 L),
+      so out there the floor is the whole of the accuracy. Gated the same three
+      ways as [f]: the floor holds at every patch order, a lower floor fails,
+      and the `+ order` term is needed. See part_g.
+
 Run from anywhere:  python tests/gates/mhs/verify_image_kernel.py
 """
 from __future__ import annotations
@@ -81,6 +88,13 @@ TRIP_DIRECT_ONLY = 0.2    # the direct term alone must FAIL the condition
 TRIP_Q_SHARE = 0.02       # the Q-family must move the answer by at least this
 TOL_BUDGET = 1e-7         # measured 2e-15 .. 1.1e-8 with the adaptive order
 TRIP_STARVED = 1e-2       # a flat n_quad = 16 reaches O(1) near the trace
+#: The floor is held to the SAME bar as the law it takes over from: clause [f]
+#: passes at 1.05e-08 against TOL_BUDGET, so gating the floor tighter would
+#: demand more of the far field than of the near one. Measured worst 3.8e-08,
+#: at 2 L with P2 -- the crossover band on the worst geometry, improving to
+#: 1.4e-10 by 3 L and 7e-15 by 16 L.
+TOL_FLOOR = 1e-7
+TRIP_FLOOR_LOW = 1e-5     # a floor of 4 must FAIL, or the floor is padding
 
 
 def _gauss_tri(n):
@@ -397,6 +411,102 @@ def part_f(rep, image) -> None:
                    f"({orders.tolist()} for depths h/3, h/6, 0.01 h) -- a rule "
                    f"returning a constant would pass the two clauses above and "
                    f"be no law at all")
+    part_g(rep, image)
+
+
+def part_g(rep, image) -> None:
+    """THE FLOOR, and the patch-order term -- the FAR field, not the near one.
+
+    Clause [f] gates the law where the law governs. This one gates where it is
+    CLIPPED, which is the overwhelming majority of a real matrix: on a 400
+    element surface-breaking fault at eps/h = 0.1, 99.9% of the 160,000 pairs
+    take the floor and they hold 99.7% of all quadrature points. So the floor
+    sets the cost of an assembly almost by itself, and it had never been
+    measured -- it was a round number with a one-line comment.
+
+    Measured now, and it is NOT padding: the law is calibrated on the near-field
+    scale and UNDER-predicts far away, asking for 1 at delta = 16 L where P0
+    needs 4 for 1e-9. Beyond about 2 L the floor is the whole of the accuracy.
+
+    Three clauses, matching [f]'s shape:
+
+      - the floor HOLDS across the clipped region, at every patch order. The
+        far-field requirement is eps-independent (it is set by delta/L), so
+        this sweeps distance and order rather than eps.
+
+      - a LOWER floor fails. Without this the clause above could pass because
+        the far field is easy rather than because the floor is right, which is
+        exactly how a flat 16 survived into a shipped default once already.
+
+      - the ``+ order`` term is NEEDED. P1 and P2 add polynomial degree to the
+        integrand, which the distance law cannot see; dropping the term leaves
+        P2 an order short near the crossover.
+    """
+    tri = TRI_SURF
+    tri_img = tri * np.array([1.0, 1.0, -1.0])
+    L = float(np.max(np.linalg.norm(tri - tri.mean(0), axis=1)))
+    cen = tri_img.mean(0)
+    rng = np.random.default_rng(2)
+    dirs = rng.normal(size=(24, 3))
+    dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+
+    def observers(dist):
+        pts = cen[None, :] + dist * dirs
+        pts[:, 2] = -np.abs(pts[:, 2]) - 1e-9       # the body is z <= 0
+        return pts
+
+    print("    dist/L  P  n_used   floor-as-shipped   floor 4   no +order")
+    worst, worst_low, worst_noterm = 0.0, 0.0, 0.0
+    for mult in (2.0, 3.0, 5.0, 8.0, 16.0):
+        obs = observers(mult * L)
+        for order in (0, 1, 2):
+            # Converged reference: a far pair is smooth, so Gauss is geometric
+            # here -- but checked rather than assumed, because comparing an
+            # unconverged rule against itself is the trap clause [b] of
+            # oracle/verify_vertical_fault records.
+            ref = image.image_q_influence(obs, tri, order, MU, LAM, EPS_FINE,
+                                          want=("H",), n_quad=44)["H"]
+            chk = image.image_q_influence(obs, tri, order, MU, LAM, EPS_FINE,
+                                          want=("H",), n_quad=52)["H"]
+            if relmax(chk, ref) > 1e-13:
+                rep.check_bool("g the far-field reference is converged",
+                               False, f"(order 44 vs 52 differ by "
+                                      f"{relmax(chk, ref):.1e} at "
+                                      f"{mult:g} L, P{order})")
+                return
+            used = int(image.q_gauss_orders(obs, tri_img, EPS_FINE, L,
+                                            order).min())
+
+            def at(n):
+                return relmax(image.image_q_influence(
+                    obs, tri, order, MU, LAM, EPS_FINE, want=("H",),
+                    n_quad=n)["H"], ref)
+
+            e_used, e_low = at(used), at(4)
+            e_noterm = at(max(used - order, 1))
+            worst = max(worst, e_used)
+            worst_low = max(worst_low, e_low)
+            worst_noterm = max(worst_noterm, e_noterm)
+            print(f"    {mult:6.1f} {order:2d} {used:7d} {e_used:18.2e} "
+                  f"{e_low:9.2e} {e_noterm:11.2e}")
+
+    rep.check("g the FLOOR holds across the clipped far field, every order",
+              worst, TOL_FLOOR,
+              "the law asks for 1 to 7 out here, so this is the floor's "
+              "accuracy and not the law's")
+    rep.check_bool(f"g a LOWER floor (4) still FAILS (> {TRIP_FLOOR_LOW:g})",
+                   worst_low > TRIP_FLOOR_LOW,
+                   f"({worst_low:.2e}) -- so the clause above passes because "
+                   f"the floor is sized right, not because the far field is "
+                   f"easy. Lowering the floor is worth 2.3x on 99.7% of a "
+                   f"matrix's quadrature points, so this is the clause any "
+                   f"such change has to move.")
+    rep.check_bool("g WITHOUT the `+ order` term the clause above FAILS",
+                   worst_noterm > TOL_FLOOR,
+                   f"({worst_noterm:.2e} without it against {worst:.2e} with "
+                   f"it, tol {TOL_FLOOR:g}) -- so the term is load-bearing "
+                   f"rather than decorative: P1/P2 add polynomial degree that "
+                   f"a distance law cannot see")
 
 
 if __name__ == "__main__":

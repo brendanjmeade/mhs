@@ -209,13 +209,13 @@ def triangle_distance(obs: np.ndarray, tri: np.ndarray) -> np.ndarray:
 
 
 def q_gauss_orders(obs: np.ndarray, tri_img: np.ndarray, eps: float,
-                   frame_L: float) -> np.ndarray:
+                   frame_L: float, order: int = 0) -> np.ndarray:
     """Gauss order PER OBSERVER, from the measured budget law
 
-        n_quad ~ C * L / sqrt(delta^2 + eps^2)
+        n_quad ~ C * L / sqrt(delta^2 + eps^2)  +  order
 
-    with ``delta`` the distance to the IMAGE triangle. This is the SAME law the
-    direct term obeys -- ``n_quad ~ 8 L / eps``, gated in
+    with ``delta`` the distance to the IMAGE triangle. The first term is the
+    SAME law the direct term obeys -- ``n_quad ~ 8 L / eps``, gated in
     ``oracle/verify_vertical_fault`` clause [b] -- and with the same constant:
     the direct term's observer sits ON its own element, so ``delta = 0`` and
     the scale is ``eps``. Here the observer is ``delta`` from the image, so the
@@ -227,10 +227,29 @@ def q_gauss_orders(obs: np.ndarray, tri_img: np.ndarray, eps: float,
     headroom over the MAXIMUM rather than the mean, because starving this rule
     is silent: the first shipped default was a flat 16 chosen from a BURIED
     element, and it left the P1/P2 collocation point at 7e-4.
+
+    THE ``+ order`` TERM is the nodal density's own polynomial degree. The
+    integrand is a monomial ``D1^a D2^b D3^c`` of degree up to ``MAX_RANK``
+    times the shape function ``N_k``, which adds ``order``, and a Gauss rule
+    integrates a fixed degree exactly -- so P1 and P2 need a higher order than
+    P0 at the SAME geometry, which the distance law alone cannot know. Measured
+    at a 1e-12 target it is worth 1 to 2 orders, and leaving it out puts P2 at
+    2.5e-11 where P0 is at 1e-13. It is also free: it moves only observers
+    whose law value is above the floor, which is 0.1% of the pairs in a
+    realistic matrix.
+
+    THE FLOOR IS LOAD-BEARING, not padding. The law under-predicts in the far
+    field -- at ``delta = 16 L`` it asks for 1, where P0 needs 4 for 1e-9 and 5
+    for 1e-12 -- because it is calibrated on the near-field scale. So beyond
+    about ``2 L`` the floor is what carries the accuracy, and it is measured
+    sufficient there for every patch order (gated in ``verify_image_kernel``
+    clause [g]). Lowering it is a real speedup on 99.7% of a matrix's
+    quadrature points and must be measured against that clause, not assumed.
     """
     delta = triangle_distance(obs, tri_img)
     scale = np.sqrt(delta * delta + float(eps) ** 2)
-    nq = np.ceil(defaults.IMAGE_Q_BUDGET_C * float(frame_L) / scale)
+    nq = (np.ceil(defaults.IMAGE_Q_BUDGET_C * float(frame_L) / scale)
+          + int(order))
     return np.clip(nq, defaults.IMAGE_Q_GAUSS_MIN,
                    defaults.IMAGE_Q_GAUSS_MAX).astype(int)
 
@@ -396,7 +415,7 @@ def image_q_influence(obs, tri, order: int, mu: float, lam: float, eps: float,
     # uses for its far-field orders: accuracy where the geometry needs it,
     # without paying for it at every observer.
     if n_quad is None:
-        orders = q_gauss_orders(obs, tri_img, eps, frame.L)
+        orders = q_gauss_orders(obs, tri_img, eps, frame.L, order)
     else:
         orders = np.full(n_obs, int(n_quad))
 
