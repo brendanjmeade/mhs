@@ -3,6 +3,9 @@
 Mollified Mindlin half-space triangular-dislocation Green's functions, as
 matrices. For a **homogeneous half space with no topography**.
 
+Project site, with both figures interactive:
+**<https://brendanjmeade.github.io/mhs/>** (`website/`).
+
 ```python
 import numpy as np, mhs
 
@@ -226,13 +229,23 @@ The honest limits:
   integration, and it is the number to quote: an exact free surface via the
   potential-convolution route is foreclosed, because the Cortez blob has
   algebraic tails. `docs/derivation.md` has the proof and the measurements.
-- **Cost.** About 1.1 ms per obs/source pair for stress, so 1k x 1k is minutes
-  and 10k x 10k is tens of hours. The image R-family is 57% of it and has an
-  unoptimised per-record inner loop; the Q-family was 89% until the same
-  restructure took it to 3%.
-- **P0 only through the public API.** The kernels support P1/P2 nodal density
-  and the gates cover all three, but the assembly path fixes order 0.
-- **No CI.** The gates are run by hand.
+- **Cost is per pair, but the BATCH SIZE sets it.** Measured for `stress_matrix`
+  against 256 source triangles, one call, JIT warm:
+
+  | observers per call | 1 | 10 | 100 | 1000 | 4000 |
+  |---|---|---|---|---|---|
+  | us/pair, stress | 7620 | 1218 | 166 | 43.3 | 36.3 |
+  | us/pair, displacement | 4077 | 754 | 103 | 23.4 | 17.3 |
+
+  A factor of 200 across that row, and none of it is the kernel -- it is numpy
+  call overhead amortised over the observer axis. So quote the batched figure,
+  ~36 us/pair for stress, and pass observers in bulk. A per-pair cost measured
+  at one observer per call describes a regime no production matrix occupies, and
+  an earlier revision of this bullet quoted exactly that.
+- **The on-fault interaction matrix is the fast path, not the stress matrix.**
+  `stress_matrix` keeps a full `(3, 3)` tensor per pair and is the form to reach
+  for last; `interaction_matrix` with the components you actually want is the
+  one that scales. See `## Across cores` for the measured rate.
 
 ## License
 
