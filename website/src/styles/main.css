@@ -1,0 +1,159 @@
+/* Shared with brendanjmeade.github.io/mbem and /kes, so the sites read as
+   siblings: a fixed top nav, a 336px sidebar that stays in view, and one 780px
+   content column. Light only. Tokens unchanged; the additions at the end are
+   the viewer's controls and colour bar.
+
+   ONE DEVIATION from the mbem copy: the prose rules for `pre`, `code` and
+   `table` live here rather than in one page's `is:global` block. On that site
+   they sit in running.astro, so the single table on /concepts/ renders with
+   browser defaults -- and this site puts tables on both prose pages. A rule
+   that applies to every page belongs in the stylesheet every page loads. */
+
+:root {
+  color-scheme: light;
+  --nav-h: 88px;
+  --fs: 15px;
+  --bg: #ffffff;
+  --fg: #222222;
+  --fg-dim: #555555;
+  --fg-faint: #888888;
+  --link: #031326;
+  --rule: #dddddd;
+  --box-bg: #fafbfc;
+  --accent: #b5367a;
+  --btn-bg: #222222;
+  --btn-fg: #ffffff;
+  --btn-bg-hover: #444444;
+  --font: "Source Sans 3", "Myriad Pro", "Helvetica Neue", Arial, sans-serif;
+  --serif: "Iowan Old Style", Palatino, Georgia, "Times New Roman", serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html { background: var(--bg); }
+
+body {
+  font-family: var(--font);
+  font-size: var(--fs);
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+  padding: var(--nav-h) 60px 40px;
+  max-width: 1276px;
+}
+
+a, a:visited { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+nav.top {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 5;
+  background: var(--bg);
+  padding: 39px 60px 26px;
+  font-size: 15px;
+}
+nav.top a { margin-right: 4px; }
+nav.top .sep { margin-right: 4px; color: var(--fg-faint); }
+nav.top a[aria-current="page"] { color: var(--fg); }
+
+.columns { display: flex; gap: 40px; align-items: flex-start; }
+
+.sidebar {
+  position: sticky;
+  top: var(--nav-h);
+  width: 336px;
+  flex-shrink: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  max-height: calc(100vh - var(--nav-h));
+  overflow-y: auto;
+  padding-bottom: 24px;
+}
+.sidebar h1 { font-size: 26px; font-weight: normal; margin-bottom: 14px; }
+.sidebar h1 .sub { display: block; font-size: 14px; color: var(--fg-dim); margin-top: 2px; }
+.sidebar p { margin-bottom: 14px; }
+.sidebar .contact { font-size: 13px; color: var(--fg-dim); margin-top: 14px; }
+.sidebar .links { font-size: 13px; margin-top: 10px; }
+.sidebar .links div { margin-bottom: 3px; }
+.sidebar hr { border: none; border-top: 1px dotted #ccc; margin: 16px 0; }
+
+.main { flex: 1; min-width: 0; max-width: 780px; }
+.main p { margin-bottom: 16px; }
+
+/* Article typography (Concepts) */
+.main h2 {
+  font-size: 22px; font-weight: normal; margin: 0 0 14px;
+  scroll-margin-top: calc(var(--nav-h) + 12px);
+}
+.main h2 ~ h2 { margin-top: 44px; border-top: 1px solid var(--rule); padding-top: 30px; }
+.main h3 { font-size: 17px; font-weight: normal; margin: 26px 0 10px; scroll-margin-top: calc(var(--nav-h) + 12px); }
+.main ul, .main ol { margin: 0 0 16px 1.4em; }
+.main li { margin-bottom: 6px; }
+.main .katex-display { margin: 18px 0; overflow-x: auto; overflow-y: hidden; padding: 2px 0; }
+.main .katex { font-size: 1.08em; }
+
+figure { margin: 22px 0 26px; }
+figure img { display: block; width: 100%; height: auto; }
+figcaption { font-size: 13px; color: var(--fg-dim); margin-top: 8px; line-height: 1.5; }
+figcaption b { color: var(--fg); font-weight: 600; }
+
+.toc h3 { font-size: 13px; font-weight: bold; margin: 0 0 7px; }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc; }
+.toc li { counter-increment: toc; margin-bottom: 4px; line-height: 1.45; }
+.toc a::before { content: counter(toc) "\00a0\00a0"; color: var(--fg-faint); }
+
+.note {
+  background: var(--box-bg); border: 1px solid var(--rule);
+  padding: 12px 14px; font-size: 14px; margin: 18px 0;
+}
+
+button, .btn {
+  font: inherit; font-size: 13px; cursor: pointer;
+  background: var(--btn-bg); color: var(--btn-fg);
+  border: none; padding: 5px 12px; border-radius: 3px;
+}
+button:hover { background: var(--btn-bg-hover); }
+button.ghost { background: transparent; color: var(--link); border: 1px solid var(--rule); }
+button.ghost:hover { background: var(--box-bg); }
+button:disabled { opacity: .5; cursor: default; }
+
+/* Prose code and tables. Shiki emits an INLINE background-color on `pre`, which
+   beats the `background` declared here -- so code blocks render on Shiki's dark
+   ground while the border, padding and size below still apply. That is how the
+   sibling site looks, so it is matched rather than corrected; `shikiConfig` in
+   astro.config.mjs is the one-line switch if it should be light. */
+.main pre {
+  background: var(--box-bg); border: 1px solid var(--rule);
+  padding: 12px 14px; overflow-x: auto; font-size: 12.5px;
+  line-height: 1.45; margin: 16px 0;
+}
+.main code { font-family: var(--mono); font-size: 0.92em; }
+.main :not(pre) > code {
+  background: var(--box-bg); border: 1px solid var(--rule);
+  padding: 0 3px; border-radius: 2px;
+}
+.main table { border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+.main th, .main td {
+  border: 1px solid var(--rule); padding: 5px 9px; text-align: left;
+}
+.main th { background: var(--box-bg); font-weight: 600; }
+.main td code { white-space: nowrap; }
+/* A wide table on a phone scrolls rather than forcing the page sideways. */
+.main .wide { overflow-x: auto; margin: 16px 0; }
+.main .wide table { margin: 0; }
+
+@media (max-width: 1000px) {
+  body { padding: var(--nav-h) 30px 30px; }
+  nav.top { padding: 39px 30px 26px; }
+  .sidebar { width: 290px; }
+}
+
+@media (max-width: 760px) {
+  :root { --nav-h: 70px; }
+  body { padding: var(--nav-h) 16px 24px; }
+  nav.top { padding: 24px 16px 20px; }
+  .columns { flex-direction: column; gap: 0; }
+  .sidebar { position: static; width: 100%; max-height: none; overflow: visible; }
+}

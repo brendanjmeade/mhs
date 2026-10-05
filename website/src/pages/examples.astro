@@ -1,0 +1,110 @@
+---
+import Base from "../layouts/Base.astro";
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+---
+<Base
+  title="mhs — Examples"
+  description="Move three slices through the field of a surface-breaking fault in a mollified Mindlin half space, and through the difference against the same fault in a full space."
+  current="examples"
+>
+  <Fragment slot="sidebar">
+    <h1>Examples<span class="sub">what the free surface is worth</span></h1>
+    <p>
+      The same fault as on the front page &mdash; 40&nbsp;&times;&nbsp;20&nbsp;km,
+      dipping 60&deg;, breaking the surface, 1&nbsp;m of uniform strike slip
+      &mdash; evaluated on a grid through the half space and read back three
+      slices at a time.
+    </p>
+    <p>
+      Two states and their difference. <b>Half space</b> is this kernel.
+      <b>Full space</b> is the same fault with the Mindlin image terms removed,
+      which is what you get from a classical triangular dislocation element in an
+      infinite medium. The difference is the free surface, by itself.
+    </p>
+    <div class="note">
+      At the free surface the half-space displacement is a median
+      <b>2.01&times;</b> the full-space one. That factor is why
+      <code>disp_matrix</code> cannot be short-circuited to the full-space
+      answer: the error would be the entire free-surface effect, which is
+      exactly the size that looks plausible.
+    </div>
+    <p class="contact">
+      The sampled box reaches above <i>z</i>&nbsp;=&nbsp;0. Those points are
+      outside the body and carry no data, so the body visibly ends at the grey
+      grid, which is the free surface.
+    </p>
+  </Fragment>
+
+  <div id="viewer">
+    <div class="panel">
+      <label data-ctl="state"><span>state</span></label>
+      <label data-ctl="field"><span>field</span></label>
+      <label data-ctl="map"><span>colours</span></label>
+    </div>
+    <div data-canvas class="canvas" aria-label="Three movable orthogonal slices through the stress and displacement field of a surface-breaking fault in an elastic half space"></div>
+    <div data-bar class="bar"></div>
+    <div class="panel slices">
+      <span class="lbl">slices</span>
+      <div class="rng" data-ctl="slice-x"><span>x</span></div>
+      <div class="rng" data-ctl="slice-y"><span>y</span></div>
+      <div class="rng" data-ctl="slice-z"><span>z</span></div>
+    </div>
+    <p data-status class="status">loading…</p>
+  </div>
+
+  <p class="cap">
+    <b>Every point inside the half space is drawn</b>, including those nearest
+    the fault where the field is largest and where a quadrature scheme is most
+    strained. Nothing is masked out, because the two states differ only in
+    whether the free surface is present &mdash; so hiding a region would hide
+    exactly the comparison this page is for. Colour is on a log scale; the
+    difference state shows the magnitude of a signed difference.
+  </p>
+  <p class="cap">
+    The field is stored quantised: log<sub>10</sub> into one byte per grid point,
+    254 levels, with zero reserved for &ldquo;outside the body&rdquo;. That is
+    not for file size &mdash; a float32 3-D texture simply cannot be linearly
+    filtered on roughly half of iOS devices, and it fails by rendering black with
+    no error raised. The quantisation error is bounded by arithmetic rather than
+    asserted: 254 levels across <i>d</i> decades put the levels
+    <i>d</i>/253 apart, so the worst relative error is
+    10<sup><i>d</i>/506</sup>&nbsp;&minus;&nbsp;1. The build measures what it
+    wrote against that bound and refuses to publish a payload that exceeds it.
+    See <a href={`${base}concepts/`}>Concepts</a> for what the eigenstress
+    subtraction means, and <a href={`${base}running/`}>Running</a> for the calls
+    that produced this.
+  </p>
+
+  <style is:global>
+    #viewer { margin-bottom: 18px; }
+    #viewer .canvas { width: 100%; min-height: 440px; cursor: grab; background: #fff; }
+    #viewer .canvas:active { cursor: grabbing; }
+    #viewer .canvas canvas { display: block; }
+    #viewer .panel {
+      display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+      margin-bottom: 10px; font-size: 13px;
+    }
+    #viewer .panel label { display: flex; align-items: center; gap: 6px; }
+    #viewer .panel label > span:first-child { color: var(--fg-dim); }
+    #viewer .panel .lbl { color: var(--fg-dim); }
+    #viewer .panel select { font: inherit; font-size: 13px; padding: 2px 4px; }
+    #viewer .panel .rng { display: flex; align-items: center; gap: 6px; }
+    #viewer .panel input[type="range"] { width: 120px; }
+    #viewer .panel .val { color: var(--fg-dim); min-width: 84px; font-variant-numeric: tabular-nums; }
+    #viewer .slices { margin-top: 10px; }
+    #viewer .bar { margin-top: 8px; }
+    #viewer .bar .strip { height: 10px; border: 1px solid var(--rule); }
+    #viewer .bar .ends {
+      display: flex; justify-content: space-between; font-size: 12px;
+      color: var(--fg-dim); margin-top: 3px; font-variant-numeric: tabular-nums;
+    }
+    #viewer .bar .ends .mid { color: var(--fg-faint); }
+    #viewer .status { font-size: 13px; color: var(--fg-dim); margin-top: 8px; }
+    .cap { font-size: 13px; color: var(--fg-dim); }
+    .cap b { color: var(--fg); font-weight: 600; }
+  </style>
+  <script>
+    import { startViewer } from "../viz/controls";
+    startViewer(document.getElementById("viewer")!, import.meta.env.BASE_URL);
+  </script>
+</Base>

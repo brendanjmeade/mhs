@@ -1,0 +1,176 @@
+## Install
+
+Two runtime dependencies, numpy and numba, and the omissions are the design:
+no sympy, no scipy, no matplotlib. Every closed form here is elementary, and
+`import mhs` is gated to stay within a second of `import numba` so it can sit in
+a hot loop without apology.
+
+```bash
+pip install -e ".[test,tde]"
+python tests/run_all.py --suite mhs      # the oracle-free suite, 10 gates
+pytest -m "not slow" tests/test_gates.py
+```
+
+The `tde` extra pulls in `cutde`, which two gates need and which they **fail**
+rather than skip without — a skipped external anchor is an anchor that silently
+stopped holding. The `oracle` extra adds sympy and matplotlib for the nightly
+parity suite only; importing that reference costs 14 s, because it builds and
+lambdifies about ninety symbolic matrices at module scope.
+
+## Matrices, not fields
+
+Every entry point returns a **matrix**, not a field, so the geometry is paid for
+once and then contracted against as many slip vectors as you like.
+
+```python
+import numpy as np, mhs
+
+mat  = mhs.Material(mu=30.0, lam=30.0)              # (mu, lam), never nu
+G    = mhs.disp_matrix(obs, tris, mat, eps=0.1)     # (n_obs, 3, n_src, 3)
+u    = np.einsum("oisk,sk->oi", G, slip)            # slip is CARTESIAN
+
+S    = mhs.stress_matrix(obs, tris, mat, eps=0.1)   # (n_obs, 3, 3, n_src, 3)
+                                                    # ELASTIC: eigenstress removed
+```
+
+Six conventions, each stated in exactly one place in the source:
+
+- **Half space `z <= 0`**, free surface at `z = 0`, sources buried. An observer
+  or a vertex above the surface is refused rather than extrapolated.
+- **`(mu, lam)`, never `nu`.** `1/(1 - 2*nu)` diverges toward incompressibility,
+  and a `lam`/`mu` swap is invisible at `nu = 1/4` — which is why the kernel
+  gates run away from it. `Material.from_mu_nu` is the one boundary adapter.
+- **Cartesian slip.** `mhs.tdcs` is the single statement of the per-triangle
+  (strike, dip, tensile) frame — cutde's convention, with **dip pointing up** —
+  and `to_cartesian` / `from_cartesian` cross it. `verify_cutde_limit` reads the
+  frame from there rather than carrying a copy, which is what anchors the
+  convention to something external instead of to a second copy of itself.
+- **Full 3 × 3 tensors, not Voigt-6**, so no component ordering and no
+  factor-of-two convention is stated anywhere in the package.
+- **`order` of 0, 1 or 2** selects P0, P1 or P2 nodal slip. The source axis
+  becomes slip DOFs, element-major with the node index fastest. Uniform nodal
+  slip reproduces the P0 answer exactly — gated as an identity, which is also
+  what catches a partial write into the wider buffer.
+- **`eps > 0`**, scalar or one per source triangle. There is no `"auto"`: that
+  rule needs a mesh spacing, and these functions take a vertex array.
+
+## On-fault interaction
+
+For on-fault stress interaction — the object Coulomb, rate-and-state and
+earthquake-cycle models actually want — ask for it directly rather than
+contracting a stress matrix you cannot allocate:
+
+```python
+K = mhs.interaction_matrix(tris, mat, eps=0.1,          # (n, n, 3, 3)
+                           receiver=("strike", "dip", "normal"),
+                           source=("strike", "dip", "tensile"))
+
+K = mhs.interaction_matrix(tris, mat, eps=0.1,          # (n, n, 1, 1), 0.75 GiB
+                           receiver="strike", source="strike")  # at n = 10k
+
+T = mhs.traction_matrix(obs, normals, tris, mat, eps=0.1)   # (n_obs, 3, n_src, 3)
+```
+
+The component selection happens **inside** the assembly loop, so the full tensor
+is never materialised. Same arithmetic to 10⁻¹⁵ — gated as an identity against
+`stress_matrix`, not as a tolerance — same speed, and between 3× and 27× less
+memory. Receivers and sources can be different element sets via `obs_tris`,
+which is what makes a rectangular block of a larger matrix addressable.
+
+The figure on the <a href="../">front page</a> is one column of such a matrix:
+256 triangles, `receiver="strike"` and `receiver="normal"` against
+`source="strike"`, combined into ΔCFS with an apparent friction of 0.6.
+
+## Memory, and the refusal
+
+A stress matrix is **216 bytes per observation/source pair**, so 10k × 10k is
+20.1 GiB. The ceiling **refuses** rather than trying, because a request that
+size does not fail on most machines — it swaps, and presents as a hang with no
+diagnosis. The refusal carries the arithmetic that makes the next step obvious.
+
+|  | bytes/pair | 10k × 10k |
+|---|---|---|
+| `stress_matrix` | 216 | 20.1 GiB |
+| `disp_matrix`, `traction_matrix` | 72 | 6.7 GiB |
+| `interaction_matrix`, 2 shear × 2 slip | 32 | 3.0 GiB |
+| `interaction_matrix`, strike only | 8 | 0.75 GiB |
+
+Nothing about the calculation changes across those rows — the component
+selection is only how much of the result you keep. The other escapes are `out=`
+(a memmap, a reused slab, or a float32 buffer to halve it) and input slicing,
+with `mhs.chunking.chunk_plan()` reporting the numbers without allocating
+anything. At `order > 0` the counts are per DOF rather than per element, so P1
+is 9× and P2 is 36× the pair count of P0.
+
+## Across cores
+
+Each source element owns a disjoint column slice of the output, so the build
+parallelises over sources with no sharing at all. Use **processes**:
+
+```python
+import functools, mhs, mhs.parallel as mp
+
+call = functools.partial(mhs.interaction_matrix, material=mat, eps=0.1,
+                         obs_tris=tris, receiver="strike", source="strike")
+K = mp.by_source(call, tris, workers=12, source_axis=1, tris_kw="tris")
+```
+
+| workers | s | µs/pair | speed-up |
+|---|---|---|---|
+| 1 | 30.1 | 47.1 | 1.00× |
+| 2 | 16.5 | 25.7 | 1.83× |
+| 4 | 9.0 | 14.0 | 3.36× |
+| 8 | 4.7 | 7.3 | 6.41× |
+| 12 | 3.5 | 5.5 | **8.50×** |
+
+Measured on 800 elements, 640k pairs, and **bitwise** identical to the serial
+result, because each source's block depends on no other source. Extrapolating
+that rate, a 10k × 10k interaction matrix is about 9 minutes against roughly an
+hour on one core — an extrapolation, not a timed run.
+
+Two things in there are counter-intuitive and both were measured:
+
+- **Threads do not work.** The per-source loop looks like an obvious `prange`
+  and is not: threading it gives 1.28× at two threads and then gets *worse* —
+  1.05× at four, 0.83× at six. The writes are genuinely race-free; no-race was
+  never the binding constraint. The body is many small numpy calls and the GIL
+  is held almost continuously.
+- **Multi-threaded BLAS is actively harmful here.** The matmuls are small, so
+  BLAS's own threads fight the process pool for cores and lose: 1.83× with one
+  BLAS thread against 1.61× with sixteen, before any process parallelism at all.
+  `by_source` therefore pins the threading environment for the **children only**
+  and restores it after. Importing `mhs` never changes it — a library that sets
+  `OMP_NUM_THREADS` at import time has decided something that belongs to the
+  program using it.
+
+<div class="note">
+The call site must be guarded. The workers are **spawned**, so they re-import
+the module they were launched from; from a script that means
+`if __name__ == "__main__":`, and from a function, notebook or interactive
+session it is automatic. Without it every child re-runs the script and spawns
+its own children, and the parent sees only a dead pool — so `by_source` catches
+that and says this instead.
+</div>
+
+## Checked, not trusted
+
+Fourteen gates, and two runners that assert different things on purpose:
+`run_all.py` spawns each gate and asserts its **exit code**; `test_gates.py`
+imports each gate and asserts its **return value**. Both then cross-check the
+printed verdict. A gate whose return value said PASS while its output said FAIL
+is the worst of both, and neither runner alone can see it. The per-suite gate
+count is itself asserted, because discovery is a glob: pointed at the wrong
+directory it finds nothing, every "all passed" check holds trivially, and the
+exit code is zero. A green empty suite is the one thing a test runner must not
+be able to report.
+
+| workflow | when | what |
+|---|---|---|
+| `gates.yml` | every push, **no path filter** | 10 gates × (ubuntu, macOS) × (py3.11, py3.13) |
+| `parity.yml` | nightly | the 4 sympy-backed oracle and parity gates |
+
+No path filter, because a path-filtered test job reports success for a commit it
+never tested. And macOS is in the matrix for one specific reason: numba
+`parallel=True` kernels must never be called from Python threads, and that crash
+is macOS-only — a Linux-only CI would never witness a violation of the rule that
+most constrains the assembly path.

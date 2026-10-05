@@ -1,0 +1,39 @@
+---
+import Base from "../layouts/Base.astro";
+import About from "../components/About.astro";
+import Concepts from "../content/concepts.mdx";
+
+const sections = [
+  { id: "the-half-space-you-do-not-have-to-solve-for",
+    label: "The half space you do not have to solve for" },
+  { id: "mollification-and-the-mindlin-image",
+    label: "Mollification, and the Mindlin image" },
+  { id: "every-mollified-jump-carries-an-eigenstress",
+    label: "Every mollified jump carries an eigenstress" },
+  { id: "what-that-buys-and-what-it-does-not",
+    label: "What that buys, and what it does not" },
+  { id: "quadrature-where-it-must-be-closed-form-where-it-can-be",
+    label: "Quadrature where it must be, closed form where it can be" },
+];
+---
+<Base
+  title="mhs — Concepts"
+  description="How the mollified Mindlin half-space kernel works: Cortez regularization, the image R- and Q-families, the eigenstress every smeared jump carries, and the two routes that were measured and foreclosed."
+  current="concepts"
+>
+  <Fragment slot="sidebar">
+    <h1>Concepts<span class="sub">how the kernel works</span></h1>
+    <nav class="toc">
+      <h3>Contents</h3>
+      <ol>
+        {sections.map((s) => (
+          <li><a href={`#${s.id}`}>{s.label}</a></li>
+        ))}
+      </ol>
+    </nav>
+    <hr />
+    <About />
+  </Fragment>
+
+  <Concepts />
+</Base>

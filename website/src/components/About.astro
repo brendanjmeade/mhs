@@ -1,0 +1,27 @@
+---
+// Sidebar block shared by the home, Concepts and Running pages.
+---
+<p>
+  <b>mhs</b> gives the mollified Mindlin half-space Green's functions for
+  triangular dislocations, as <i>matrices</i>. Following Cortez, the point force
+  is replaced by a smooth blob of width &epsilon; rather than softened by hand,
+  so a fault has a finite width and stress is defined on the fault itself, where
+  classical dislocation theory returns a value ordinary integration does not
+  define. The free surface is carried by the Mindlin image terms, not by a
+  meshed boundary.
+</p>
+<p>
+  Because slip is prescribed and the half space is homogeneous, <i>nothing is
+  solved</i> &mdash; no linear system, no collocation on a boundary, no box
+  truncation. What the library builds is the on-fault interaction matrix that
+  Coulomb, rate-and-state and earthquake-cycle models want.
+</p>
+<div class="links">
+  <div>
+    Code: <a href="https://github.com/brendanjmeade/mhs">github.com/brendanjmeade/mhs</a>
+  </div>
+</div>
+<div class="contact">
+  Developed by <a href="https://brendanjmeade.github.io/">Brendan Meade</a>
+  and Claude.
+</div>

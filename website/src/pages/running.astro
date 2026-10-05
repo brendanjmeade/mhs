@@ -1,0 +1,35 @@
+---
+import Base from "../layouts/Base.astro";
+import About from "../components/About.astro";
+import Running from "../content/running.mdx";
+
+const sections = [
+  { id: "install", label: "Install" },
+  { id: "matrices-not-fields", label: "Matrices, not fields" },
+  { id: "on-fault-interaction", label: "On-fault interaction" },
+  { id: "memory-and-the-refusal", label: "Memory, and the refusal" },
+  { id: "across-cores", label: "Across cores" },
+  { id: "checked-not-trusted", label: "Checked, not trusted" },
+];
+---
+<Base
+  title="mhs — Running"
+  description="Installing and calling mhs: the matrix entry points and their conventions, the on-fault interaction matrix, what each form costs in memory, process parallelism, and the gate suite."
+  current="running"
+>
+  <Fragment slot="sidebar">
+    <h1>Running<span class="sub">calling it, and what it costs</span></h1>
+    <nav class="toc">
+      <h3>Contents</h3>
+      <ol>
+        {sections.map((s) => (
+          <li><a href={`#${s.id}`}>{s.label}</a></li>
+        ))}
+      </ol>
+    </nav>
+    <hr />
+    <About />
+  </Fragment>
+
+  <Running />
+</Base>

@@ -1,0 +1,78 @@
+---
+import Base from "../layouts/Base.astro";
+import About from "../components/About.astro";
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+---
+<Base
+  title="mhs"
+  description="Mollified Mindlin half-space Green's functions for triangular dislocations, as matrices: on-fault stress interaction in a half space, with stress defined on the fault itself."
+  current="home"
+>
+  <Fragment slot="sidebar">
+    <h1>mhs<span class="sub">mollified Mindlin half-space Green's functions</span></h1>
+    <About />
+  </Fragment>
+
+  <div id="hero">
+    <div data-canvas class="canvas" aria-label="A surface-breaking fault dipping into an elastic half space, its 256 triangular patches coloured by the Coulomb stress change caused by slip on one chosen patch"></div>
+    <div data-bar class="bar"></div>
+    <p data-status class="status">loading…</p>
+    <div class="panel">
+      <span class="lbl">show</span>
+      <button data-comp="cfs">Coulomb</button>
+      <button data-comp="shear" class="ghost">shear</button>
+      <button data-comp="normal" class="ghost">normal</button>
+    </div>
+  </div>
+
+  <p class="cap">
+    <b>One row of an interaction matrix.</b> A 40&nbsp;&times;&nbsp;20&nbsp;km
+    fault dipping 60&deg; and breaking the free surface, cut into 256 triangles,
+    in a half space with &mu;&nbsp;=&nbsp;&lambda;&nbsp;=&nbsp;30&nbsp;GPa.
+    One patch is the <i>source</i>: it slips 1&nbsp;m, and every patch is
+    coloured by the stress change that slip causes there. <b>Red</b> promotes
+    slip, <b>blue</b> opposes it, and the scale is symmetric-log about zero.
+    Drag to orbit; click any patch to move the source.
+  </p>
+  <p class="cap">
+    The source patch is always blue, and that is not a choice of colours &mdash;
+    a patch that slips relieves the shear stress that was driving it, so the
+    diagonal of this matrix is negative everywhere. Here it runs from
+    &minus;14.5 to &minus;12.4&nbsp;MPa, and the build refuses to write the
+    payload if any entry comes out positive. <b>Coulomb</b> is the shear change
+    resolved on the receiver's own strike direction plus 0.6 times the normal
+    change; the <b>shear</b> and <b>normal</b> views are those two terms alone.
+    The normal term is much the smaller &mdash; a factor of 18 at the peak and
+    47 in r.m.s. &mdash; so on this geometry Coulomb is shear plus a correction.
+    See <a href={`${base}concepts/`}>Concepts</a> for why the free surface costs
+    nothing to impose here, <a href={`${base}running/`}>Running</a> for the call
+    that builds this matrix, and <a href={`${base}examples/`}>Examples</a> for
+    the field it radiates into the half space.
+  </p>
+
+  <style>
+    #hero { margin-bottom: 18px; }
+    #hero .canvas { width: 100%; min-height: 430px; cursor: grab; background: #fff; }
+    #hero .canvas:active { cursor: grabbing; }
+    #hero .canvas canvas { display: block; }
+    #hero .bar { margin-top: 10px; }
+    #hero .bar :global(.strip) { height: 10px; border: 1px solid var(--rule); }
+    #hero .bar :global(.ends) {
+      display: flex; justify-content: space-between; font-size: 12px;
+      color: var(--fg-dim); margin-top: 3px; font-variant-numeric: tabular-nums;
+    }
+    #hero .bar :global(.ends .mid) { color: var(--fg-faint); }
+    #hero .status { font-size: 13px; color: var(--fg-dim); margin-top: 8px; }
+    #hero .panel {
+      display: flex; gap: 8px; align-items: center; margin-top: 10px;
+      font-size: 13px;
+    }
+    #hero .panel .lbl { color: var(--fg-dim); margin-right: 2px; }
+    .cap { font-size: 13px; color: var(--fg-dim); margin-top: 10px; }
+    .cap b { color: var(--fg); font-weight: 600; }
+  </style>
+  <script>
+    import { startFault } from "../viz/fault";
+    startFault(document.getElementById("hero")!, import.meta.env.BASE_URL);
+  </script>
+</Base>
