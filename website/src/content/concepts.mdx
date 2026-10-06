@@ -27,14 +27,17 @@ number on both sides:
 |  | discretized free surface | this kernel |
 |---|---|---|
 | where the error lives | stress within ~1 element of the solved boundary | the free-surface traction residual |
-| how large | 10–45% | 3.3 × 10⁻³ at ε/h = 0.1; 3.3 × 10⁻⁵ at ε/h = 0.01 |
+| how large | 10–45% | 0.49% at ε/h = 0.1, worst point on the surface |
 | improves as ε falls? | no — already at its optimum | yes, as ε² |
 | far-field truncation | box-size dependent | none |
 
 Those two rows are not the same quantity, and saying so matters: the left column
 is an error in a stress a reader would use, the right is the size of a traction
-that ought to vanish on a surface. The second is the honest statement of this
-kernel's accuracy class, and the section below says why it cannot be made zero.
+that ought to vanish on a surface. Nor can the second be converted into the
+first — that would need an exact mollified half-space solution to difference
+against, and the section below is about why there isn't one. What the right
+column is, is the honest statement of this kernel's accuracy class, and the one
+that needs no reference solution to make.
 
 ## Mollification, and the Mindlin image
 
@@ -115,14 +118,45 @@ independent reference; it is *not* a statement about the free surface, and the
 two are worth keeping apart.
 
 **What it does not.** The free-surface traction condition is satisfied to
-**O(ε²)**, not exactly: 3.3 × 10⁻³ at ε/h = 0.1, 3.3 × 10⁻⁵ at ε/h = 0.01,
-with the order in ε measured at 1.90–1.96. Classical Mindlin gives
-$t_{3k} = 0$ at $z = 0$ identically; this kernel gives it only to second order,
-and the residual is worst as $\nu \to \tfrac{1}{2}$ — roughly twenty times
-larger at ν = 0.49 than at ν = 0.25. That is structural rather than incidental:
-the image terms carrying the $(1-2\nu)$ prefactor are exactly the
-$1/Q_\varepsilon$ and $\log Q_\varepsilon$ family whose mollification is the
-approximate part.
+**O(ε²)**, not exactly. Classical Mindlin gives $t_{3k} = 0$ at $z = 0$
+identically; this kernel gives it only to second order.
+
+That residual is **the one free-surface number that can be stated without a
+reference solution**, which is why it is the one to quote. Traction-free at
+$z = 0$ is an exact condition the mollified problem must satisfy in its own
+right, so measuring how far it misses needs no ground truth. And no ground truth
+is available: there is no exact mollified half-space solution to difference
+against — that is precisely what the foreclosure below rules out. Comparing
+against an *unmollified* kernel instead mixes this error with the mollification
+working as intended, and cannot separate the two, because both are O(ε²).
+
+On a 40 × 20 km fault dipping 60°, buried 5 km, 64 elements (h = 5 km), 1 m of
+slip and ν = 0.25, the spurious traction as a fraction of the peak in-plane
+surface stress:
+
+| ε/h | 0.4 | 0.2 | 0.1 | 0.05 |
+|---|---|---|---|---|
+| worst on the free surface | 6.8% | 1.9% | **0.49%** | 0.12% |
+
+with the order in ε measured at 1.85, 1.96, 1.99. So at a production ε/h = 0.1,
+the free surface carries a spurious traction of about half a percent of the
+peak surface stress at the single worst point, and it decays quickly away from
+the fault: the median is 1.7 × 10⁻³ within 5 km of the surface trace,
+1.3 × 10⁻⁴ at 10–20 km and 1.0 × 10⁻⁵ at 20–40 km.
+
+<div class="note">
+Two ways to misread that row, both of which caught us. The worst value is a
+**supremum**, so it has to be converged before it is quoted — sampling the
+surface every 5 km understates it by 29%. And a "typical" value given as a
+median over a box is a statement about the box: on this model it moves from
+1.5 × 10⁻⁴ to 3.0 × 10⁻⁹ as the box grows from ±30 km to ±240 km. Distance from
+the surface trace is the domain-free way to say it.
+</div>
+
+The residual is worst as $\nu \to \tfrac{1}{2}$, and structurally so: the image
+terms carrying the $(1-2\nu)$ prefactor are exactly the $1/Q_\varepsilon$ and
+$\log Q_\varepsilon$ family whose mollification is the approximate part. On a
+point source the residual at ν = 0.49 is forty times the one at ν = 0.25.
 
 An exact free surface was derived, measured, and **foreclosed**. The route was a
 convolution rule applied to Papkovich–Neuber potentials, and it is exact only

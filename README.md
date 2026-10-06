@@ -223,12 +223,45 @@ top element of a surface-breaking fault.
 
 The honest limits:
 
-- **The free-surface condition is satisfied to O(eps^2), not exactly.** Measured
-  3.3e-3 at eps/h = 0.1 and 3.3e-5 at eps/h = 0.01, falling as eps^2 (order
-  1.90-1.96 measured). This is a property of the mollified *kernel*, not of the
-  integration, and it is the number to quote: an exact free surface via the
-  potential-convolution route is foreclosed, because the Cortez blob has
-  algebraic tails. `docs/derivation.md` has the proof and the measurements.
+- **The free-surface condition is satisfied to O(eps^2), not exactly.** A
+  property of the mollified *kernel*, not of the integration: an exact free
+  surface via the potential-convolution route is foreclosed, because the Cortez
+  blob has algebraic tails. `docs/derivation.md` has the proof.
+
+  **It is the one free-surface number that can be stated without a reference
+  solution**, and that is why it is the number to quote. Traction-free at
+  `z = 0` is an exact condition the mollified problem must satisfy in its own
+  right, so the residual needs no ground truth. There is no exact mollified
+  half-space solution to difference against -- that is exactly what step 7
+  foreclosed -- so comparing against an *unmollified* kernel (cutde) mixes this
+  error with the mollification working as intended, and cannot separate them:
+  both are O(eps^2). Measured on one geometry, the two were the same size.
+
+  `verify_free_surface` measures it on a point source as
+  `max|t_3k(z=0)| / max|sigma|` one unit below; run it and it prints the table.
+  At nu = 0.25 that is 1.1e-2, 1.8e-3, 4.5e-4, 1.1e-4 for eps = 0.5, 0.2, 0.1,
+  0.05, order 1.96 to 2.00.
+
+  At fault scale, as a fraction of the PEAK in-plane surface stress -- a
+  40 x 20 km fault dipping 60 deg, buried 5 km, 64 elements so h = 5 km, 1 m
+  slip, nu = 0.25:
+
+  | eps/h | 0.4 | 0.2 | 0.1 | 0.05 |
+  |---|---|---|---|---|
+  | worst on the free surface | 6.8% | 1.9% | **0.49%** | 0.12% |
+
+  order 1.85, 1.96, 1.99. Two traps in reading that row. The worst value is a
+  SUPREMUM and must be converged: sampling the surface every 5 km understates it
+  by 29%, and it settles only below ~1 km. And a "typical" value quoted as a
+  median over a box is a statement about the box -- it moves from 1.5e-4 to
+  3.0e-9 as the box grows from +-30 km to +-240 km. Report it against distance
+  from the surface trace instead; at eps/h = 0.1 the median is 1.7e-3 within
+  5 km of the trace, 1.3e-4 at 10-20 km, 1.0e-5 at 20-40 km.
+
+  **nu -> 1/2 is the bad case**, and structurally so: the image terms carrying
+  the `(1-2nu)` prefactor are exactly the `1/Q` and `log Q` family whose
+  mollification is the approximate part. The point-source residual at nu = 0.49
+  is 2.0e-2 where nu = 0.25 gives 4.5e-4 -- forty times worse.
 - **Cost is per pair, but the BATCH SIZE sets it.** Measured for `stress_matrix`
   against 256 source triangles, one call, JIT warm:
 
