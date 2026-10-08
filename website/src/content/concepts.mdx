@@ -1,12 +1,13 @@
 # Singularity free homogeneous half-space triangular dislocation elements
 
-## Mollification and the Mindlin image
-
-Following Cortez, the point force is replaced by a smooth blob of width ε,
+Following Cortez ([2001](https://doi.org/10.1137/S106482750038146X),
+[Cortez et al. 2005](https://doi.org/10.1063/1.1830486),
+[Ferranti and Cortez 2024](https://doi.org/10.1016/j.jcp.2024.113004)), the
+point force is replaced by a smooth blob of width ε,
 
 $$
 \phi_\varepsilon(r) = \frac{15\,\varepsilon^4}{8\pi}\,
-\bigl(r^2 + \varepsilon^2\bigr)^{-7/2},
+\bigl(r^2 + \varepsilon^2\bigr)^{-7/2}
 $$
 
 and the elastostatic equations are then solved exactly for that body force:
@@ -14,20 +15,11 @@ and the elastostatic equations are then solved exactly for that body force:
 $$
 \mu\,\nabla^2 \mathbf{u}
 + (\lambda + \mu)\,\nabla(\nabla\!\cdot\!\mathbf{u})
-+ \mathbf{f}\,\phi_\varepsilon = \mathbf{0}.
++ \mathbf{f}\,\phi_\varepsilon = \mathbf{0}
 $$
 
 The result is singular nowhere and still satisfies the Cauchy equations for static elasticity. A fault therefore has a finite width ε, and stress is defined on the fault, where classical dislocation theory returns a value ordinary integration does not define.  A half space is approximated using a Mindlin image type approach for a mirrored source.
 
 ## Known limitations
 
-1. On-fault stress is at machine precision (approximately 10⁻¹⁵) at every
-realistic collocation point, including the top element of a fault that breaks
-the surface.
-
-2. The free-surface traction condition is only satisfied to O(ε²), not exactly. 
-
-
-
-
-
+1. The free-surface traction condition is only satisfied to O(ε²), not exactly.
