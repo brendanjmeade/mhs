@@ -1,0 +1,35 @@
+{
+  "title": "mhs: mollified Mindlin half-space Green's functions for triangular dislocation elements",
+  "upload_type": "software",
+  "access_right": "open",
+  "license": "mit",
+  "creators": [
+    {
+      "name": "Meade, Brendan J.",
+      "affiliation": "Department of Earth and Planetary Sciences, Harvard University"
+    }
+  ],
+  "description": "<p>Mollified Mindlin half-space triangular-dislocation Green's functions, as matrices, for a homogeneous half space with no topography.</p><p>Following Cortez's method of regularized Stokeslets, the point force is replaced by a smooth blob of width epsilon and the elastostatic equations are then solved exactly for that body force, so the kernels are singular nowhere and still satisfy the equations of static elasticity. A fault therefore has a finite width, and stress is defined on the fault itself, where classical dislocation theory returns a value that ordinary integration does not define. The free surface is carried by Mindlin image terms rather than by a meshed boundary, so nothing is solved: there is no linear system, no collocation on a boundary and no box truncation. The library builds the on-fault interaction matrices used in static stress transfer, rate-and-state and earthquake-cycle models.</p><p>Known limitation: the free-surface traction condition is satisfied to O(epsilon^2) rather than exactly. Work in progress, developed with Claude.</p>",
+  "keywords": [
+    "half space",
+    "Mindlin",
+    "triangular dislocation",
+    "elasticity",
+    "geodesy",
+    "Green's functions",
+    "mollified",
+    "regularized Stokeslets"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "10.48550/arXiv.2609.15601",
+      "relation": "references",
+      "scheme": "doi"
+    },
+    {
+      "identifier": "https://brendanjmeade.github.io/mhs/",
+      "relation": "isDocumentedBy",
+      "scheme": "url"
+    }
+  ]
+}

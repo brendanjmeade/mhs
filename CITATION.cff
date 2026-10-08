@@ -1,0 +1,53 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using these metadata."
+title: "mhs: mollified Mindlin half-space Green's functions for triangular dislocation elements"
+abstract: >-
+  Mollified Mindlin half-space triangular-dislocation Green's functions, as
+  matrices, for a homogeneous half space with no topography. Following Cortez's
+  method of regularized Stokeslets, the point force is replaced by a smooth blob
+  of width epsilon and the elastostatic equations are then solved exactly for
+  that body force, so the kernels are singular nowhere and still satisfy the
+  equations of static elasticity. A fault therefore has a finite width, and
+  stress is defined on the fault itself. The free surface is carried by Mindlin
+  image terms rather than by a meshed boundary. The library builds the on-fault
+  interaction matrices used in static stress transfer, rate-and-state and
+  earthquake-cycle models.
+type: software
+authors:
+  - family-names: Meade
+    given-names: "Brendan J."
+    affiliation: "Department of Earth and Planetary Sciences, Harvard University"
+license: MIT
+repository-code: "https://github.com/brendanjmeade/mhs"
+url: "https://brendanjmeade.github.io/mhs/"
+version: "0.1.0"
+date-released: "2026-10-08"
+keywords:
+  - half space
+  - Mindlin
+  - triangular dislocation
+  - elasticity
+  - geodesy
+  - Green's functions
+  - mollified
+  - regularized Stokeslets
+references:
+  - type: article
+    title: "Three dimensional non-singular mollified elastic dislocation theory for extended width fault zones and inhomogeneous boundary element models"
+    authors:
+      - family-names: Meade
+        given-names: "Brendan J."
+    year: 2026
+    doi: "10.48550/arXiv.2609.15601"
+  - type: article
+    title: "The Method of Regularized Stokeslets"
+    authors:
+      - family-names: Cortez
+        given-names: Ricardo
+    journal: "SIAM Journal on Scientific Computing"
+    volume: 23
+    issue: 4
+    start: 1204
+    end: 1225
+    year: 2001
+    doi: "10.1137/S106482750038146X"
