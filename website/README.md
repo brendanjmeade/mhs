@@ -40,6 +40,11 @@ if the shear self-interaction diagonal is not negative everywhere, because that
 single fact is what fixes the meaning of the colours, and getting it backwards
 would invert the caption and still look plausible.
 
+The page currently shows **shear only**, so it fetches `shear.bin` and nothing
+else. `normal.bin` and `cfs.bin` still ship — 256 kB each, never requested by a
+visitor — so that restoring the Coulomb view is a page edit rather than a
+regeneration. Delete them if that stops being worth 512 kB in the repo.
+
 `volume` builds the Examples viewer: a half space and a full space on one grid,
 plus their difference, three fields each. Start coarse — `--spacing 4` runs in
 under a minute and tells you what the real one will cost. Observer chunks are

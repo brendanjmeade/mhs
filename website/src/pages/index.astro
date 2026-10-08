@@ -14,15 +14,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
   </Fragment>
 
   <div id="hero">
-    <div data-canvas class="canvas" aria-label="A surface-breaking fault dipping into an elastic half space, its 256 triangular patches coloured by the Coulomb stress change caused by slip on one chosen patch"></div>
+    <div data-canvas class="canvas" aria-label="A surface-breaking fault dipping into an elastic half space, its 256 triangular patches coloured by the shear stress change caused by slip on one chosen patch"></div>
     <div data-bar class="bar"></div>
     <p data-status class="status">loading…</p>
-    <div class="panel">
-      <span class="lbl">show</span>
-      <button data-comp="cfs">Coulomb</button>
-      <button data-comp="shear" class="ghost">shear</button>
-      <button data-comp="normal" class="ghost">normal</button>
-    </div>
   </div>
 
   <p class="cap">
@@ -30,8 +24,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     fault dipping 60&deg; and breaking the free surface, cut into 256 triangles,
     in a half space with &mu;&nbsp;=&nbsp;&lambda;&nbsp;=&nbsp;30&nbsp;GPa.
     One patch is the <i>source</i>: it slips 1&nbsp;m, and every patch is
-    coloured by the stress change that slip causes there. <b>Red</b> promotes
-    slip, <b>blue</b> opposes it, and the scale is symmetric-log about zero.
+    coloured by the <b>shear stress change</b> that slip causes there, resolved
+    on the receiving patch's own strike direction. <b>Red</b> promotes slip,
+    <b>blue</b> opposes it, and the scale is symmetric-log about zero.
     Drag to orbit; click any patch to move the source.
   </p>
   <p class="cap">
@@ -39,11 +34,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     a patch that slips relieves the shear stress that was driving it, so the
     diagonal of this matrix is negative everywhere. Here it runs from
     &minus;14.5 to &minus;12.4&nbsp;MPa, and the build refuses to write the
-    payload if any entry comes out positive. <b>Coulomb</b> is the shear change
-    resolved on the receiver's own strike direction plus 0.6 times the normal
-    change; the <b>shear</b> and <b>normal</b> views are those two terms alone.
-    The normal term is much the smaller &mdash; a factor of 18 at the peak and
-    47 in r.m.s. &mdash; so on this geometry Coulomb is shear plus a correction.
+    payload if any entry comes out positive.
     See <a href={`${base}concepts/`}>Concepts</a> for why the free surface costs
     nothing to impose here, <a href={`${base}running/`}>Running</a> for the call
     that builds this matrix, and <a href={`${base}examples/`}>Examples</a> for
@@ -63,11 +54,6 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     }
     #hero .bar :global(.ends .mid) { color: var(--fg-faint); }
     #hero .status { font-size: 13px; color: var(--fg-dim); margin-top: 8px; }
-    #hero .panel {
-      display: flex; gap: 8px; align-items: center; margin-top: 10px;
-      font-size: 13px;
-    }
-    #hero .panel .lbl { color: var(--fg-dim); margin-right: 2px; }
     .cap { font-size: 13px; color: var(--fg-dim); margin-top: 10px; }
     .cap b { color: var(--fg); font-weight: 600; }
   </style>

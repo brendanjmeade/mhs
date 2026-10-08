@@ -40,12 +40,6 @@ export interface FaultPayload {
 
 export type Component = "cfs" | "shear" | "normal";
 
-export const COMPONENT_LABEL: Record<Component, string> = {
-  cfs: "Coulomb",
-  shear: "shear",
-  normal: "normal",
-};
-
 /** Symmetric-log into [0, 1], with 0 mapped exactly to the centre. */
 function norm(v: number, vmax: number): number {
   const d = Math.log10(1 + vmax / V0);
@@ -66,7 +60,7 @@ export class FaultScene {
   private tris: number[][][];
   private table: ReturnType<typeof lut>;
   private data: Record<string, Float32Array> = {};
-  private comp: Component = "cfs";
+  private comp: Component = "shear";
   private source = 0;
   private vmax = 1;
   private n: number;
@@ -303,11 +297,11 @@ export async function startFault(root: HTMLElement, baseUrl: string) {
     return a;
   };
 
-  await want("cfs");
+  await want("shear");
   // Start from a patch partway down the fault rather than index 0, which is a
   // corner and the least representative element there is.
   const start = Math.floor(p.triangles.length * 0.42);
-  scene.select("cfs", start);
+  scene.select("shear", start);
   scene.start();
 
   const bar = root.querySelector<HTMLElement>("[data-bar]");
@@ -326,38 +320,17 @@ export async function startFault(root: HTMLElement, baseUrl: string) {
     bar.append(strip, ends);
   };
 
-  scene.onSelect((i, v, comp) => {
+  scene.onSelect((i, v) => {
     if (!status) return;
     const c = p.centroids[i];
-    // The shear and Coulomb rows have a negative diagonal as a matter of
-    // physics -- a patch that slips relieves its own driving stress -- so that
-    // is worth saying. The normal row's diagonal carries no such guarantee, so
-    // it is reported without the explanation.
-    const own = comp === "normal"
-      ? `the normal traction on the patch itself is <b>${v.toFixed(2)} MPa</b>`
-      : `it unloads itself by <b>${Math.abs(v).toFixed(2)} MPa</b>`;
+    // The shear diagonal is negative as a matter of physics -- a patch that
+    // slips relieves its own driving stress -- so the figure can say so.
     status.innerHTML =
-      `${COMPONENT_LABEL[comp]} &middot; source patch <b>${i}</b>, centroid ` +
-      `${c[0].toFixed(1)}, ${c[1].toFixed(1)}, ${c[2].toFixed(1)} km ` +
-      `&mdash; ${own}. Click any patch to move the source.`;
+      `source patch <b>${i}</b>, centroid ${c[0].toFixed(1)}, ` +
+      `${c[1].toFixed(1)}, ${c[2].toFixed(1)} km &mdash; it unloads itself by ` +
+      `<b>${Math.abs(v).toFixed(2)} MPa</b>. Click any patch to move the source.`;
   });
 
-  for (const b of root.querySelectorAll<HTMLButtonElement>("[data-comp]")) {
-    b.addEventListener("click", async () => {
-      const name = b.dataset.comp as Component;
-      try {
-        await want(name);
-      } catch (e) {
-        if (status) status.textContent = `failed: ${e}`;
-        return;
-      }
-      for (const o of root.querySelectorAll<HTMLButtonElement>("[data-comp]")) {
-        o.classList.toggle("ghost", o !== b);
-      }
-      scene.select(name);
-      paintBar();
-    });
-  }
   paintBar();
   return scene;
 }
