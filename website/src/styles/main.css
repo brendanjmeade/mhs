@@ -71,8 +71,16 @@ nav.top a[aria-current="page"] { color: var(--fg); }
   overflow-y: auto;
   padding-bottom: 24px;
 }
-.sidebar h1 { font-size: 26px; font-weight: normal; margin-bottom: 14px; }
-.sidebar h1 .sub { display: block; font-size: 14px; color: var(--fg-dim); margin-top: 2px; }
+/* The sidebar title. It is an <h1> on pages whose main column has no title of
+   its own, and `.pagetitle` on the one that does -- Concepts carries its own
+   heading in the prose, and two <h1>s on a page is a document with two titles.
+   Same rules either way, so the two read identically. */
+.sidebar h1, .sidebar .pagetitle {
+  font-size: 26px; font-weight: normal; margin-bottom: 14px;
+}
+.sidebar h1 .sub, .sidebar .pagetitle .sub {
+  display: block; font-size: 14px; color: var(--fg-dim); margin-top: 2px;
+}
 .sidebar p { margin-bottom: 14px; }
 .sidebar .contact { font-size: 13px; color: var(--fg-dim); margin-top: 14px; }
 .sidebar .links { font-size: 13px; margin-top: 10px; }
@@ -83,6 +91,14 @@ nav.top a[aria-current="page"] { color: var(--fg); }
 .main p { margin-bottom: 16px; }
 
 /* Article typography (Concepts) */
+/* A page title in the MAIN column, where one is written into the prose rather
+   than left to the sidebar. Without this it falls to the browser default --
+   2em and bold -- which is larger and heavier than the h2s beneath it, and the
+   only bold thing on an otherwise normal-weight page. */
+.main h1 {
+  font-size: 26px; font-weight: normal; margin: 0 0 20px; line-height: 1.25;
+  scroll-margin-top: calc(var(--nav-h) + 12px);
+}
 .main h2 {
   font-size: 22px; font-weight: normal; margin: 0 0 14px;
   scroll-margin-top: calc(var(--nav-h) + 12px);
