@@ -3,6 +3,8 @@
 Mollified Mindlin half-space triangular-dislocation Green's functions, as
 matrices. For a **homogeneous half space with no topography**.
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23242169.svg)](https://doi.org/10.5281/zenodo.23242169)
+
 Project site, with both figures interactive:
 **<https://brendanjmeade.github.io/mhs/>** (`website/`).
 

@@ -22,6 +22,16 @@ repository-code: "https://github.com/brendanjmeade/mhs"
 url: "https://brendanjmeade.github.io/mhs/"
 version: "0.1.0"
 date-released: "2026-10-08"
+# The CONCEPT DOI, which always resolves to the newest version. The DOI for
+# this release alone is 10.5281/zenodo.23242170, recorded under identifiers.
+doi: "10.5281/zenodo.23242169"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.23242169"
+    description: "Concept DOI, all versions"
+  - type: doi
+    value: "10.5281/zenodo.23242170"
+    description: "DOI for version 0.1.0"
 keywords:
   - half space
   - Mindlin
