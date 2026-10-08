@@ -297,7 +297,30 @@ export async function startFault(root: HTMLElement, baseUrl: string) {
     return a;
   };
 
-  await want("shear");
+  // REGISTERED BEFORE THE FIRST select(), which is what fires it. Registering
+  // it afterwards leaves the status line reading "loading" until the visitor
+  // happens to click a patch -- the figure is already drawn and correct, so
+  // nothing looks broken except the one line saying it has not finished.
+  scene.onSelect((i, v) => {
+    if (!status) return;
+    const c = p.centroids[i];
+    // The shear diagonal is negative as a matter of physics -- a patch that
+    // slips relieves its own driving stress -- so the figure can say so.
+    status.innerHTML =
+      `source patch <b>${i}</b>, centroid ${c[0].toFixed(1)}, ` +
+      `${c[1].toFixed(1)}, ${c[2].toFixed(1)} km &mdash; it unloads itself by ` +
+      `<b>${Math.abs(v).toFixed(2)} MPa</b>. Click any patch to move the source.`;
+  });
+
+  // A failed fetch here used to reject out of startFault with nothing catching
+  // it, which left the page reading "loading" forever and reported the reason
+  // only to the console. Same symptom as a late callback, different cause.
+  try {
+    await want("shear");
+  } catch (e) {
+    if (status) status.textContent = `Could not load the shear matrix: ${e}`;
+    return;
+  }
   // Start from a patch partway down the fault rather than index 0, which is a
   // corner and the least representative element there is.
   const start = Math.floor(p.triangles.length * 0.42);
@@ -319,17 +342,6 @@ export async function startFault(root: HTMLElement, baseUrl: string) {
       `<span>+${fmt(hi)}</span>`;
     bar.append(strip, ends);
   };
-
-  scene.onSelect((i, v) => {
-    if (!status) return;
-    const c = p.centroids[i];
-    // The shear diagonal is negative as a matter of physics -- a patch that
-    // slips relieves its own driving stress -- so the figure can say so.
-    status.innerHTML =
-      `source patch <b>${i}</b>, centroid ${c[0].toFixed(1)}, ` +
-      `${c[1].toFixed(1)}, ${c[2].toFixed(1)} km &mdash; it unloads itself by ` +
-      `<b>${Math.abs(v).toFixed(2)} MPa</b>. Click any patch to move the source.`;
-  });
 
   paintBar();
   return scene;
