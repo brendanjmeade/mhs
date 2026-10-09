@@ -1,0 +1,74 @@
+% Shared preamble for the mhs figures. Two renderings from one drawing:
+% build.py writes a driver that \def\MODE{web} or {paper}, then inputs this.
+%
+% WEB    sans text, the site's own palette, for brendanjmeade.github.io/mhs
+% PAPER  Times text and math, black edges, single-hue fill, per the house
+%        style in moss-org's src/mbem/figures/style.py
+%
+% fontspec is deliberately NOT used: tectonic's bundle ships the TeX Gyre
+% fonts as files, not as system fonts, so \setmainfont{TeX Gyre Termes} fails
+% to find them. newtx reaches the same Times through the classic path.
+\documentclass[border=3pt]{standalone}
+
+\usepackage{newtxtext,newtxmath}
+\ifx\MODE\undefined \def\MODE{paper}\fi
+\def\web{web}
+% BOTH VARIANTS SET IN TIMES, and that is a retreat worth recording. The plan
+% was sans for the web to match the site's Source Sans 3. Three routes failed
+% in tectonic's bundle, each SILENTLY -- the document compiled and rendered in
+% Times with no error at any point:
+%   \usepackage{helvet}      sets the family to `phv'; no usable file, falls
+%                            back to roman (LaTeX still reports phv, so the
+%                            only way to see it is to look at the output)
+%   \usepackage{tgheros}     clashes -- newtx already defines \qhv@scale
+%   \renewcommand\sfdefault{qhv}   resolves to nothing either
+% A system font through fontspec would work on this machine and make the build
+% depend on it, which is worse than a serif figure. Times also matches the
+% math, which is Times in both variants regardless, so the figure is at least
+% internally consistent. The two variants now differ in COLOUR alone.
+
+
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc,decorations.pathreplacing,decorations.markings,
+                patterns,positioning,backgrounds,shapes.geometric}
+
+% ---------------------------------------------------------------- palette --
+\definecolor{accent}{HTML}{B5367A}   % the site's --accent, and the paper's one hue
+\ifx\MODE\web
+  \definecolor{ink}{HTML}{222222}    % --fg
+  \definecolor{dim}{HTML}{555555}    % --fg-dim
+  \definecolor{faint}{HTML}{888888}  % --fg-faint
+  \definecolor{rule}{HTML}{CCCCCC}
+\else
+  \definecolor{ink}{HTML}{000000}    % black edges, per the house style
+  \definecolor{dim}{HTML}{444444}
+  \definecolor{faint}{HTML}{777777}
+  \definecolor{rule}{HTML}{BBBBBB}
+\fi
+
+% ------------------------------------------------------------------ styles --
+\tikzset{
+  every picture/.style={line width=0.7pt, ink, font=\small},
+  face/.style   ={fill=accent!10, draw=ink, line width=0.8pt},
+  ghost/.style  ={fill=accent!5, draw=faint, line width=0.6pt, dashed},
+  lead/.style   ={accent, line width=0.9pt},
+  thin@/.style  ={rule, line width=0.6pt},
+  guide/.style  ={faint, line width=0.5pt, dash pattern=on 2pt off 2pt},
+  arr/.style    ={-{Stealth[length=4.2pt,width=3.2pt]}, line width=0.75pt},
+  dot/.style    ={circle, fill=ink, inner sep=0pt, minimum size=2.6pt},
+  odot/.style   ={circle, draw=accent, fill=white, line width=0.8pt,
+                  inner sep=0pt, minimum size=3.0pt},
+  lbl/.style    ={font=\scriptsize, inner sep=1.4pt},
+  dlbl/.style   ={font=\scriptsize, dim, inner sep=1.4pt},
+  note/.style   ={font=\scriptsize, dim, align=center, inner sep=1.6pt},
+}
+
+% Panel letter: bold, top-right, no parentheses, no box (house style).
+\newcommand{\panel}[3]{\node[font=\bfseries\small, ink, anchor=north east]
+  at (#1,#2) {#3};}
+
+% A right-angle tick at C between the rays to A and B.
+\newcommand{\rightangle}[4][0.16]{%
+  \draw[faint, line width=0.5pt]
+    ($(#2)!#1!(#3)$) -- ($($(#2)!#1!(#3)$)+($(#2)!#1!(#4)$)-(#2)$)
+                     -- ($(#2)!#1!(#4)$);}

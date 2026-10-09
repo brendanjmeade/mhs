@@ -1,3 +1,6 @@
+import triangleFig from "../figures/triangle.svg";
+import mindlinFig from "../figures/mindlin.svg";
+
 # Singularity free homogeneous half-space triangular dislocation elements
 
 Classical elastic dislocation theory represents a fault as a surface of zero thickness across which displacement jumps. It is enormously useful for kinematic problems.  It also has two structural challenges: 1) unphysical coincident stresses and 2) infinitely thin faults.  The mollified elastic dislocation theory used here addresses both of those challenges, providing everywhere finite stresses and a representation of finite-width faults.  The approach here is appropriate for cases where one wants meaningful element self-stresses or fault zones of extended thickness.
@@ -20,7 +23,53 @@ $$
 + \mathbf{f}\,\phi_\varepsilon = \mathbf{0}
 $$
 
-The result is singular nowhere and still satisfies the Cauchy equations for static elasticity. A fault therefore has a finite width ε, and stress is defined on the fault, where classical dislocation theory returns a value ordinary integration does not define.  A half space is approximated using a Mindlin image type approach for a mirrored source.
+The result is singular nowhere and still satisfies the Cauchy equations for static elasticity. A fault therefore has a finite width ε, and stress is defined on the fault, where classical dislocation theory returns a value ordinary integration does not define.
+
+<figure class="panels">
+  <img src={triangleFig.src}
+       alt="Three panels: the mollification lifting the observer from height z to h-epsilon; the divergence theorem turning an area integral over the triangle into three contour integrals; and one edge parameterised from the foot of its own perpendicular." />
+  <figcaption>
+    <b>Integrating a mollified source over an arbitrary triangle.</b>
+    <b>a</b>, ε and <i>z</i> merge into a single number — the mollified problem
+    is the classical one at a lifted observer, and <i>h</i><sub>ε</sub> is the
+    only place ε enters. The frame, the foot and the edges are computed without
+    it. <b>b</b>, the in-plane divergence theorem turns the area integral into
+    three contour integrals, applied as a recursion that trades one step of
+    monomial degree against two powers of <i>R</i>; the solid angle at the
+    lifted observer is its single seed, and the only transcendental beyond a
+    logarithm. <b>c</b>, each edge is parameterised from the foot of its own
+    perpendicular, which makes ρ<sub>ε</sub> constant along it and reduces every
+    contour term to a one-dimensional integral in <i>u</i>. Three signed scalars
+    per edge, plus <i>h</i><sub>ε</sub>, are the whole geometric input.
+  </figcaption>
+</figure>
+
+A half space is imposed by Mindlin's image construction. That is an image
+**system** rather than a single mirrored source: reflecting the geometry is one
+multiply, but what acts at the reflected point is a monopole at strength
+(3−4ν), a doublet whose strength scales with the source depth, and a
+logarithmic term belonging to a vertical *line* through the image. A single
+mirror does not satisfy the free-surface condition in elasticity; the whole set
+does, and nothing less.
+
+<figure class="panels">
+  <img src={mindlinFig.src}
+       alt="Three panels: a source element and its exact mirror across the free surface with the two distances R1 and R2; the image system of a monopole, doublet and line term; and the blob's tail crossing z equals zero and imaging back into the body." />
+  <figcaption>
+    <b>The free surface, by Mindlin images.</b>
+    <b>a</b>, the image is an exact mirror of the <i>geometry</i>, and
+    |<i>D</i><sub>3</sub>| is a <i>sum</i> of two absolute depths rather than a
+    separation — so the half-space kernel is not translation-invariant, and
+    depends on where the observer and the source each are, not just on the
+    vector between them. <b>b</b>, three radicals, three geometries: a point at
+    the source, its mirror point, and a vertical line through that mirror, which
+    is what <i>Q</i> is. The line family carries the (1−2ν) prefactor, which is
+    why ν → ½ is the hard case. <b>c</b>, the Cortez blob has algebraic tails,
+    so some of its mass sits above <i>z</i> = 0 and its image lands back inside
+    the body. That is the mechanism behind the O(ε²) below, and the reason an
+    exact free surface by this route is foreclosed rather than pending.
+  </figcaption>
+</figure>
 
 ## Known limitations
 

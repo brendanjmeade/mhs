@@ -1,0 +1,8 @@
+# Build scratch. The committed artefacts are out/*-paper.pdf (the paper
+# figures) and website/src/figures/*.svg (what the site imports); the web PDF,
+# the review PNGs, the generated drivers and the logs are all intermediates.
+out/*-web.svg
+out/*.png
+out/*.log
+out/*.tex
+out/*-web.pdf

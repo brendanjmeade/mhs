@@ -112,6 +112,13 @@ nav.top a[aria-current="page"] { color: var(--fg); }
 
 figure { margin: 22px 0 26px; }
 figure img { display: block; width: 100%; height: auto; }
+/* A three-panel figure is about 3.7:1. Across the 780px column its labels come
+   out near 12px, which reads; shrunk to phone width they would be near 6px,
+   which does not. So it keeps a legible minimum width and pans sideways
+   instead of scaling into illegibility. The caption still wraps normally. */
+figure.panels { overflow-x: auto; }
+figure.panels img { min-width: 660px; }
+@media (min-width: 781px) { figure.panels img { min-width: 0; } }
 figcaption { font-size: 13px; color: var(--fg-dim); margin-top: 8px; line-height: 1.5; }
 figcaption b { color: var(--fg); font-weight: 600; }
 

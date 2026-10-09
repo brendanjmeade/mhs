@@ -1,0 +1,146 @@
+% Figure 2 -- the free surface, by Mindlin images.
+%
+%   (a) the image is an exact mirror of the GEOMETRY, and |D3| is a SUM of two
+%       absolute depths -- the half-space kernel is not translation-invariant.
+%   (b) what sits at the image is a SYSTEM, not a mirrored source: a monopole
+%       at strength (3-4nu), a doublet whose strength scales with source depth,
+%       and a log Q line term carrying (1-2nu). Three radicals, three
+%       geometries: a point, its mirror point, and a vertical line.
+%   (c) why the free-surface condition is only O(eps^2): the Cortez blob has
+%       algebraic tails, so some of its mass sits above z = 0 and its image
+%       lands back inside the body.
+\begin{tikzpicture}
+
+\def\PW{4.8}
+\def\PH{4.0}
+\newcommand{\panelbox}[1]{\path (0,0) rectangle (\PW,\PH);
+  \node[font=\bfseries\small, ink, anchor=north east] at (\PW,\PH) {#1};}
+
+% The free surface: a solid rule, ticked on the side that is NOT the body.
+% Coordinate arithmetic is braced, or TikZ reads `0' as a node name.
+\newcommand{\freesurf}[3]{%
+  \draw[ink, line width=0.9pt] (#1,#3) -- (#2,#3);
+  \foreach \k in {0,...,13} {%
+    \draw[faint, line width=0.5pt]
+      ({#1+\k*((#2)-(#1))/13},#3) -- ++(0.10,0.14);}}
+
+% ========================================= (a) geometry, and D3 as a sum ====
+\begin{scope}[shift={(0,0)}]
+  \panelbox{a}
+  \def\sf{2.30}                       % the free surface
+
+  \freesurf{0.95}{4.45}{\sf}
+  \node[dlbl, anchor=south east] at (4.45,{\sf+0.16}) {$z=0$};
+
+  % the source element, and its EXACT mirror
+  \draw[lead, line width=1.8pt] (2.55,1.05) -- (3.40,1.45);
+  \node[lbl, accent, below=1pt] at (2.95,1.05) {source};
+  \draw[accent!45, line width=1.3pt, dashed] (2.55,3.55) -- (3.40,3.15);
+  \node[lbl, accent!60, above=0pt] at (2.95,3.52) {image};
+
+  \coordinate (src) at (2.975,1.25);
+  \coordinate (img) at (2.975,3.35);
+  \coordinate (obs) at (1.35,1.72);
+  \node[dot] at (obs) {}; \node[lbl, below left=-2pt] at (obs) {$x$};
+  \node[dot, fill=accent] at (src) {};
+  \node[odot] at (img) {};
+
+  \draw[arr, ink] (obs) -- ($(obs)!0.90!(src)$);
+  \node[dlbl] at (2.05,1.30) {$R_1$};
+  \draw[arr, dim] (obs) -- ($(obs)!0.92!(img)$);
+  \node[dlbl] at (1.92,2.86) {$R_2$};
+
+  % |D3| = x3 + y3 : the brace splits AT the free surface, which is the point
+  \draw[guide] (0.62,1.72) -- (1.35,1.72);
+  \draw[guide] (0.62,3.35) -- (2.975,3.35);
+  \draw[decorate, decoration={brace, amplitude=3.5pt, raise=1pt}, faint]
+        (0.70,\sf) -- (0.70,1.72) node[midway, dlbl, xshift=-11pt] {$x_3$};
+  \draw[decorate, decoration={brace, amplitude=3.5pt, raise=1pt}, faint]
+        (0.70,3.35) -- (0.70,\sf) node[midway, dlbl, xshift=-11pt] {$y_3$};
+
+  \node[note] at (2.40,0.42) {$|D_3| = x_3 + y_3$, a sum of two depths};
+\end{scope}
+
+% ============================== (b) three radicals, three geometries ========
+\begin{scope}[shift={(5.2,0)}]
+  \panelbox{b}
+  \def\sf{1.95}
+
+  \freesurf{0.45}{4.45}{\sf}
+
+  % the source, below: the direct term, and the only place the blob lives
+  \draw[lead, line width=1.8pt] (0.70,0.95) -- (1.45,1.28);
+  \node[dot, fill=accent] at (1.075,1.115) {};
+  \draw[guide] (1.30,1.00) -- (1.95,1.00);
+  \node[dlbl, anchor=west] at (1.98,1.00) {$1/R_1$ \ direct};
+
+  % the image, above: an exact mirror of the GEOMETRY ...
+  \draw[accent!45, line width=1.3pt, dashed] (0.70,2.95) -- (1.45,2.62);
+  \node[odot] at (1.075,2.785) {};
+  % ... carrying a doublet as well as a monopole, both AT that point ...
+  \draw[arr, dim, line width=0.6pt] (1.075,2.95) -- ++(0,0.22);
+  \draw[arr, dim, line width=0.6pt] (1.075,2.62) -- ++(0,-0.22);
+  % ... and a vertical LINE through it, which is what Q is
+  \draw[accent, line width=1.1pt, dash pattern=on 2.5pt off 1.6pt,
+        -{Stealth[length=4.5pt]}] (1.075,3.30) -- (1.075,3.86);
+
+  % one brace, so the three read as one system at one place, not a legend
+  \draw[decorate, decoration={brace, amplitude=4pt, raise=2pt}, faint]
+        (1.52,3.86) -- (1.52,2.38);
+  \node[dlbl, anchor=west] at (1.98,3.62) {$\log Q$ \ line, $(1-2\nu)$};
+  \node[dlbl, anchor=west] at (1.98,3.00) {$(3-4\nu)/R_2$ \ monopole};
+  \node[dlbl, anchor=west] at (1.98,2.52) {$2z_0D_3/R_2^{3}$ \ doublet};
+
+  \node[note] at (2.40,0.42) {an image \emph{system}, not a mirrored source};
+\end{scope}
+
+% ================================================ (c) why only O(eps^2) =====
+% The blob is NESTED RINGS, not a \shade. mutool rasterises a radial shading
+% into an embedded bitmap, which put three <image> tags and zero gradients into
+% the SVG and left visible tile edges on the page. Stacked translucent circles
+% are plain paths, so they survive the PDF->SVG step as vectors -- and showing
+% the falloff as discrete contours suits a figure about tails better than a
+% smooth smear does.
+\begin{scope}[shift={(10.4,0)}]
+  \panelbox{c}
+  \def\sf{2.70}
+  \def\cx{1.95}
+  \def\cy{2.00}
+  \def\rings{1.34/0.07, 1.16/0.08, 0.98/0.10, 0.82/0.12,
+             0.66/0.15, 0.50/0.18, 0.36/0.22, 0.22/0.28}
+
+  \foreach \r/\o in \rings { \fill[accent, fill opacity=\o] (\cx,\cy) circle (\r); }
+  \node[dot, fill=accent] at (\cx,\cy) {};
+  \draw[accent!55, line width=0.6pt, dashed] (\cx,\cy) circle (0.66);
+  \node[dlbl, accent!70] at ({\cx-0.46},{\cy-0.50}) {$\varepsilon$};
+
+  % the mass above z = 0, and the same shape reflected back inside the body
+  \begin{scope}
+    \clip (0.35,\sf) rectangle (4.45,3.46);
+    \foreach \r/\o in \rings { \fill[accent, fill opacity=\o] (\cx,\cy) circle (\r); }
+    \draw[accent, line width=0.7pt] (\cx,\cy) circle (1.34);
+  \end{scope}
+  \begin{scope}[cm={1,0,0,-1,(0,5.40)}]
+    \clip (0.35,\sf) rectangle (4.45,3.46);
+    \foreach \r/\o in \rings { \fill[accent, fill opacity=\o] (\cx,\cy) circle (\r); }
+    \draw[accent!70, line width=0.7pt, dashed] (\cx,\cy) circle (1.34);
+  \end{scope}
+
+  \freesurf{0.35}{4.45}{\sf}
+  \node[dlbl, anchor=south west] at (0.42,{\sf+0.14}) {$z=0$};
+
+  \draw[arr, accent, line width=0.9pt]
+        (2.90,2.92) to[bend left=55] (2.94,2.48);
+  \node[dlbl, accent, anchor=west, align=left] at (3.12,3.14)
+        {mass above\\the surface};
+  \node[dlbl, accent, anchor=west, align=left] at (3.12,2.24)
+        {images back\\inside};
+
+  \node[dlbl, anchor=west] at (0.42,3.74)
+        {$\varphi_\varepsilon\sim 15\varepsilon^{4}/8\pi r^{7}$: tails};
+
+  \node[note] at (2.40,0.42)
+    {so the free surface holds only to $O(\varepsilon^{2})$};
+\end{scope}
+
+\end{tikzpicture}

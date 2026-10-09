@@ -1,0 +1,125 @@
+% Figure 1 -- integrating a mollified source over an arbitrary triangle.
+%
+%   (a) epsilon and z merge into one number, h_eps = sqrt(z^2 + eps^2). That is
+%       the ONLY way the mollification touches the integration: the frame, the
+%       foot, the edges and the perpendiculars are all computed without it.
+%   (b) the in-plane divergence theorem turns the area integral into three
+%       contour integrals, seeded once by the solid angle at the lifted point.
+%   (c) each edge is parameterised from the foot of its own perpendicular,
+%       which is what makes rho_eps constant along it.
+%
+% Geometry is drawn at z and eps COMPARABLE, because that is the regime the
+% package exists for -- an observer on or near its own element. For eps << z
+% the lift is invisible, and so is the point.
+%
+% Every panel is drawn inside the same 4.8 x 4.0 box (\panelbox), so the panel
+% letters land at one height instead of following the content.
+\begin{tikzpicture}
+
+\def\PW{4.8}
+\def\PH{4.0}
+\newcommand{\panelbox}[1]{\path (0,0) rectangle (\PW,\PH);
+  \node[font=\bfseries\small, ink, anchor=north east] at (\PW,\PH) {#1};}
+
+% ============================================================ (a) the lift ==
+\begin{scope}[shift={(0,0)}]
+  \panelbox{a}
+  \def\ee{0.60}   % eps
+  \def\zz{0.75}   % z        -> h_eps = 0.96
+  \def\hh{0.96}
+  \def\pl{2.25}   % the plane
+
+  % -- left: a source smeared over eps, observer at height z
+  \filldraw[fill=accent!8, draw=accent!40, line width=0.5pt, dashed]
+        (0.30,{\pl-\ee}) rectangle (2.00,{\pl+\ee});
+  \draw[thin@] (0.30,\pl) -- (2.00,\pl);
+  \draw[lead, line width=1.8pt] (0.70,\pl) -- (1.60,\pl);
+  \draw[guide] (1.15,\pl) -- (1.15,{\pl+\zz});
+  \node[dot] at (1.15,{\pl+\zz}) {};
+  \node[lbl, right=2pt] at (1.15,{\pl+\zz}) {$x$};
+  \draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=2pt}, faint]
+        (1.15,\pl) -- (1.15,{\pl+\zz}) node[midway, dlbl, xshift=12pt] {$z$};
+  \draw[decorate, decoration={brace, amplitude=4pt, raise=2pt}, faint]
+        (0.30,\pl) -- (0.30,{\pl+\ee})
+        node[midway, dlbl, xshift=-11pt] {$\varepsilon$};
+  \node[note] at (1.15,1.18) {smeared source,\\observer at $z$};
+
+  % -- right: the same integral, sharp source, observer lifted to h_eps
+  \draw[thin@] (2.80,\pl) -- (4.50,\pl);
+  \draw[lead, line width=1.8pt] (3.20,\pl) -- (4.10,\pl);
+  \draw[guide] (3.65,\pl) -- (3.65,{\pl+\hh});
+  \node[odot] at (3.65,{\pl+\hh}) {};
+  \node[lbl, right=2pt] at (3.65,{\pl+\hh}) {$x_{\mathrm{eff}}$};
+  \draw[decorate, decoration={brace, amplitude=4pt, mirror, raise=2pt}, faint]
+        (3.65,\pl) -- (3.65,{\pl+\hh})
+        node[midway, dlbl, xshift=14pt] {$h_\varepsilon$};
+  \node[note] at (3.65,1.18) {sharp source,\\observer at $h_\varepsilon$};
+
+  \node[font=\large, ink] at (2.40,{\pl+0.30}) {$\equiv$};
+
+  \node[note] at (2.40,0.42) {$h_\varepsilon=\sqrt{z^{2}+\varepsilon^{2}}$};
+\end{scope}
+
+% ================================================= (b) area -> contour ======
+\begin{scope}[shift={(5.2,0)}]
+  \panelbox{b}
+  \coordinate (v1) at (0.55,1.05);
+  \coordinate (v2) at (3.85,1.55);
+  \coordinate (v3) at (2.05,3.65);
+  \coordinate (cg) at (2.15,2.083);
+  \coordinate (ft) at (1.90,1.90);
+
+  \filldraw[face] (v1) -- (v2) -- (v3) -- cycle;
+
+  % outward in-plane normals, n_out = (t_y, -t_x) for CCW vertices
+  \draw[arr, dim] ($(v1)!0.5!(v2)$) -- ++(0.0745,-0.4944);
+  \draw[arr, dim] ($(v2)!0.5!(v3)$) -- ++(0.4616,0.3938)
+        node[dlbl, right=-1pt] {$n_{\mathrm{out}}$};
+  \draw[arr, dim] ($(v3)!0.5!(v1)$) -- ++(-0.4857,-0.3457);
+
+  \node[dot] at (v1) {}; \node[lbl, below left=-1pt]  at (v1) {$v_1$};
+  \node[dot] at (v2) {}; \node[lbl, below right=-1pt] at (v2) {$v_2$};
+  \node[dot] at (v3) {}; \node[lbl, above=1pt]        at (v3) {$v_3$};
+
+  % the local frame, at the centroid
+  \draw[arr, accent] (cg) -- ++(0.700,0.106) node[lbl, accent, right=-1pt] {$e_1$};
+  \draw[arr, accent] (cg) -- ++(-0.106,0.700) node[lbl, accent, above=-1pt] {$e_2$};
+  \node[odot, draw=ink] at (cg) {};
+
+  \node[dot, fill=accent] at (ft) {};
+  \node[lbl, accent, below left=-1pt] at (ft) {$X$};
+
+  \node[note] at (2.40,0.42)
+    {$\textstyle\int_{T}(\cdot)\,\mathrm{d}S
+      =\sum_{\mathrm{edges}}\oint(\cdot)\,\mathrm{d}u$};
+\end{scope}
+
+% ===================================================== (c) one edge =========
+\begin{scope}[shift={(10.4,0)}]
+  \panelbox{c}
+  \coordinate (A) at (0.60,1.35);
+  \coordinate (B) at (3.80,2.15);
+  \coordinate (O) at (1.564,1.591);
+  \coordinate (X) at (1.20,3.05);
+
+  \draw[thin@] ($(A)!-0.14!(B)$) -- ($(A)!1.14!(B)$);
+  \draw[lead, line width=1.8pt] (A) -- (B);
+  \node[dot] at (A) {}; \node[lbl, below left=-1pt] at (A) {$u_a$};
+  \node[dot] at (B) {}; \node[lbl, above right=-2pt] at (B) {$u_b$};
+
+  \draw[guide] (X) -- (O);
+  \rightangle{O}{X}{B}
+  \node[dot, fill=accent] at (X) {};
+  \node[lbl, accent, above=1pt] at (X) {$X$};
+  \node[dlbl] at (1.00,2.35) {$d_\perp$};
+  \node[odot, draw=ink, minimum size=2.4pt] at (O) {};
+  \node[dlbl, below=3pt] at (O) {$u=0$};
+
+  % the along-edge coordinate
+  \draw[arr, dim] (2.55,1.30) -- ++(1.067,0.267) node[dlbl, right=-1pt] {$u$};
+
+  \node[note] at (2.40,0.42)
+    {$\rho_\varepsilon^{2}=d_\perp^{2}+h_\varepsilon^{2}$, constant along the edge};
+\end{scope}
+
+\end{tikzpicture}
