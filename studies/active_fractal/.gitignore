@@ -1,0 +1,7 @@
+# Assembled interaction matrices. Deliberately NOT committed, unlike
+# website/public/data/ -- a single cached matrix is 5 GB at 10k elements and
+# 19 GB at 20k, and it is reproducible from the seed: the cache is keyed on
+# sha256 of the vertices, so re-running the driver rebuilds exactly the same
+# array. Minutes of compute is the right thing to pay to keep gigabytes out of
+# the history of a repository that gets cloned.
+cache/
