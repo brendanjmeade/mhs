@@ -5,7 +5,7 @@ import "katex/dist/katex.min.css";
 interface Props {
   title: string;
   description?: string;
-  current: "home" | "concepts" | "running" | "examples";
+  current: "home" | "concepts" | "running" | "examples" | "fractal";
 }
 const { title, description, current } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
@@ -13,6 +13,7 @@ const pages = [
   { key: "concepts", href: `${base}concepts/`, label: "Concepts" },
   { key: "running", href: `${base}running/`, label: "Running" },
   { key: "examples", href: `${base}examples/`, label: "Examples" },
+  { key: "fractal", href: `${base}fractal/`, label: "Active fractal" },
 ];
 ---
 <!doctype html>

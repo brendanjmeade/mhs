@@ -1,0 +1,185 @@
+---
+import Base from "../layouts/Base.astro";
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+---
+<Base
+  title="mhs — Active fractal"
+  description="Quasi-static Coulomb loading of a synthetic 3-D fault network: 512 faults, 10230 mollified elements, and the subset that actually slips as the regional load rises."
+  current="fractal"
+>
+  <Fragment slot="sidebar">
+    <h1>Active fractal<span class="sub">which faults actually slip</span></h1>
+    <p>
+      A synthetic fault network with no slip prescribed anywhere. Each element
+      carries a frictional strength, and slip is permitted only where the
+      resolved stress reaches it. The regional load rises; faults activate,
+      their stress changes load every other fault, and the network finds a new
+      equilibrium.
+    </p>
+    <p>
+      512 faults on a multiplicative cascade in a 40&nbsp;km cube,
+      10,230&nbsp;elements, <i>&epsilon;</i>&nbsp;=&nbsp;10&nbsp;m. Strike-slip
+      regime, &mu;<sub>s</sub>&nbsp;=&nbsp;0.6 with a 10&nbsp;% strength drop,
+      effective normal stress 150&nbsp;MPa.
+    </p>
+    <div class="note">
+      <b>This is the experiment the on-fault interaction matrix exists for.</b>
+      A stress-driven network needs <i>K<sub>ii</sub></i> &mdash; how much an
+      element's own slip relieves its own shear &mdash; and for a classical
+      dislocation element that number is undefined on the fault. Mollification
+      makes it finite and, measured here, negative on every one of the 10,230
+      elements.
+    </div>
+    <p class="contact">
+      The slider is the <b>load parameter</b>, not time. Every frame is an
+      equilibrium: all elements locked, every shear stress below its static
+      strength. Nothing in this animation propagates.
+    </p>
+    <div class="links">
+      <div><a href={`${base}concepts/`}>How the kernel works</a></div>
+      <div><a href="https://github.com/brendanjmeade/mhs/tree/main/studies/active_fractal">The study code</a></div>
+    </div>
+  </Fragment>
+
+  <div id="viewer">
+    <div class="panel">
+      <label data-ctl="mode"><span>colour</span></label>
+      <span data-ctl="play"></span>
+      <div class="rng" data-ctl="frame"><span>load</span></div>
+    </div>
+    <div data-canvas class="canvas" aria-label="A synthetic three-dimensional fault network of 512 faults, coloured by which elements slip as the regional load increases"></div>
+    <div data-bar class="bar"></div>
+    <p data-status class="status">loading…</p>
+  </div>
+
+  <h2>What is and is not being claimed</h2>
+
+  <p>
+    The machinery works and the numbers above are measured: 78,913 events over
+    the load range shown, 73.7&nbsp;% of elements eventually slipping, a
+    cumulative moment of 6.4&times;10<sup>17</sup>&nbsp;N&nbsp;m, and the
+    largest single load increment moving 2,329 elements at once. Every event
+    reached equilibrium; none ran away.
+  </p>
+
+  <p>
+    <b>The headline question is not answered on this page.</b> Asking whether
+    slip organises onto a lower-dimensional subset than the geometry offers
+    requires comparing the active set against a subset of the <i>same size</i>
+    drawn without regard to mechanics &mdash; because box-counting dimension
+    falls when a set simply has fewer members. Measured on a sheet that is
+    exactly two-dimensional, a 5&nbsp;% random subset reads 0.36 lower and a
+    1&nbsp;% subset loses a full dimension. So &ldquo;the active set is
+    lower-dimensional&rdquo; is nearly free, for a reason with no mechanics in
+    it, and the null models are the entire result rather than a formality.
+    Those are built and calibrated; the comparison is not yet run.
+  </p>
+
+  <p>
+    Two honest limits on what the dimension can ever say here. The estimator is
+    biased low by about 0.11 on an absolute dimension and that bias is
+    <i>invisible to R<sup>2</sup></i> &mdash; every calibration fit has
+    R<sup>2</sup>&nbsp;&ge;&nbsp;0.999, including one wrong by 0.14 &mdash; so
+    only differences in a matched window are quoted, which are good to about
+    0.05. And the window itself is bounded below by the <i>largest fault</i>
+    rather than the element size, because until a box is bigger than a fault
+    that fault reads locally two-dimensional. For this network that leaves 0.73
+    decades, enough to rank against a null and not enough to quote three digits.
+  </p>
+
+  <h2>Why there is a strength drop</h2>
+
+  <p>
+    With a single friction coefficient this experiment has no mechanism. The
+    quasi-static solution is then <b>continuous</b> in the load: an element
+    reaching its failure criterion begins to slip at zero rate, no event has a
+    finite size, and there is nothing to count. The first version of the solver
+    demonstrated exactly that, advancing the load to the first failure and then
+    relaxing zero slip indefinitely.
+  </p>
+
+  <p>
+    So an element has a static strength it must reach to fail and a lower
+    dynamic strength it relaxes down to, and the difference between them is
+    what loads its neighbours and can trigger them in turn. The ratio between
+    the two is the single most important physical parameter on this page; at
+    1.0 there are no cascades by construction, and the code refuses that value
+    rather than returning a null result that would look like a finding.
+  </p>
+
+  <h2>What the solver choice costs</h2>
+
+  <p>
+    A cascade has no unique end state &mdash; a triggered element lands anywhere
+    between its dynamic and static strength depending on the order elements are
+    visited &mdash; so there is no exact answer to validate against. What can be
+    done is to vary the update rule and measure the spread. Between
+    Gauss-Seidel and Jacobi, event counts move by 6.9&nbsp;% and mean event
+    size by 4.3&nbsp;%; between element orderings, under 1&nbsp;%. But total
+    slip is invariant to 0.1&nbsp;%, and the <b>active set came out bit
+    identical</b> under every rule tried &mdash; symmetric difference zero. So
+    the quantity the dimension is measured on carries no solver dependence,
+    while an avalanche exponent carries that 7&nbsp;% as part of its
+    uncertainty.
+  </p>
+
+  <h2>One simplification worth naming</h2>
+
+  <p>
+    Effective normal stress is <b>uniform with depth</b> here, and that is a
+    deliberate choice rather than an oversight. The real gradient is about
+    0.0167&nbsp;GPa/km once hydrostatic pore pressure is removed, which across
+    a 40&nbsp;km box is a factor of twenty in strength: the shallow elements
+    would fail first, the active set would be a horizontal slab, and its
+    measured dimension would be reporting the depth gradient rather than any
+    mechanical localisation. Removing it leaves orientation and elastic
+    interaction as the only things that can select which faults slip, which is
+    the question. The depth-dependent case runs, and is important future work
+    &mdash; it needs its own null, the same network with the gradient and the
+    elastic interaction switched off, or depth and localisation stay confounded.
+  </p>
+
+  <p class="cap">
+    Slip is stored quantised: log<sub>10</sub> into one byte per element per
+    frame, 254 levels, zero reserved for &ldquo;has never slipped&rdquo; and
+    drawn grey rather than at the bottom of the ramp, because a locked element
+    is categorically different from one that slipped a little. The whole
+    120&nbsp;&times;&nbsp;10,230 array is encoded in one pass, so the colour
+    scale is global across frames &mdash; a per-frame scale would normalise away
+    the growth being animated. The quantisation error is bounded by arithmetic
+    rather than asserted, and the build measures what it wrote against that
+    bound: 0.898&nbsp;% against a bound of 0.898&nbsp;%, a ratio of 1.000.
+  </p>
+
+  <style is:global>
+    #viewer { margin-bottom: 18px; }
+    #viewer .canvas { width: 100%; min-height: 420px; cursor: grab; background: #fff; }
+    #viewer .canvas:active { cursor: grabbing; }
+    #viewer .canvas canvas { display: block; }
+    #viewer .panel {
+      display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+      margin-bottom: 10px; font-size: 13px;
+    }
+    #viewer .panel label { display: flex; align-items: center; gap: 6px; }
+    #viewer .panel label > span:first-child { color: var(--fg-dim); }
+    #viewer .panel select { font: inherit; font-size: 13px; padding: 2px 4px; }
+    #viewer .panel .rng { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 220px; }
+    #viewer .panel .rng > span:first-child { color: var(--fg-dim); }
+    #viewer .panel input[type="range"] { flex: 1; min-width: 120px; }
+    #viewer .panel .val { color: var(--fg-dim); min-width: 92px; font-variant-numeric: tabular-nums; }
+    #viewer .bar { margin-top: 8px; }
+    #viewer .bar .strip { height: 10px; border: 1px solid var(--rule); }
+    #viewer .bar .ends {
+      display: flex; justify-content: space-between; font-size: 12px;
+      color: var(--fg-dim); margin-top: 3px; font-variant-numeric: tabular-nums;
+    }
+    #viewer .bar .ends .mid { color: var(--fg-faint); }
+    #viewer .status { font-size: 13px; color: var(--fg-dim); margin-top: 8px; line-height: 1.5; }
+    .cap { font-size: 13px; color: var(--fg-dim); }
+    .cap b { color: var(--fg); font-weight: 600; }
+  </style>
+  <script>
+    import { startFractal } from "../viz/fractal";
+    startFractal(document.getElementById("viewer")!, import.meta.env.BASE_URL);
+  </script>
+</Base>
