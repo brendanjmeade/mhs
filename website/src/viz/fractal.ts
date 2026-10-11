@@ -33,18 +33,96 @@
 // dark end would read as "barely moved" instead of "did not move".
 
 import {
-  BufferGeometry, Color, DoubleSide, Float32BufferAttribute, LineBasicMaterial,
-  LineSegments, Mesh, MeshBasicMaterial, PerspectiveCamera, Scene, Vector3,
-  WebGLRenderer,
+  BackSide, BoxGeometry, BufferGeometry, Color, Data3DTexture, DataTexture,
+  DoubleSide, Float32BufferAttribute, GLSL3, LineBasicMaterial, LinearFilter,
+  LineSegments, Mesh, MeshBasicMaterial, PerspectiveCamera, RedFormat, Scene,
+  ShaderMaterial, UnsignedByteType, Vector3, WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { lut, cssGradient, type MapName } from "./colormaps";
 
 const MAP: MapName = "plasma";
+const STRESS_MAP: MapName = "viridis";   // a different map: a different quantity
 const LOCKED = [0.84, 0.84, 0.86];      // grey: never slipped
 const FPS = 12;                          // frames per second when playing
 
+// Samples along each view ray through the stress volume. 96 against a 40-cell
+// grid oversamples ~2.4x, which is what keeps the shell from stippling when the
+// camera looks along a grid axis.
+const RAY_STEPS = 96;
+
+// THE ISOSURFACE IS RAYMARCHED, NOT TRIANGULATED, and the reason is payload
+// rather than laziness. Marching cubes would ship a mesh per threshold, so the
+// threshold could not be a slider; the volume is 64 kB as bytes and every
+// threshold is then free. Transparency also comes out of the compositing for
+// nothing, where a triangulated shell would need sorting to look right.
+const VOL_VERT = /* glsl */`
+out vec3 vPos;
+void main() {
+  vPos = (modelMatrix * vec4(position, 1.0)).xyz;
+  gl_Position = projectionMatrix * viewMatrix * vec4(vPos, 1.0);
+}`;
+
+const VOL_FRAG = /* glsl */`
+precision highp float;
+precision highp sampler3D;
+in vec3 vPos;
+layout(location = 0) out vec4 fragColor;
+uniform sampler3D uVol;
+uniform sampler2D uLut;
+uniform vec3 uLo;
+uniform vec3 uHi;
+uniform vec3 uDims;
+uniform vec3 uEye;
+uniform float uThresh;
+uniform float uAlpha;
+
+// Grid point i sits at i/(n-1) of the box, but a TEXEL CENTRE is at
+// (i+0.5)/n. Sampling the box fraction directly stretches the volume by
+// (n-1)/n -- half a cell at every face, which reads as the field leaking
+// outside the body. scene.ts carries the same correction for the same reason.
+vec3 texel(vec3 f) { return (f * (uDims - 1.0) + 0.5) / uDims; }
+
+void main() {
+  vec3 dir = normalize(vPos - uEye);
+  vec3 t0 = (uLo - uEye) / dir;
+  vec3 t1 = (uHi - uEye) / dir;
+  vec3 lo = min(t0, t1);
+  vec3 hi = max(t0, t1);
+  float tin = max(max(lo.x, lo.y), lo.z);
+  float tout = min(min(hi.x, hi.y), hi.z);
+  tin = max(tin, 0.0);
+  if (tout <= tin) discard;
+
+  float dt = (tout - tin) / float(${RAY_STEPS});
+  vec4 acc = vec4(0.0);
+  for (int i = 0; i < ${RAY_STEPS}; i++) {
+    vec3 p = uEye + dir * (tin + (float(i) + 0.5) * dt);
+    float v = texture(uVol, texel((p - uLo) / (uHi - uLo))).r;
+    if (v <= uThresh) continue;
+    // A soft shoulder above the threshold rather than a hard step: a hard one
+    // aliases into visible terraces at one sample per cell.
+    float w = smoothstep(uThresh, min(uThresh + 0.10, 1.0), v);
+    vec3 c = texture(uLut, vec2(v, 0.5)).rgb;
+    float a = uAlpha * w;
+    acc.rgb += (1.0 - acc.a) * c * a;
+    acc.a += (1.0 - acc.a) * a;
+    if (acc.a > 0.98) break;
+  }
+  if (acc.a <= 0.002) discard;
+  fragColor = vec4(acc.rgb, acc.a);
+}`;
+
 export type Mode = "slip" | "incr" | "activation";
+
+export interface StressMeta {
+  file: string; bytes: number;
+  grid: [number, number, number];
+  origin: [number, number, number];
+  spacing: [number, number, number];
+  log_min: number; log_max: number; min: number; max: number;
+  quantity: string; at_lam: number; resolves_individual_faults: boolean;
+}
 
 interface ArrayMeta {
   file: string; bytes: number; frames: number; n: number;
@@ -66,6 +144,7 @@ export interface FractalPayload {
     lam: number; events: number; events_cumulative: number;
     moment_cumulative_Nm: number; n_ever: number; slipped_this_frame: number;
   }[];
+  stress?: StressMeta;
   d_geom: { known: number; calibrated: number; window_km: number[] } | null;
   network: Record<string, any>;
   friction: Record<string, any>;
@@ -108,6 +187,9 @@ export class FractalScene {
   private playing = false;
   private raf = 0;
   private last = 0;
+  private vol?: Mesh;
+  private volMat?: ShaderMaterial;
+  private stressMeta?: StressMeta;
 
   constructor(el: HTMLElement, p: FractalPayload, pos: Float32Array) {
     this.el = el;
@@ -162,6 +244,82 @@ export class FractalScene {
         }
       }
     }
+  }
+
+  /** Build the raymarched stress volume. Called once, if the payload has one. */
+  setStress(bytes: Uint8Array, g: StressMeta) {
+    const [nx, ny, nz] = g.grid;
+    if (bytes.length !== nx * ny * nz) {
+      throw new Error(`stress volume is ${bytes.length} bytes for `
+        + `${nx}x${ny}x${nz} = ${nx * ny * nz}`);
+    }
+    // uint8 and never a float texture: OES_texture_float_linear is missing on
+    // roughly half of iOS, and it fails by rendering black with no error.
+    const tex = new Data3DTexture(bytes, nx, ny, nz);
+    tex.format = RedFormat;
+    tex.type = UnsignedByteType;
+    tex.minFilter = tex.magFilter = LinearFilter;
+    tex.unpackAlignment = 1;
+    tex.needsUpdate = true;
+
+    const lutTex = new DataTexture(lut(STRESS_MAP), 256, 1);
+    lutTex.minFilter = lutTex.magFilter = LinearFilter;
+    lutTex.needsUpdate = true;
+
+    const lo = new Vector3(g.origin[0], g.origin[1], g.origin[2]);
+    const hi = new Vector3(
+      g.origin[0] + g.spacing[0] * (nx - 1),
+      g.origin[1] + g.spacing[1] * (ny - 1),
+      g.origin[2] + g.spacing[2] * (nz - 1));
+    const size = hi.clone().sub(lo);
+    const mid = lo.clone().add(hi).multiplyScalar(0.5);
+
+    this.volMat = new ShaderMaterial({
+      glslVersion: GLSL3, vertexShader: VOL_VERT, fragmentShader: VOL_FRAG,
+      transparent: true, depthWrite: false, side: BackSide,
+      uniforms: {
+        uVol: { value: tex }, uLut: { value: lutTex },
+        uLo: { value: lo }, uHi: { value: hi },
+        uDims: { value: new Vector3(nx, ny, nz) },
+        uEye: { value: this.camera.position.clone() },
+        uThresh: { value: 0.55 }, uAlpha: { value: 0.09 },
+      },
+    });
+    // BackSide so the ray starts from the far faces and marches toward the
+    // camera's side: with FrontSide the box vanishes once the camera is inside
+    // it, which is exactly where a viewer ends up when zooming in.
+    this.vol = new Mesh(new BoxGeometry(size.x, size.y, size.z), this.volMat);
+    this.vol.position.copy(mid);
+    this.scene.add(this.vol);
+    this.stressMeta = g;
+
+    // COMPILE THE SHADER NOW, while the volume is still visible, then hide it.
+    // three.js compiles a material the first time its mesh is drawn, so a GLSL
+    // error on a mesh that starts hidden stays silent until a visitor happens
+    // to tick the checkbox -- and then fails as a blank overlay plus a console
+    // message nobody is watching. Forcing it here makes a broken shader a
+    // load-time failure, which is the only kind worth having.
+    this.render();
+    this.vol.visible = false;
+    this.render();
+    this.render();
+  }
+
+  showStress(on: boolean) {
+    if (this.vol) { this.vol.visible = on; this.render(); }
+  }
+  setThreshold(t: number) {
+    if (this.volMat) { this.volMat.uniforms.uThresh.value = t; this.render(); }
+  }
+  setStressAlpha(a: number) {
+    if (this.volMat) { this.volMat.uniforms.uAlpha.value = a; this.render(); }
+  }
+  get hasStress() { return !!this.vol; }
+  /** Decode a threshold in 0..1 back to GPa, for the readout. */
+  thresholdGPa(t: number): number {
+    const m = this.stressMeta;
+    if (!m) return NaN;
+    return 10 ** (m.log_min + t * (m.log_max - m.log_min));
   }
 
   setMode(m: Mode) { this.mode = m; this.paint(); }
@@ -234,7 +392,15 @@ export class FractalScene {
     this.render();
   }
 
-  render() { this.renderer.render(this.scene, this.camera); }
+  render() {
+    // The ray origin is the camera, so the uniform has to follow it. Doing
+    // this in render() rather than on the controls' change event also covers
+    // the play loop and the initial frame.
+    if (this.volMat) {
+      (this.volMat.uniforms.uEye.value as Vector3).copy(this.camera.position);
+    }
+    this.renderer.render(this.scene, this.camera);
+  }
 }
 
 const MODE_LABEL: Record<Mode, string> = {
@@ -305,6 +471,51 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
   val.className = "val";
   slot("frame").appendChild(rng);
   slot("frame").appendChild(val);
+
+  // The stress isosurface, if the payload carries one. Absent is normal: the
+  // volume costs an hour of kernel evaluation, so a payload may ship without
+  // it and the page has to degrade rather than break.
+  if (p.stress) {
+    try {
+      const sbuf = await (await fetch(base + p.stress.file)).arrayBuffer();
+      scene.setStress(new Uint8Array(sbuf), p.stress);
+    } catch (e) {
+      console.warn("stress volume unavailable:", e);
+    }
+  }
+  if (scene.hasStress && p.stress) {
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    const lab = document.createElement("label");
+    lab.style.display = "flex"; lab.style.alignItems = "center"; lab.style.gap = "6px";
+    lab.appendChild(box);
+    lab.appendChild(document.createTextNode("stress isosurface"));
+    slot("iso").appendChild(lab);
+
+    const th = document.createElement("input");
+    th.type = "range"; th.min = "0.20"; th.max = "0.95"; th.step = "0.01";
+    th.value = "0.55"; th.disabled = true;
+    const thv = document.createElement("span");
+    thv.className = "val";
+    const showTh = () => {
+      const g = scene.thresholdGPa(Number(th.value));
+      thv.textContent = `${(g * 1e3).toFixed(1)} MPa`;
+    };
+    slot("thresh").appendChild(th);
+    slot("thresh").appendChild(thv);
+    showTh();
+
+    box.addEventListener("change", () => {
+      scene.showStress(box.checked);
+      th.disabled = !box.checked;
+    });
+    th.addEventListener("input", () => { scene.setThreshold(Number(th.value)); showTh(); });
+  } else {
+    const hint = root.querySelector<HTMLElement>('[data-ctl="iso"]');
+    if (hint) hint.remove();
+    const hint2 = root.querySelector<HTMLElement>('[data-ctl="thresh"]');
+    if (hint2) hint2.remove();
+  }
 
   const strip = document.createElement("div");
   strip.className = "strip";

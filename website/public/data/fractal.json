@@ -11453,5 +11453,43 @@
  "nodata": 0,
  "roundtrip_worst_ratio_to_bound": 0.9999887508676878,
  "schema": 1,
+ "stress": {
+  "at_frame": 119,
+  "at_lam": 0.2317664292938978,
+  "bound_rel_err": 0.025063387700770212,
+  "bytes": 13824,
+  "encoding": "log10_u8",
+  "file": "fractal.stress.bin",
+  "grid": [
+   24,
+   24,
+   24
+  ],
+  "log_max": -1.112298415645453,
+  "log_min": -6.552163774327796,
+  "max": 0.0772149837447816,
+  "measured_rel_err": 0.025059573711573115,
+  "min": 2.804375896243123e-07,
+  "n_nonzero": 13824,
+  "n_points": 13824,
+  "n_sources": 10230,
+  "order": "x fastest, then y, then z",
+  "origin": [
+   -20.0,
+   -20.0,
+   -42.0
+  ],
+  "quantity": "max_shear_GPa",
+  "resolves_individual_faults": false,
+  "seconds": 7655.0367872715,
+  "sha256": "7a4ea0e9eb10f6fb",
+  "sources": "elements",
+  "spacing": [
+   1.7391304347826093,
+   1.7391304347826093,
+   1.7391304347826093
+  ],
+  "us_per_pair": 54.1299870625127
+ },
  "unit": "km of slip"
 }

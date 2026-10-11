@@ -47,6 +47,10 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
       <span data-ctl="play"></span>
       <div class="rng" data-ctl="frame"><span>load</span></div>
     </div>
+    <div class="panel">
+      <span data-ctl="iso"></span>
+      <div class="rng" data-ctl="thresh"><span>threshold</span></div>
+    </div>
     <div data-canvas class="canvas" aria-label="A synthetic three-dimensional fault network of 512 faults, coloured by which elements slip as the regional load increases"></div>
     <div data-bar class="bar"></div>
     <p data-status class="status">loading…</p>
@@ -85,6 +89,44 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     rather than the element size, because until a box is bigger than a fault
     that fault reads locally two-dimensional. For this network that leaves 0.73
     decades, enough to rank against a null and not enough to quote three digits.
+  </p>
+
+  <h2>The stress isosurface</h2>
+
+  <p>
+    Toggling the isosurface raymarches the elastic maximum shear stress
+    &mdash; an invariant, (&sigma;<sub>1</sub>&nbsp;&minus;&nbsp;&sigma;<sub>3</sub>)/2,
+    so it does not depend on a reference plane the way a Coulomb stress change
+    would &mdash; through the half space at the final load. The threshold slider
+    moves the shell; it is translucent so the faults stay visible inside it.
+  </p>
+
+  <p>
+    <b>The grid is coarser than the faults, and no affordable grid is not.</b>
+    Evaluating the field costs one kernel pair per grid point per element, and a
+    stress readout parallelises at only 1.45&times; here &mdash; it is the
+    <i>assembly</i> of an interaction matrix that parallelises at 8.5&times;, a
+    distinction worth keeping straight, because reading the wrong row made our
+    first cost estimate wrong by a factor of six. So 24<sup>3</sup> against all
+    10,230 elements is about two hours and 40<sup>3</sup> is about nine. At
+    1.7&nbsp;km cells against 0.4&nbsp;km faults, what the isosurface shows is
+    the <i>aggregate</i> stress structure of the network at the scale of the
+    cascade's upper levels. It is not a picture of a stress concentration at a
+    fault tip, and it should not be read as one.
+  </p>
+
+  <p>
+    A faster route was tried and rejected on measurement. Replacing each fault
+    by its own rectangle carrying the same total moment &mdash; geometry exact,
+    moment exact, only the slip distribution within a fault averaged &mdash; is
+    twenty times cheaper and agrees with the exact field to a median of
+    0.00&nbsp;% on a coarse grid, correlation 0.9997. But resolved against
+    distance from the nearest fault it is wrong by a median 3.8&nbsp;% and a
+    worst 38&nbsp;% within one fault length, falling below 0.1&nbsp;% only
+    beyond about eight. An isosurface at a high threshold selects precisely the
+    near-fault points, so the approximation is worst exactly where the picture
+    is most interesting. The shipped volume is therefore exact, and the coarse
+    grid is the price.
   </p>
 
   <h2>Why there is a strength drop</h2>
