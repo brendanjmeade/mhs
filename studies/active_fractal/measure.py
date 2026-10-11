@@ -334,6 +334,201 @@ def null_by_score(tris: np.ndarray, score: np.ndarray,
     return dimension(tris[idx], **kw)
 
 
+# ------------------------------------------------------------ alignment ----
+# WHAT "ALIGNED" MEANS, OPERATIONALLY. The question is whether the actively
+# slipping elements form localized, mutually coherent structures or whether
+# slip homogenizes. "Aligned" is not physical connectivity, so none of these
+# touch adjacency except the clustering one, and that one asks about SHAPE
+# rather than mere touching.
+#
+# Every one is referenced against a null, never read absolutely. The
+# no-interaction null (`null_by_score` on `-first_failure_lambda`) is the set
+# that would fail with K = 0, so it carries the orientation selection the
+# stress field performs on its own; the difference is what interaction added.
+
+def moment_tensors(tris, slip, slip_dir, mu: float = 30.0):
+    """``(n, 3, 3)`` per-element moment tensors ``mu A s (d (x) n + n (x) d)``.
+
+    ``slip`` is the scalar magnitude along each element's own ``slip_dir`` in
+    (strike, dip); the Cartesian slip direction and the normal both come from
+    ``mhs.tdcs``, so that convention is used rather than restated.
+
+    The sum of these is the network's total moment tensor; the sum of their
+    norms is what it would be if every element pulled the same way. The ratio
+    is :func:`coherence`.
+    """
+    from mhs import tdcs
+    tris = np.asarray(tris, float).reshape(-1, 3, 3)
+    n = tris.shape[0]
+    local = np.zeros((n, 3))
+    local[:, :2] = np.asarray(slip_dir, float).reshape(n, 2)
+    d = tdcs.to_cartesian(tris, local)
+    nd = np.linalg.norm(d, axis=1, keepdims=True)
+    d = d / np.where(nd > 0.0, nd, 1.0)
+    nrm = tdcs.unit_normals(tris)
+    area = 0.5 * np.linalg.norm(np.cross(tris[:, 1] - tris[:, 0],
+                                         tris[:, 2] - tris[:, 0]), axis=1)
+    w = mu * area * np.asarray(slip, float).ravel()
+    dn = np.einsum("ij,ik->ijk", d, nrm)
+    return w[:, None, None] * (dn + np.transpose(dn, (0, 2, 1)))
+
+
+def coherence(M) -> float:
+    """``||sum M_i|| / sum ||M_i||`` in Frobenius norm.
+
+    1 when every element contributes the same moment tensor direction --
+    perfectly coherent deformation, the signature of a single shear zone. Near
+    0 when slip is incoherent and cancels. For ``N`` independent random
+    orientations it scales as ``1/sqrt(N)``, which is the baseline any claim of
+    coherence has to beat and which the selfcheck gates directly.
+    """
+    M = np.asarray(M, float).reshape(-1, 3, 3)
+    if M.shape[0] == 0:
+        return float("nan")
+    den = float(np.linalg.norm(M, axis=(1, 2)).sum())
+    if den <= 0.0:
+        return float("nan")
+    return float(np.linalg.norm(M.sum(axis=0))) / den
+
+
+def coherence_vs_radius(centers, M, radii, *, n_centers: int = 200,
+                        seed: int = 0):
+    """``C(r)``: coherence within spheres of radius ``r``, averaged over
+    randomly chosen element positions as sphere centres.
+
+    A coherence length shows up as the radius where this falls away. Flat and
+    low at every radius is homogenization; flat and high is one system-spanning
+    structure.
+    """
+    c = np.asarray(centers, float).reshape(-1, 3)
+    M = np.asarray(M, float).reshape(-1, 3, 3)
+    rng = np.random.default_rng(seed)
+    pick = rng.choice(c.shape[0], min(n_centers, c.shape[0]), replace=False)
+    out = np.empty(len(radii))
+    for k, r in enumerate(radii):
+        vals = []
+        for i in pick:
+            sel = ((c - c[i]) ** 2).sum(axis=1) <= r * r
+            if int(sel.sum()) >= 2:
+                vals.append(coherence(M[sel]))
+        out[k] = float(np.mean(vals)) if vals else np.nan
+    return out
+
+
+def participation_ratio(centers, weight, cell: float, *, available=None):
+    """How evenly ``weight`` spreads over the cells that COULD carry it.
+
+    ``(sum w)^2 / (N_cells * sum w^2)`` with ``N_cells`` the number of cells
+    holding at least one AVAILABLE element, not merely one active one. That
+    normalisation is the point: dividing by the OCCUPIED cells would report 1
+    for a set concentrated in a single cell, the opposite of what a
+    localization measure should say.
+
+    1 means slip is spread evenly over every available site, ``1/N_cells``
+    means it is all in one.
+
+    THE BASELINE IS NOT 1, AND THAT IS WHY THIS MUST BE READ AGAINST A NULL.
+    For points scattered at random with mean occupancy ``lam`` per cell, the
+    counts are Poisson, so ``E[m^2]/E[m]^2 = 1 + 1/lam`` and
+
+        PR_random = lam / (lam + 1)
+
+    -- 0.80 at four elements per cell, measured 0.811. So an unlocalized set
+    does NOT give 1, and comparing a measured PR against 1 would read ordinary
+    Poisson scatter as localization. The reference is always a null at matched
+    cardinality, where ``lam`` is the same by construction; ``cell`` should be
+    reported alongside, since the baseline moves with it.
+    """
+    c = np.asarray(centers, float).reshape(-1, 3)
+    w = np.asarray(weight, float).ravel()
+    av = c if available is None else np.asarray(available, float).reshape(-1, 3)
+    origin = av.min(axis=0)
+    n_cells = np.unique(np.floor((av - origin) / cell).astype(np.int64),
+                        axis=0).shape[0]
+    idx = np.floor((c - origin) / cell).astype(np.int64)
+    _, inv = np.unique(idx, axis=0, return_inverse=True)
+    m = np.bincount(inv.ravel(), weights=w)
+    s2 = float((m ** 2).sum())
+    if s2 <= 0.0 or n_cells == 0:
+        return float("nan")
+    return float(m.sum() ** 2 / (n_cells * s2))
+
+
+def connected_clusters(points, reach: float):
+    """``(n,)`` cluster labels for points within ``reach`` of one another.
+
+    Union-find over a uniform spatial hash of cell size ``reach``, so each
+    point inspects its own cell and the 26 neighbours. numpy only: ``mhs``
+    declares numpy and numba and nothing else, and ``network._Hash`` already
+    records why a study should not widen that. ``_Hash`` itself cannot be
+    reused -- it returns a greedy keep-mask and never says who was near whom.
+    """
+    p = np.asarray(points, float).reshape(-1, 3)
+    n = p.shape[0]
+    if n == 0:
+        return np.empty(0, dtype=np.int64)
+    parent = np.arange(n)
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return int(a)
+
+    grid = {}
+    for i, q in enumerate(p):
+        grid.setdefault((int(q[0] // reach), int(q[1] // reach),
+                         int(q[2] // reach)), []).append(i)
+    r2 = reach * reach
+    for (i0, j0, k0), members in grid.items():
+        near = []
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                for dk in (-1, 0, 1):
+                    near += grid.get((i0 + di, j0 + dj, k0 + dk), [])
+        for a in members:
+            for b in near:
+                if a < b and float(((p[a] - p[b]) ** 2).sum()) < r2:
+                    ra, rb = find(a), find(b)
+                    if ra != rb:
+                        parent[ra] = rb
+    roots = np.array([find(i) for i in range(n)])
+    _, labels = np.unique(roots, return_inverse=True)
+    return labels.ravel().astype(np.int64)
+
+
+def shape_indices(points):
+    """``(planarity, linearity)`` from the position-covariance eigenvalues.
+
+    With ``l1 >= l2 >= l3``, planarity is ``(l2-l3)/l1`` and linearity is
+    ``(l1-l2)/l1``. REPORTED SEPARATELY ON PURPOSE: a line and a plane both
+    have a small smallest eigenvalue, so a single "flatness" number would read
+    a lineament as a shear zone. A plane gives (1, 0), a line (0, 1), an
+    isotropic blob (0, 0).
+    """
+    p = np.asarray(points, float).reshape(-1, 3)
+    if p.shape[0] < 3:
+        return float("nan"), float("nan")
+    q = p - p.mean(axis=0)
+    ev = np.sort(np.linalg.eigvalsh(q.T @ q))[::-1]
+    if ev[0] <= 0.0:
+        return float("nan"), float("nan")
+    return float((ev[1] - ev[2]) / ev[0]), float((ev[0] - ev[1]) / ev[0])
+
+
+def slip_dispersion(directions):
+    """``1 - ||mean unit vector||``: 0 when slip is perfectly aligned.
+
+    Slip is a true vector rather than an axis -- a fault slipping one way is
+    not the reverse -- so the resultant of the unit vectors is the right
+    statistic and no hemisphere folding is applied.
+    """
+    d = np.asarray(directions, float).reshape(-1, 3)
+    nd = np.linalg.norm(d, axis=1, keepdims=True)
+    d = d / np.where(nd > 0.0, nd, 1.0)
+    return float(1.0 - np.linalg.norm(d.mean(axis=0)))
+
+
 # ------------------------------------------------------- calibration sets ----
 # Sets whose dimension is known by construction, so the estimator can be shown
 # to recover it BEFORE it is pointed at a fault network. The headline claim

@@ -88,6 +88,24 @@ MAX_EXPONENT_BIAS_SIGMA = 3.0
 #: stated uncertainty.
 MIN_ACTIVE_SET_JACCARD = 1.0
 
+#: Coherence of a set of identically-oriented, identically-slipping elements.
+#: Gated at float precision, because it is exactly 1 by construction: measured
+#: 1.000000000000.
+TOL_COHERENCE_EXACT = 1.0e-9
+
+#: Coherence of N randomly oriented elements, in units of the 1/sqrt(N) that
+#: theory predicts. A factor of 2 either way: measured ratios 0.95, 0.66, 1.16
+#: and 0.94 at N = 10, 100, 1000, 10000 over eight realizations each, so the
+#: scaling holds but the scatter is wide at small N.
+MAX_COHERENCE_SCALING_FACTOR = 2.0
+
+#: Participation ratio of a random set, against the POISSON prediction
+#: lam/(lam+1) rather than against 1. This is the clause that records why: an
+#: unlocalized set does NOT give 1, so comparing a measured PR against 1 would
+#: read ordinary occupancy scatter as localization. Measured 0.811 against a
+#: predicted 0.800 at four elements per cell.
+TOL_PR_POISSON = 0.05
+
 #: Minimum eigenvalue of sym(-P) for the projected operator. Gated as a FLOOR:
 #: the quasi-static complementarity problem is uniquely solvable on every
 #: active set when -P is positive definite, so this is the well-posedness
@@ -434,9 +452,154 @@ def c_slip() -> None:
                "and there are no events")
 
 
+def c_align() -> None:
+    """The alignment statistics, against answers known in closed form.
+
+    None of these existed in either repository, so each is pinned to a limit it
+    must reproduce rather than to a number someone looked at once.
+    """
+    print("\n[align] coherence, localization, shape, clustering")
+    rng = np.random.default_rng(0)
+
+    # Coherence is EXACTLY 1 when every element pulls the same way.
+    n = 400
+    nrm = np.repeat(np.array([[0.3, 0.4, math.sqrt(0.75)]]), n, axis=0)
+    nrm /= np.linalg.norm(nrm, axis=1, keepdims=True)
+    cen = rng.uniform(-10, 10, (n, 3))
+    cen[:, 2] = -20.0
+    tris = N.oriented_triangle(cen, nrm, 1.0)
+    Mt = M.moment_tensors(tris, np.ones(n), np.tile([1.0, 0.0], (n, 1)))
+    check("coherence of an identical set is 1",
+          abs(M.coherence(Mt) - 1.0), TOL_COHERENCE_EXACT)
+
+    # And falls as 1/sqrt(N) for random orientations, which is the floor any
+    # claim of emergent coherence has to clear.
+    worst = 1.0
+    for nn in (100, 1000):
+        vals = []
+        for k in range(6):
+            r2 = np.random.default_rng(500 + k)
+            nr = N.isotropic_normals(r2, nn)
+            cc = r2.uniform(-10, 10, (nn, 3))
+            cc[:, 2] = -20.0
+            ang = r2.uniform(0.0, 2 * math.pi, nn)
+            sd = np.stack([np.cos(ang), np.sin(ang)], axis=1)
+            vals.append(M.coherence(M.moment_tensors(
+                N.oriented_triangle(cc, nr, 1.0), np.ones(nn), sd)))
+        ratio = float(np.mean(vals)) * math.sqrt(nn)
+        print(f"       N {nn:5d}: C {np.mean(vals):.4f}  "
+              f"x sqrt(N) = {ratio:.3f}")
+        worst = min(worst, min(ratio, 1.0 / ratio))
+    check("random coherence scales as 1/sqrt(N)",
+          1.0 / worst, MAX_COHERENCE_SCALING_FACTOR)
+
+    # Participation ratio: the baseline is lam/(lam+1), NOT 1.
+    pts = rng.uniform(0.0, 10.0, (4000, 3))
+    pr = M.participation_ratio(pts, np.ones(4000), 1.0)
+    lam = 4000.0 / np.unique(np.floor(pts).astype(np.int64), axis=0).shape[0]
+    want = lam / (lam + 1.0)
+    print(f"       PR of a random set {pr:.4f}, Poisson predicts "
+          f"lam/(lam+1) = {want:.4f} at lam = {lam:.2f}")
+    check("PR of a random set matches the Poisson baseline",
+          abs(pr - want), TOL_PR_POISSON)
+    inside = pts[np.all((pts > 0.0) & (pts < 1.0), axis=1)]
+    ncell = np.unique(np.floor(pts).astype(np.int64), axis=0).shape[0]
+    pr1 = M.participation_ratio(inside, np.ones(len(inside)), 1.0,
+                                available=pts)
+    check("PR of a one-cell set is 1/N_cells",
+          abs(pr1 - 1.0 / ncell) * ncell, 0.05)
+
+    # Shape indices separate a plane from a line, which a single flatness
+    # number would not.
+    pl = np.c_[rng.uniform(-1, 1, 1500), rng.uniform(-1, 1, 1500),
+               np.full(1500, 1e-9)]
+    ln = np.c_[rng.uniform(-1, 1, 1500), np.full(1500, 1e-9),
+               np.full(1500, 1e-9)]
+    bl = rng.normal(size=(1500, 3))
+    p_pl, l_pl = M.shape_indices(pl)
+    p_ln, l_ln = M.shape_indices(ln)
+    p_bl, l_bl = M.shape_indices(bl)
+    print(f"       plane ({p_pl:.3f}, {l_pl:.3f})  line ({p_ln:.3f}, "
+          f"{l_ln:.3f})  blob ({p_bl:.3f}, {l_bl:.3f})")
+    check("a plane reads planar", 1.0 - p_pl, 0.10)
+    check("a line reads linear and NOT planar", max(1.0 - l_ln, p_ln), 0.10)
+    check("a blob reads neither", max(p_bl, l_bl), 0.15)
+
+    # Clustering.
+    a = rng.normal(0.0, 0.3, (200, 3))
+    b = rng.normal(0.0, 0.3, (200, 3)) + 20.0
+    both = np.vstack([a, b])
+    check_true("two separated blobs give two clusters",
+               int(M.connected_clusters(both, 1.0).max()) + 1 == 2)
+    check_true("one blob gives one cluster",
+               int(M.connected_clusters(a, 1.0).max()) + 1 == 1)
+    check_true("a reach spanning both gives one",
+               int(M.connected_clusters(both, 50.0).max()) + 1 == 1)
+
+    # Slip dispersion.
+    check("aligned slip has zero dispersion",
+          M.slip_dispersion(np.repeat([[1.0, 0.0, 0.0]], 500, axis=0)), 1e-12)
+    check("random slip has dispersion near 1",
+          1.0 - M.slip_dispersion(rng.normal(size=(2000, 3))), 0.15)
+
+
+def c_cloud() -> None:
+    """The dense cloud generator: isotropy, orientation, and the two samplers."""
+    print("\n[cloud] a dense cloud of independently-oriented patches")
+    rng = np.random.default_rng(0)
+
+    iso = N.isotropic_normals(rng, 100000)
+    S = N.fabric(iso)
+    print(f"       isotropic_normals  S {np.round(S, 4)}")
+    check("isotropic_normals is isotropic", abs(S[0] - 1.0 / 3.0), 0.005)
+
+    # The truncated dip range is ANISOTROPIC, and by a measured amount. Gated
+    # as a difference between the two samplers rather than a failure of one:
+    # the truncation is a legitimate modelling choice that the fault network
+    # makes deliberately, and only the cloud needs full isotropy.
+    for lo, hi, want in ((30.0, 90.0, 0.020), (0.0, 90.0, 0.166)):
+        d = np.radians(rng.uniform(lo, hi, 100000))
+        t = np.radians(rng.uniform(0.0, 360.0, 100000))
+        nr = np.stack([-np.sin(t) * np.sin(d), np.cos(t) * np.sin(d),
+                       np.cos(d)], axis=1)
+        got = abs(N.fabric(nr)[0] - 1.0 / 3.0)
+        print(f"       dip U[{lo:.0f},{hi:.0f}]       "
+              f"|S1-1/3| {got:.4f} (measured {want})")
+        check(f"dip U[{lo:.0f},{hi:.0f}] anisotropy is {want}",
+              abs(got - want), 0.01)
+
+    net = N.build_cloud(seed=4, n_elements=1500, h=0.5, spacing_over_h=1.5)
+    e1 = net.tris[:, 1] - net.tris[:, 0]
+    e2 = net.tris[:, 2] - net.tris[:, 0]
+    mn = np.cross(e1, e2)
+    mn /= np.linalg.norm(mn, axis=1, keepdims=True)
+    up = mhs.tdcs.unit_normals(net.tris)
+    check_true("every mesh normal points UP and matches the tdcs frame",
+               bool((mn[:, 2] >= -1e-12).all())
+               and bool((np.einsum("ij,ij->i", mn, up) > 0.999999).all()),
+               f"min n_z {mn[:, 2].min():+.2e}")
+    check_true("every vertex is below the free surface",
+               bool((net.tris[:, :, 2] < 0.0).all()),
+               f"max z {net.tris[:, :, 2].max():.4f} km")
+    ar = net.areas()
+    check("all elements have the same area",
+          float(ar.std() / ar.mean()), 1e-12)
+    again = N.build_cloud(seed=4, n_elements=1500, h=0.5, spacing_over_h=1.5)
+    check_true("the cloud is deterministic for a seed",
+               bool(np.array_equal(net.tris, again.tris)))
+    # The Poisson nearest-neighbour factor, which is why spacing_over_h is a
+    # density and not a neighbour distance.
+    nn = net.meta["nearest_neighbour_km"]
+    ratio = nn["mean"] / net.meta["spacing_km"]
+    print(f"       nearest neighbour / spacing {ratio:.3f} "
+          f"(Poisson predicts 0.554)")
+    check("nearest-neighbour spacing matches Poisson", abs(ratio - 0.554), 0.06)
+
+
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,
-           "kernel": c_kernel, "slip": c_slip}
+           "kernel": c_kernel, "slip": c_slip, "align": c_align,
+           "cloud": c_cloud}
 
 
 def main() -> bool:

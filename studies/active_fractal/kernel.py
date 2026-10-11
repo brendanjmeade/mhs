@@ -266,6 +266,39 @@ def project(K: np.ndarray, rec_dir: np.ndarray,
         np.einsum("jbai,ia,jb->ji", sh, rec_dir, src_dir))
 
 
+def branching_ratio(P: np.ndarray) -> np.ndarray:
+    """``(n,)`` of ``sum_j max(P_ij, 0) / |P_ii|``: the triggering budget.
+
+    How much of what element ``i`` sheds when it fails lands on OTHER elements
+    where it pushes them toward failure. ``P`` is source-major, so row ``i`` is
+    what ``i`` delivers, which is what a branching ratio needs; only the
+    positive part counts, because a negative transfer relaxes a neighbour
+    rather than triggering it.
+
+    WHY THIS IS THE RIGHT DIAGNOSTIC, and why it is geometry alone. An element
+    that fails slips ``delta = (g_s - g_d)/|P_ii|`` and delivers ``P_ij delta``
+    to ``j``, so the strength drop CANCELS from the ratio. And because a failed
+    element re-fails only after being reloaded from ``g_d`` back to ``g_s``,
+    the gaps to failure are themselves distributed over a range proportional to
+    the drop -- so the triggering condition ``gap/delta < P_ij/|P_ii|`` is drop
+    independent too. Measured on the fault network: a 25x change in the drop
+    moved mean avalanche size by under 2 %, and ``events * drop`` stayed
+    constant to 9 %.
+
+    ``B > 1`` in the mean is runaway; the interesting regime is just below.
+    Measured on the fault network, where coherence was imposed rather than
+    emergent, the budget split as ``B_intra = 0.526`` (constant to four
+    decimals across a 16x density change) against ``B_inter = 0.0005-0.011``,
+    which is why nothing there could organize across faults.
+    """
+    n = P.shape[0]
+    idx = np.arange(n)
+    diag = np.abs(P[idx, idx])
+    pos = np.maximum(P, 0.0)
+    out = pos.sum(axis=1) - pos[idx, idx]
+    return out / diag
+
+
 def normal_block(K: np.ndarray) -> np.ndarray:
     """``(n_src, n_b, n_rec)``: normal traction from unit slip. Coupling only.
 

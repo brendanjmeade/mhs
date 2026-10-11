@@ -104,6 +104,27 @@ MIN_SEP_OVER_EPS = 2.5
 #: the patch that went into the matrix.
 MIN_ELEMENTS_PER_FAULT = 2
 
+#: Perpendicular clearance a collocation point must keep from ANOTHER element's
+#: surface, in units of eps. MEASURED, after a first guess of 3 eps taken from
+#: the library's remark that the eigenstress dominates "within ~3 eps" -- which
+#: is about the eigenstress, not about conditioning, and is four times stricter
+#: than conditioning needs. At N = 4000, s/h = 0.7:
+#:
+#:     clear   n kept   pruned   B mean   min eig sym(-P)   negative
+#:      0        3572    10.7 %   0.594        -11.4            2
+#:      0.25     3242    19.0 %   0.532         +9.9            0
+#:      0.5      2982    25.5 %   0.479        +10.1            0
+#:      0.75     2786    30.4 %   0.440        +39.9            0
+#:      1.0      2621    34.5 %   0.409        +45.7            0
+#:      3.0      1871    53.2 %   0.274        +65.4            0
+#:
+#: 0.75 is the knee. Below it the eigenvalue margin collapses to ~10 against a
+#: spectrum whose median is 92, so another realization could cross zero; above
+#: it the branching ratio falls with no conditioning bought. Holding it at 0.75
+#: keeps sym(-P) at +38 to +50 from 1292 to 10479 elements, so the floor works
+#: at production scale and not only on the size it was tuned at.
+MIN_FACE_CLEARANCE_OVER_EPS = 0.75
+
 
 @dataclasses.dataclass(frozen=True)
 class Network:
@@ -204,6 +225,84 @@ def expected_elements_per_fault(a: float, lmin: float, lmax: float,
     else:
         m2 = a * lmin ** a * (lmax ** (2.0 - a) - lmin ** (2.0 - a)) / (2.0 - a)
     return 2.0 * (m2 / (1.0 - r ** a)) / (aspect * h * h)
+
+
+def isotropic_normals(rng, n: int) -> np.ndarray:
+    """``(n, 3)`` unit normals uniform on the UPPER hemisphere.
+
+    A normalised Gaussian is exactly uniform on the sphere, which drawing dip
+    and azimuth from independent uniforms is not. The hemisphere flip is the
+    axial convention ``mhs.tdcs.unit_normals`` also uses: a plane's normal and
+    its negation are the same plane.
+
+    WHY THIS EXISTS SEPARATELY FROM ``build_network``'s dip/azimuth draw, with
+    the numbers, because the obvious story about that draw is wrong. Fabric
+    eigenvalues of the orientation tensor over 200k draws:
+
+        dip U[30,90], azimuth U[0,360)   S = 0.3535 0.3528 0.2937   off by 0.020
+        dip U[0,90],  azimuth U[0,360)   S = 0.4993 0.2514 0.2493   off by 0.166
+        this function                    S = 0.3344 0.3338 0.3318   off by 0.001
+
+    Uniform-in-dip UNDER-weights steep dips relative to isotropic, not over:
+    isotropy needs ``P(dip) ~ sin(dip)``, which rises with dip. And over the
+    truncated range the weighting barely matters -- the deficient axis is the
+    vertical at 0.2933, exactly ``(3/pi) * int cos^2`` for uniform dip on
+    [30, 90], while SIN-weighting the same range gives 0.25, i.e. further from
+    isotropic. So the fault network's anisotropy is almost entirely the
+    TRUNCATED DIP RANGE, which is a modelling choice worth keeping, and this
+    function is for the cloud, where no orientation family may be privileged
+    before the mechanics runs.
+    """
+    g = rng.normal(size=(int(n), 3))
+    g /= np.linalg.norm(g, axis=1, keepdims=True)
+    return np.where(g[:, 2:3] < 0.0, -g, g)
+
+
+def fabric(normals: np.ndarray) -> np.ndarray:
+    """Eigenvalues ``S1 >= S2 >= S3`` of the orientation tensor ``<n (x) n>``.
+
+    They sum to 1. Isotropic is ``(1/3, 1/3, 1/3)``; a single orientation
+    drives ``S1 -> 1``. Sign-invariant in ``n``, so the hemisphere flip above
+    does not affect it.
+    """
+    nrm = np.asarray(normals, float).reshape(-1, 3)
+    T = np.einsum("ij,ik->jk", nrm, nrm) / nrm.shape[0]
+    return np.sort(np.linalg.eigvalsh(T))[::-1]
+
+
+def oriented_triangle(centers: np.ndarray, normals: np.ndarray,
+                      size: float) -> np.ndarray:
+    """``(n, 3, 3)`` equilateral triangles of edge ``size``, one per normal.
+
+    VERTEX ORDER PUTS THE MESH NORMAL ALONG ``+normals``, which is the whole
+    reason this is a function and not three lines inline. The assembly uses
+    ``mhs.tdcs``'s UPWARD frame for the basis projection and the mesh's own
+    vertex-order normal for the eigenstress; when those two disagree the
+    eigenstress -- dominant within a few eps -- is subtracted with the wrong
+    sign and the self-interaction diagonal comes out POSITIVE. That is the bug
+    ``kernel.refuse_if_sign_wrong`` caught on ``rect_patch``, and the ordering
+    below is chosen so it cannot recur: the vertices run counter-clockwise seen
+    from ``+normal``, which makes ``cross(v1-v0, v2-v0)`` parallel to it with
+    coefficient ``+2.598 * R^2``.
+
+    ``mhs.fullspace.frame.equilateral`` builds the same shape but always flat
+    in ``z = 0`` with normal ``+z`` and takes no orientation, so composing it
+    with a rotation would cost more than building in the plane directly.
+    """
+    c = np.asarray(centers, float).reshape(-1, 3)
+    n = np.asarray(normals, float).reshape(-1, 3)
+    n = n / np.linalg.norm(n, axis=1, keepdims=True)
+    # Any vector not parallel to n gives an in-plane axis; pick per element so
+    # the choice is never near-degenerate.
+    alt = np.where(np.abs(n[:, 0:1]) < 0.9,
+                   np.array([1.0, 0.0, 0.0]), np.array([0.0, 1.0, 0.0]))
+    e1 = np.cross(n, alt)
+    e1 /= np.linalg.norm(e1, axis=1, keepdims=True)
+    e2 = np.cross(n, e1)
+    R = float(size) / math.sqrt(3.0)          # circumradius of edge `size`
+    angles = (0.0, 2.0 * math.pi / 3.0, 4.0 * math.pi / 3.0)
+    verts = [c + R * (math.cos(t) * e1 + math.sin(t) * e2) for t in angles]
+    return np.ascontiguousarray(np.stack(verts, axis=1))
 
 
 def cascade_dimension(keep: int, base: int) -> float:
@@ -317,40 +416,88 @@ def rect_patch(center: np.ndarray, azimuth_deg: float, dip_deg: float,
 
 
 class _Hash:
-    """Uniform spatial hash for the separation floor.
+    """Uniform spatial hash for the separation floor, position and FACES.
 
-    Cell size equals the floor, so a candidate only inspects its own cell and
-    the 26 neighbours. Written here rather than reaching for a KD-tree because
-    mhs declares numpy and numba and nothing else, and a study should not widen
-    that.
+    Cell size equals the largest floor, so a candidate inspects its own cell
+    and the 26 neighbours. Written here rather than reaching for a KD-tree
+    because mhs declares numpy and numba and nothing else, and a study should
+    not widen that.
+
+    TWO FLOORS, AND THE SECOND ONE WAS FOUND BY DIAGNOSIS RATHER THAN GUESSED.
+    A centroid floor alone let the interaction matrix go indefinite on a dense
+    cloud: ``sym(-P)`` had exactly ONE negative eigenvalue out of 2826
+    (-6.7 against a median of +92.7), and its eigenvector put 99.4 % of its
+    weight on a single PAIR of elements.
+
+    The first guess was that the pair must be near-COPLANAR and nearly
+    coincident, so an orientation floor was added -- and it did not help,
+    because the guess was backwards. The offending pair was nearly
+    PERPENDICULAR (|n.n'| = 0.0099) at 0.295 h separation: one element's
+    collocation point was sitting essentially ON the other's face, where a
+    mollified element's traction is largest and where the relative asymmetry
+    of the projected operator reached 1.13 against 0.008 for a fault network.
+
+    Coplanar side-by-side elements are FINE -- that is precisely what a fault's
+    own discretization is, and it yields no negative eigenvalues. So the floor
+    that matters is the one this project rests on everywhere else: a
+    collocation point's CLEARANCE FROM ANOTHER ELEMENT'S SURFACE, measured in
+    eps. A candidate is rejected when its centroid lies within
+    ``MIN_FACE_CLEARANCE_OVER_EPS * eps`` of a neighbour's plane AND inside
+    that neighbour's footprint, or vice versa.
     """
 
-    __slots__ = ("cell", "grid")
+    __slots__ = ("cell", "face_clear", "reach", "grid", "_g")
 
-    def __init__(self, cell: float):
+    def __init__(self, cell: float, *, face_clear: float = 0.0,
+                 reach: float = 0.0):
         self.cell = float(cell)
-        self.grid: dict[tuple[int, int, int], list[np.ndarray]] = {}
+        self.face_clear = float(face_clear)
+        self.reach = float(reach)
+        self._g = max(self.cell, self.reach + self.face_clear)
+        self.grid: dict[tuple[int, int, int], list[tuple]] = {}
 
     def _key(self, p):
-        c = self.cell
+        c = self._g
         return (int(p[0] // c), int(p[1] // c), int(p[2] // c))
 
-    def keep_mask(self, pts: np.ndarray) -> np.ndarray:
+    def _on_face(self, c, q, nq) -> bool:
+        """Is point ``c`` inside the eps-band of the element at ``q``/``nq``?"""
+        dv = c - q
+        perp = abs(float(np.dot(dv, nq)))
+        if perp >= self.face_clear:
+            return False
+        inplane = math.sqrt(max(float(np.dot(dv, dv)) - perp * perp, 0.0))
+        return inplane < self.reach
+
+    def keep_mask(self, pts: np.ndarray,
+                  normals: np.ndarray | None = None) -> np.ndarray:
         """Which of ``pts`` clear everything already held AND each other.
 
         Greedy in the given order and it ADDS as it goes, so the result is
         deterministic for a given seed and a kept point never has to be undone.
+        ``normals`` enables the face-clearance floor; without it only the
+        distance floor applies, which is what the fault-network generator wants
+        -- its elements are coplanar neighbours by construction and that is the
+        configuration the face rule deliberately permits.
         """
         c2 = self.cell * self.cell
+        use_f = (normals is not None and self.face_clear > 0.0
+                 and self.reach > 0.0)
         ok = np.ones(len(pts), bool)
         for i, p in enumerate(pts):
+            ni = normals[i] if normals is not None else None
             i0, j0, k0 = self._key(p)
             clash = False
             for di in (-1, 0, 1):
                 for dj in (-1, 0, 1):
                     for dk in (-1, 0, 1):
-                        for q in self.grid.get((i0 + di, j0 + dj, k0 + dk), ()):
+                        for q, nq in self.grid.get((i0 + di, j0 + dj,
+                                                    k0 + dk), ()):
                             if float(np.sum((p - q) ** 2)) < c2:
+                                clash = True
+                                break
+                            if use_f and (self._on_face(p, q, nq)
+                                          or self._on_face(q, p, ni)):
                                 clash = True
                                 break
                         if clash:
@@ -362,8 +509,161 @@ class _Hash:
             if clash:
                 ok[i] = False
             else:
-                self.grid.setdefault((i0, j0, k0), []).append(p)
+                self.grid.setdefault((i0, j0, k0), []).append((p, ni))
         return ok
+
+
+def build_cloud(*, seed: int, n_elements: int = 20000, h: float = 0.5,
+                spacing_over_h: float = 1.5, eps_over_h: float = 0.1,
+                centers: str = "uniform", cascade: tuple[int, int, int] = (3, 4, 3),
+                z_top: float = -2.0) -> Network:
+    """A DENSE CLOUD of independently-oriented single-triangle slip patches.
+
+    The element IS the fracture here: one equilateral triangle of edge ``h``,
+    its own isotropic orientation, no fault hierarchy and therefore NO
+    INHERITED COHERENCE. Any alignment among the elements that end up slipping
+    has to be produced by the elastic interaction, which is the entire point --
+    the fault-network generator above imposes within-fault coherence by
+    construction, and measured only 0.1-2.0 % of its coupling budget crossing
+    between faults, so nothing there could organize.
+
+    SPACING IS THE CRITICAL PARAMETER AND IT IS CUBIC. Measured on two single
+    triangles with random relative orientations, the coupling is
+    ``|K_ij|/|K_ii| ~ 0.10 (h/r)^3`` with the coefficient stable from r/h = 1.5
+    up. Summing over a cloud at spacing ``s`` and keeping the triggering half
+    gives a branching ratio ``B ~ 0.6 (h/s)^3 ln(L/s)``:
+
+        s = 1.2 h   B ~ 1.0  (critical)      s = 2.0 h   B ~ 0.21
+        s = 1.5 h   B ~ 0.54                 s = 3.0 h   B ~ 0.10
+
+    A factor of two in spacing is a factor of EIGHT in coupling, so the
+    production value is calibrated by measuring B rather than chosen. The box
+    size follows from ``n_elements`` and the spacing, not the other way round.
+
+    ``spacing_over_h`` IS A DENSITY, NOT A NEIGHBOUR DISTANCE, and the two
+    differ by a factor that matters here. For a Poisson cloud the mean
+    nearest-neighbour distance is ``0.554 * s``, so ``spacing_over_h = 1.5``
+    puts the typical nearest neighbour at ``0.86 h`` -- CLOSER than an element's
+    own edge, where the coupling is far above what ``s`` alone would suggest.
+    The realized nearest-neighbour distribution is therefore measured and
+    reported in ``meta``, and the calibration reads B rather than ``s``.
+
+    ``centers="uniform"`` is the control: a homogeneous background, so any
+    localization is unambiguously mechanical, and -- because orientation is
+    drawn independently of position -- the no-interaction null is spatially
+    unstructured by construction. ``centers="cascade"`` puts the same elements
+    on a multiplicative cascade and asks whether mechanics amplifies, ignores
+    or overrides pre-existing geometric clustering; it needs the isotropic cube
+    the existing guard enforces, so the element count is fixed by the cascade
+    at ``keep**(3*level)``.
+    """
+    rng = np.random.default_rng(seed)
+    if centers not in ("uniform", "cascade"):
+        raise ValueError(f"centers must be 'uniform' or 'cascade' for a cloud, "
+                         f"got {centers!r}")
+    eps = eps_over_h * h
+    s = spacing_over_h * h
+    reach = h / math.sqrt(3.0)          # circumradius: the element's half-extent
+
+    if centers == "cascade":
+        keep, base, level = cascade
+        n_elements = keep ** (3 * level)
+        box = s * float(base ** level)
+    else:
+        box = s * float(n_elements) ** (1.0 / 3.0)
+    z_bottom = z_top - box
+    # Centres are clipped into [z_bottom + reach, z_top - reach] below, so no
+    # vertex can pass z_top < 0 whatever h is. What CAN go wrong is a band too
+    # thin to hold one element, and that is what this refuses. (An earlier
+    # version tested `z_top - reach >= 0`, which is the wrong inequality
+    # entirely and never fired; the clipping was doing the work.)
+    if box <= 2.0 * reach:
+        raise ValueError(
+            f"the depth band is {box:g} km and one element of edge {h:g} km "
+            f"spans {2 * reach:g} km, so no element fits. Raise n_elements or "
+            f"spacing_over_h, or lower h.")
+
+    half = box / 2.0
+    if centers == "cascade":
+        corners, cell = cascade_cells(rng, *cascade, box)
+        cen = corners + cell / 2.0
+        cen[:, 0] -= half
+        cen[:, 1] -= half
+        cen[:, 2] = z_top - cen[:, 2]
+    else:
+        cell = None
+        cen = np.column_stack([
+            rng.uniform(-half, half, n_elements),
+            rng.uniform(-half, half, n_elements),
+            rng.uniform(z_bottom, z_top, n_elements)])
+    # Keep every vertex strictly below the free surface and inside the band.
+    cen[:, 2] = np.clip(cen[:, 2], z_bottom + reach, z_top - reach)
+
+    nrm = isotropic_normals(rng, cen.shape[0])
+    tris = oriented_triangle(cen, nrm, h)
+
+    # The separation floor still applies, and at s = 1.5 h with eps = 0.1 h it
+    # is 0.25 h -- six times below the spacing -- so pruning should be ~zero.
+    # It is measured rather than assumed.
+    hsh = _Hash(MIN_SEP_OVER_EPS * eps,
+                face_clear=MIN_FACE_CLEARANCE_OVER_EPS * eps, reach=reach)
+    keep_mask = hsh.keep_mask(tris.mean(axis=1), nrm)
+    n_pruned = int((~keep_mask).sum())
+    tris = np.ascontiguousarray(tris[keep_mask])
+    nrm = nrm[keep_mask]
+    cen = cen[keep_mask]
+    n = tris.shape[0]
+    if not np.all(tris[:, :, 2] < 0.0):
+        raise RuntimeError(
+            "a vertex landed at or above z = 0, which mhs refuses; the depth "
+            "band is clipped per element above, so this is a bug.")
+
+    # Per-"fault" arrays degenerate to per-element: one triangle each. They are
+    # filled with the element's own geometry rather than left stale, because
+    # downstream code reads them.
+    dip = np.degrees(np.arccos(np.clip(np.abs(nrm[:, 2]), 0.0, 1.0)))
+    azi = np.degrees(np.arctan2(nrm[:, 0], -nrm[:, 1])) % 360.0
+
+    cent = tris.mean(axis=1)
+    d2 = ((cent[:, None, :] - cent[None, :, :]) ** 2).sum(axis=2) if n <= 6000 \
+        else None
+    if d2 is not None:
+        np.fill_diagonal(d2, np.inf)
+        d_nn = np.sqrt(d2.min(axis=1))
+        nn = {"mean": float(d_nn.mean()), "min": float(d_nn.min()),
+              "median": float(np.median(d_nn))}
+    else:
+        nn = None
+
+    area_tot = float(0.5 * np.linalg.norm(
+        np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0]),
+        axis=1).sum())
+    S = fabric(nrm)
+    meta = {
+        "kind": "cloud", "seed": seed, "h_km": h, "eps_km": eps,
+        "eps_over_h": eps_over_h, "spacing_over_h": spacing_over_h,
+        "spacing_km": s, "box_xy_km": box, "z_top_km": z_top,
+        "z_bottom_km": z_bottom, "centers": centers,
+        "cascade": list(cascade) if centers == "cascade" else None,
+        "cascade_cell_km": cell,
+        "d_geom_known": (cascade_dimension(cascade[0], cascade[1])
+                         if centers == "cascade" else 3.0),
+        "n_elements": n, "n_faults": n, "pruned": n_pruned,
+        "pruned_fraction": n_pruned / max(1, n + n_pruned),
+        "min_sep_over_eps": MIN_SEP_OVER_EPS, "min_sep_km": MIN_SEP_OVER_EPS * eps,
+        "face_clearance_over_eps": MIN_FACE_CLEARANCE_OVER_EPS,
+        "face_clearance_km": MIN_FACE_CLEARANCE_OVER_EPS * eps,
+        "total_area_km2": area_tot,
+        "P32_per_km": area_tot / (box ** 3),
+        "nearest_neighbour_km": nn,
+        "fabric_S": [float(v) for v in S],
+        "fabric_anisotropy": float(abs(S[0] - 1.0 / 3.0)),
+        "window_r_lo_km": 2.0 * h, "window_r_hi_km": box / 6.0,
+        "units": "km",
+    }
+    return Network(tris=tris, fault_id=np.arange(n, dtype=np.int64),
+                   length=np.full(n, h), width=np.full(n, h),
+                   azimuth=azi, dip=dip, center=cen, h=h, eps=eps, meta=meta)
 
 
 def build_network(*, seed: int, n_elements_target: int, a: float = 1.5,
