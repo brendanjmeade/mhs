@@ -190,7 +190,11 @@ export class FaultScene {
   resize() {
     const w = this.el.clientWidth || 640;
     const h = this.el.clientHeight || Math.round(w * 0.58);
-    this.renderer.setSize(w, h, false);
+    // updateStyle MUST be true while setPixelRatio is 2: with it false
+    // three.js sets only the drawing buffer, so the canvas element's CSS
+    // size falls back to that buffer and renders at devicePixelRatio times
+    // its container -- measured as an exact 2x overflow on retina.
+    this.renderer.setSize(w, h, true);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.render();

@@ -4,7 +4,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 ---
 <Base
   title="mhs — Active fractal"
-  description="Quasi-static Coulomb loading of a synthetic 3-D fault network: 512 faults, 10230 mollified elements, and the subset that actually slips as the regional load rises."
+  description="Quasi-static Coulomb loading of a synthetic 3-D fault network: 538 power-law faults from 2 to 38 km, 20771 mollified elements, and the subset that actually slips as the regional load rises."
   current="fractal"
 >
   <Fragment slot="sidebar">
@@ -17,9 +17,10 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
       equilibrium.
     </p>
     <p>
-      512 faults on a multiplicative cascade in a 40&nbsp;km cube,
-      10,230&nbsp;elements, <i>&epsilon;</i>&nbsp;=&nbsp;10&nbsp;m. Strike-slip
-      regime, &mu;<sub>s</sub>&nbsp;=&nbsp;0.6 with a 10&nbsp;% strength drop,
+      538 faults with <b>power-law lengths</b> from 2.0 to 37.9&nbsp;km in a
+      100&nbsp;km box, 2 to 42&nbsp;km depth, 20,771&nbsp;elements of 1&nbsp;km
+      edge, <i>&epsilon;</i>&nbsp;=&nbsp;100&nbsp;m. Strike-slip regime,
+      &mu;<sub>s</sub>&nbsp;=&nbsp;0.6 with a 10&nbsp;% strength drop,
       effective normal stress 150&nbsp;MPa.
     </p>
     <div class="note">
@@ -27,7 +28,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
       A stress-driven network needs <i>K<sub>ii</sub></i> &mdash; how much an
       element's own slip relieves its own shear &mdash; and for a classical
       dislocation element that number is undefined on the fault. Mollification
-      makes it finite and, measured here, negative on every one of the 10,230
+      makes it finite and, measured here, negative on every one of the 20,771
       elements.
     </div>
     <p class="contact">
@@ -47,11 +48,11 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
       <span data-ctl="play"></span>
       <div class="rng" data-ctl="frame"><span>load</span></div>
     </div>
-    <div class="panel">
+    <div class="panel" data-iso-panel>
       <span data-ctl="iso"></span>
       <div class="rng" data-ctl="thresh"><span>threshold</span></div>
     </div>
-    <div data-canvas class="canvas" aria-label="A synthetic three-dimensional fault network of 512 faults, coloured by which elements slip as the regional load increases"></div>
+    <div data-canvas class="canvas" aria-label="A synthetic three-dimensional fault network of 538 power-law faults, coloured by which elements slip as the regional load increases"></div>
     <div data-bar class="bar"></div>
     <p data-status class="status">loading…</p>
   </div>
@@ -59,74 +60,141 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
   <h2>What is and is not being claimed</h2>
 
   <p>
-    The machinery works and the numbers above are measured: 78,913 events over
-    the load range shown, 73.7&nbsp;% of elements eventually slipping, a
-    cumulative moment of 6.4&times;10<sup>17</sup>&nbsp;N&nbsp;m, and the
-    largest single load increment moving 2,329 elements at once. Every event
-    reached equilibrium; none ran away.
+    The machinery works and the numbers above are measured: 153,448 events over
+    the load range shown, 71.1&nbsp;% of elements eventually slipping, a
+    cumulative moment of 2.9&times;10<sup>21</sup>&nbsp;N&nbsp;m, and a largest
+    single cascade of 845 elements. Every event reached equilibrium; none ran
+    away, which is not automatic &mdash; the branching ratio averages 0.786 and
+    its 90th percentile is 0.969, so this network sits just below criticality
+    rather than comfortably away from it.
   </p>
 
   <p>
-    <b>The headline question is not answered on this page.</b> Asking whether
-    slip organises onto a lower-dimensional subset than the geometry offers
-    requires comparing the active set against a subset of the <i>same size</i>
-    drawn without regard to mechanics &mdash; because box-counting dimension
-    falls when a set simply has fewer members. Measured on a sheet that is
-    exactly two-dimensional, a 5&nbsp;% random subset reads 0.36 lower and a
-    1&nbsp;% subset loses a full dimension. So &ldquo;the active set is
-    lower-dimensional&rdquo; is nearly free, for a reason with no mechanics in
-    it, and the null models are the entire result rather than a formality.
-    Those are built and calibrated; the comparison is not yet run.
+    <b>Interaction does not choose which elements slip. It chooses how much
+    each one slips.</b> That is the result, and it is not what we expected to
+    find. The active set overlaps the <i>no-interaction null</i> &mdash; the
+    set that would fail if elements could not talk to each other, selected by
+    orientation and the regional load alone &mdash; by <b>98.7&nbsp;%</b>. Hold
+    the weighting fixed and every geometric statistic of the two sets agrees:
+    coherence differs by &minus;0.003, the participation ratio by
+    +0.004, the orientation fabric's leading eigenvalue by 0.003, cluster
+    planarity and linearity to three decimals. The faults that fail are the
+    well-oriented ones, and elasticity barely moves that list.
   </p>
 
   <p>
-    Two honest limits on what the dimension can ever say here. The estimator is
-    biased low by about 0.11 on an absolute dimension and that bias is
-    <i>invisible to R<sup>2</sup></i> &mdash; every calibration fit has
+    What elasticity does move is the <i>distribution of slip across that
+    list</i>. Weighted by moment rather than by membership, the active set's
+    participation ratio falls from 0.499 to 0.227 &mdash; moment is about 2.2
+    times more concentrated than the footprint carrying it &mdash; and its
+    coherence rises from 0.691 to 0.751. So slip piles onto a mutually
+    better-aligned subset of the elements that were always going to fail. The
+    network manufactures asperities out of slip amplitude, not out of which
+    patches participate.
+  </p>
+
+  <div class="note">
+    <b>Two of those numbers were wrong here first, in the same way.</b> The
+    build originally weighted the active set by real slip while weighting every
+    null by unit slip, then printed the difference in one column. That read as
+    interaction concentrating the active set by a factor of two and sharpening
+    its coherence by +0.057. Both effects were the weighting. Each statistic is
+    now computed at matched weighting across every row, and the moment-weighted
+    comparison is made against the same set's own unit-weighted value rather
+    than across rows &mdash; which is how a factor of 2.2 in moment survived as
+    real while the +0.057 became &minus;0.003.
+  </div>
+
+  <p>
+    <b>The dimension question cannot be asked in this domain at all.</b> The
+    box-counting window is bounded below by the <i>largest fault</i>, not the
+    element size, because until a box exceeds a fault that fault reads locally
+    two-dimensional. With a 37.9&nbsp;km fault in a 100&nbsp;km box the window
+    spans <i>zero</i> decades, and the code refuses to report a slope rather
+    than fitting one. Measuring <i>D</i><sub>active</sub> against
+    <i>D</i><sub>geom</sub> needs either a domain of order 1,400&nbsp;km or a
+    network whose largest fault is a small fraction of the box; the
+    multiplicative-cascade configuration exists for exactly that and keeps its
+    largest fault at 1.6&nbsp;% of the domain against 38&nbsp;% here.
+  </p>
+
+  <p>
+    Two standing limits on what a dimension could ever say. The estimator is
+    biased low by about 0.11 and that bias is <i>invisible to
+    R<sup>2</sup></i> &mdash; every calibration fit reaches
     R<sup>2</sup>&nbsp;&ge;&nbsp;0.999, including one wrong by 0.14 &mdash; so
-    only differences in a matched window are quoted, which are good to about
-    0.05. And the window itself is bounded below by the <i>largest fault</i>
-    rather than the element size, because until a box is bigger than a fault
-    that fault reads locally two-dimensional. For this network that leaves 0.73
-    decades, enough to rank against a null and not enough to quote three digits.
+    only differences in a matched window are quoted. And a subset's dimension
+    falls simply because it has fewer members: on a sheet that is exactly
+    two-dimensional, a 5&nbsp;% random subset reads 0.36 lower and a 1&nbsp;%
+    subset loses a full dimension. So &ldquo;the active set is
+    lower-dimensional&rdquo; is nearly free, and the matched-cardinality null
+    is the entire result rather than a formality.
   </p>
 
-  <h2>The stress isosurface</h2>
+  <h2>Avalanches</h2>
 
   <p>
-    Toggling the isosurface raymarches the elastic maximum shear stress
-    &mdash; an invariant, (&sigma;<sub>1</sub>&nbsp;&minus;&nbsp;&sigma;<sub>3</sub>)/2,
-    so it does not depend on a reference plane the way a Coulomb stress change
-    would &mdash; through the half space at the final load. The threshold slider
-    moves the shell; it is translucent so the faults stay visible inside it.
-  </p>
-
-  <p>
-    <b>The grid is coarser than the faults, and no affordable grid is not.</b>
-    Evaluating the field costs one kernel pair per grid point per element, and a
-    stress readout parallelises at only 1.45&times; here &mdash; it is the
-    <i>assembly</i> of an interaction matrix that parallelises at 8.5&times;, a
-    distinction worth keeping straight, because reading the wrong row made our
-    first cost estimate wrong by a factor of six. So 24<sup>3</sup> against all
-    10,230 elements is about two hours and 40<sup>3</sup> is about nine. At
-    1.7&nbsp;km cells against 0.4&nbsp;km faults, what the isosurface shows is
-    the <i>aggregate</i> stress structure of the network at the scale of the
-    cascade's upper levels. It is not a picture of a stress concentration at a
-    fault tip, and it should not be read as one.
+    An event here is one relaxation to equilibrium after a single element is
+    pushed past its static strength &mdash; a cascade through the network, not
+    a dynamic rupture, and nothing in it propagates in time. Sizes are broad:
+    58.5&nbsp;% involve more than one element, the 99th percentile is 71
+    elements and the largest is 845, against a median of 2.
   </p>
 
   <p>
-    A faster route was tried and rejected on measurement. Replacing each fault
-    by its own rectangle carrying the same total moment &mdash; geometry exact,
-    moment exact, only the slip distribution within a fault averaged &mdash; is
-    twenty times cheaper and agrees with the exact field to a median of
+    No exponent is quoted. A power law needs a defended lower cutoff, and these
+    sizes are bounded above by the elements per fault &mdash; 38.6 on average
+    here &mdash; so a fitted slope would be reporting the discretisation as
+    much as the network. The survival function is given instead:
+    <i>P</i>(&ge;2)&nbsp;=&nbsp;58.5&nbsp;%,
+    <i>P</i>(&ge;5)&nbsp;=&nbsp;23.9&nbsp;%,
+    <i>P</i>(&ge;10)&nbsp;=&nbsp;12.3&nbsp;%,
+    <i>P</i>(&ge;50)&nbsp;=&nbsp;1.8&nbsp;%,
+    <i>P</i>(&ge;100)&nbsp;=&nbsp;0.5&nbsp;%. An earlier configuration with
+    small faults made this point the hard way: its event size was invariant to
+    a 16&times; density change and a 25&times; change in the strength drop,
+    because it was set by the discretisation within a fault rather than by the
+    network &mdash; which is Rice's discreteness critique arriving uninvited.
+  </p>
+
+  <h2>The stress isosurface, and why this network has none yet</h2>
+
+  <p>
+    The viewer can raymarch a translucent isosurface of the elastic maximum
+    shear stress &mdash; an invariant,
+    (&sigma;<sub>1</sub>&nbsp;&minus;&nbsp;&sigma;<sub>3</sub>)/2, so it does
+    not depend on a reference plane the way a Coulomb stress change would
+    &mdash; with a threshold slider moving the shell. <b>The control is absent
+    above because this network's volume has not been evaluated.</b> The page
+    renders whatever the payload carries and omits the toggle when there is no
+    volume, rather than offering a control that fails on click.
+  </p>
+
+  <p>
+    <b>The reason is cost, and the cost was first estimated wrong by a factor
+    of six.</b> Evaluating the field costs one kernel pair per grid point per
+    element, and a stress readout parallelises at only 1.45&times; here &mdash;
+    it is the <i>assembly</i> of an interaction matrix that parallelises at
+    8.5&times;, a distinction worth keeping straight, because reading the wrong
+    row is what produced the original estimate. Measured end to end at 54.1
+    &micro;s/pair, a 24<sup>3</sup> grid against all 20,771 elements is about
+    4.3 hours. The previous configuration's volume took two.
+  </p>
+
+  <p>
+    A twenty-times-cheaper route was tried and rejected on measurement.
+    Replacing each fault by its own rectangle carrying the same total moment
+    &mdash; geometry exact, moment exact, only the slip distribution within a
+    fault averaged &mdash; agrees with the exact field to a median of
     0.00&nbsp;% on a coarse grid, correlation 0.9997. But resolved against
     distance from the nearest fault it is wrong by a median 3.8&nbsp;% and a
     worst 38&nbsp;% within one fault length, falling below 0.1&nbsp;% only
     beyond about eight. An isosurface at a high threshold selects precisely the
     near-fault points, so the approximation is worst exactly where the picture
-    is most interesting. The shipped volume is therefore exact, and the coarse
-    grid is the price.
+    is most interesting. Any volume published here is therefore exact over
+    every element, and a coarse grid is the price: at 4.2&nbsp;km cells against
+    2&ndash;38&nbsp;km faults it would show the network's <i>aggregate</i>
+    stress structure, not a concentration at a fault tip.
   </p>
 
   <h2>Why there is a strength drop</h2>
@@ -155,14 +223,17 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     A cascade has no unique end state &mdash; a triggered element lands anywhere
     between its dynamic and static strength depending on the order elements are
     visited &mdash; so there is no exact answer to validate against. What can be
-    done is to vary the update rule and measure the spread. Between
+    done is to vary the update rule and measure the spread. Measured on the
+    smaller cascade configuration rather than on this network: between
     Gauss-Seidel and Jacobi, event counts move by 6.9&nbsp;% and mean event
     size by 4.3&nbsp;%; between element orderings, under 1&nbsp;%. But total
     slip is invariant to 0.1&nbsp;%, and the <b>active set came out bit
     identical</b> under every rule tried &mdash; symmetric difference zero. So
-    the quantity the dimension is measured on carries no solver dependence,
-    while an avalanche exponent carries that 7&nbsp;% as part of its
-    uncertainty.
+    the set every claim above is made on carries no solver dependence, while an
+    avalanche exponent would carry that 7&nbsp;% as part of its uncertainty
+    &mdash; one of several reasons none is quoted. The same sweep has not been
+    repeated at 20,771 elements, where each relaxation is a hundred times more
+    expensive.
   </p>
 
   <h2>One simplification worth naming</h2>
@@ -186,11 +257,12 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     frame, 254 levels, zero reserved for &ldquo;has never slipped&rdquo; and
     drawn grey rather than at the bottom of the ramp, because a locked element
     is categorically different from one that slipped a little. The whole
-    120&nbsp;&times;&nbsp;10,230 array is encoded in one pass, so the colour
+    120&nbsp;&times;&nbsp;20,771 array is encoded in one pass, so the colour
     scale is global across frames &mdash; a per-frame scale would normalise away
     the growth being animated. The quantisation error is bounded by arithmetic
     rather than asserted, and the build measures what it wrote against that
-    bound: 0.898&nbsp;% against a bound of 0.898&nbsp;%, a ratio of 1.000.
+    bound: 1.178&nbsp;% against a bound of 1.178&nbsp;%, a ratio of 1.000. The
+    payload is 5.5&nbsp;MiB for 20,771 elements across 120 equilibria.
   </p>
 
   <style is:global>

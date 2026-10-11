@@ -65,6 +65,17 @@ CONFIGS = {
     # ~512 faults at ~20 elements each. D_geom = 1.500 exactly.
     "patch": dict(kind="faults", cascade=(2, 4, 3), h=0.1, a=1.5),
 
+    # --- the geologically recognizable one: power-law lengths, big faults ---
+    # Faults 2-40 km in a 100 km box, so the largest spans 38 % of the domain
+    # against 1.6 % for the cascade configs above. 538 faults at 38.6 elements
+    # each: enough faults for statistics AND enough elements per fault for a
+    # rupture to be partial. This is the configuration the brief described; it
+    # got displaced by the cascade while chasing a known D_geom, and a known
+    # D_geom is worth nothing if the picture is dust.
+    "faults_pl": dict(kind="faults_pl", centers="uniform", n_elements_target=20000,
+                      l_min=2.0, l_max=40.0, h=1.0, box_xy=100.0,
+                      z_top=-2.0, z_bottom=-42.0, a=1.5),
+
     # --- dense clouds: the element IS the fracture, coherence EMERGENT ------
     # The control: homogeneous background, so any localization is mechanical,
     # and the no-interaction null is spatially unstructured by construction.
@@ -90,6 +101,8 @@ def build(config: str, seed: int = 1, **over):
     kw.update(over)
     if kind == "cloud":
         return N.build_cloud(seed=seed, z_top=Z_TOP, **kw)
+    if kind == "faults_pl":
+        return N.build_network(seed=seed, aspect=2.0, **kw)
     return N.build_network(seed=seed, n_elements_target=10 ** 9,
                            centers="cascade", box_xy=BOX_XY, z_top=Z_TOP,
                            z_bottom=Z_TOP - BOX_XY, aspect=2.0, **kw)
@@ -107,7 +120,14 @@ def window_of(net) -> dict:
     network.
     """
     m = net.meta
-    feature = net.h if m.get("kind") == "cloud" else m["cascade_cell_km"]
+    if m.get("kind") == "cloud":
+        feature = net.h
+    elif m.get("cascade_cell_km") is not None:
+        feature = m["cascade_cell_km"]
+    else:
+        # A power-law network has no cascade cell; the finest feature is then
+        # the LARGEST fault, since below that a box resolves one planar patch.
+        feature = float(net.length.max())
     return M.window_for(feature, m["box_xy_km"])
 
 
@@ -131,8 +151,16 @@ def describe(net) -> None:
     else:
         print(f"  {net.n_faults} faults, {net.n_elements} elements "
               f"({net.n_elements / net.n_faults:.1f} per fault)")
-        print(f"  cascade {m['cascade']}  cell {m['cascade_cell_km']:.4f} km  "
-              f"D_geom known {m['d_geom_known']:.4f}")
+        if m.get("cascade_cell_km") is not None:
+            print(f"  cascade {m['cascade']}  cell "
+                  f"{m['cascade_cell_km']:.4f} km  "
+                  f"D_geom known {m['d_geom_known']:.4f}")
+        else:
+            print(f"  centers {m['centers']}, box {m['box_xy_km']:.0f} km, "
+                  f"a {m['a_nominal']} -> {m['a_realized']:.3f} realized, "
+                  f"P32 {m['total_area_km2'] / m['box_xy_km'] ** 3:.4f} /km")
+            print(f"  largest fault is {net.length.max() / m['box_xy_km']:.2f}"
+                  f" of the domain (the cascade configs: 0.016)")
         print(f"  L {net.length.min():.3f}-{net.length.max():.3f} km, "
               f"h {net.h} km, eps {net.eps:.4f} km, "
               f"pruned {m['pruned_fraction']:.1%}")
@@ -231,34 +259,74 @@ def cmd_localize(a) -> int:
         print("  too few active elements to say anything; stopping.")
         return 0
 
+    # AVALANCHE SIZES. An event here is one relaxation to equilibrium after a
+    # single element is pushed to failure, so its size is the number of
+    # elements that ended up slipping -- a cascade, not a dynamic rupture.
+    # Reported as a survival function rather than a fitted exponent: a
+    # power-law fit needs a defended s_min and these sizes are bounded above by
+    # the elements per fault, so quoting one slope would overstate the claim.
+    q = np.percentile(sz, [50, 90, 99, 99.9])
+    print(f"  event sizes: median {q[0]:.0f} p90 {q[1]:.0f} p99 {q[2]:.0f} "
+          f"p99.9 {q[3]:.0f}; {100 * (sz >= 2).mean():.1f}% multi-element")
+    thr = [1, 2, 5, 10, 50, 100, 500]
+    frac = "  ".join(f">={t}: {100 * (sz >= t).mean():.2f}%"
+                     for t in thr if t <= sz.max())
+    print(f"  P(size >= s):  {frac}")
+
     cent = net.tris.mean(axis=1)
     from mhs import tdcs
     nrm = tdcs.unit_normals(net.tris)
 
     def stats(mask, label, weight=None):
+        """TWO participation ratios, because they answer different questions.
+
+        ``PR`` weights every member equally and asks WHERE THE ACTIVE ELEMENTS
+        ARE. It is the only one comparable across rows, because a null has no
+        slip solution and weighting a null by moment is undefined.
+
+        ``PRm`` weights by ``||M_i||`` and asks where the MOMENT is, which is a
+        statement about slip heterogeneity WITHIN a set rather than about the
+        set's spatial extent.
+
+        ONE COLUMN FOR BOTH WAS AN ERROR WORTH NAMING. The active row was
+        moment-weighted while every null row was unit-weighted, so the printed
+        gap mixed "interaction concentrates the active set" together with "slip
+        is heterogeneous among active elements" and credited all of it to the
+        first. Unit weight on the active set is what the nulls can be compared
+        against; the moment column is read against the active set's own unit
+        column, not across rows.
+        """
+        n_m = int(mask.sum())
         Mt = M.moment_tensors(net.tris[mask], st.s[mask] if weight is None
                               else weight[mask], fric.slip_dir[mask], MU)
         coh = M.coherence(Mt)
-        w = np.linalg.norm(Mt, axis=(1, 2))
-        pr = M.participation_ratio(cent[mask], w, a.cell,
-                                   available=cent)
+        unit = M.moment_tensors(net.tris[mask], np.ones(n_m),
+                                fric.slip_dir[mask], MU)
+        pr = M.participation_ratio(cent[mask],
+                                   np.linalg.norm(unit, axis=(1, 2)),
+                                   a.cell, available=cent)
+        pr_m = M.participation_ratio(cent[mask],
+                                     np.linalg.norm(Mt, axis=(1, 2)),
+                                     a.cell, available=cent)
         S = N.fabric(nrm[mask])
         lab = M.connected_clusters(cent[mask], a.reach * net.h)
         sizes = np.bincount(lab)
         big = lab == int(np.argmax(sizes))
         pla, lin = M.shape_indices(cent[mask][big])
-        loc = np.zeros((int(mask.sum()), 3))
+        loc = np.zeros((n_m, 3))
         loc[:, :2] = fric.slip_dir[mask]
         disp = M.slip_dispersion(tdcs.to_cartesian(net.tris[mask], loc))
-        print(f"    {label:22s} C {coh:.4f}  PR {pr:.4f}  "
+        prom = M.promoting_share(P, mask)
+        print(f"    {label:22s} prom {prom:.4f}  C {coh:.4f}  PR {pr:.4f}  "
+              f"PRm {pr_m:.4f}  "
               f"S1 {S[0]:.4f}  clusters {sizes.size:5d}  "
               f"largest {sizes.max():5d}  planarity {pla:.3f}  "
               f"linearity {lin:.3f}  slip disp {disp:.3f}")
-        return coh, pr, S[0]
+        return coh, pr, S[0], pr_m
 
     print("\n  ACTIVE SET against its nulls "
           f"(cell {a.cell} km, cluster reach {a.reach} h):")
-    c_act, pr_act, s_act = stats(act, "active")
+    c_act, pr_act, s_act, prm_act = stats(act, "active")
 
     # Null 2: the no-interaction set, same cardinality, chosen by the load
     # alone. This is the one the headline claim has to beat.
@@ -266,8 +334,8 @@ def cmd_localize(a) -> int:
     order = np.argsort(-score)[:n_act]
     m2 = np.zeros(net.n_elements, bool)
     m2[order] = True
-    c_n2, pr_n2, s_n2 = stats(m2, "null: no interaction",
-                              weight=np.ones(net.n_elements))
+    c_n2, pr_n2, s_n2, _ = stats(m2, "null: no interaction",
+                                 weight=np.ones(net.n_elements))
 
     # Null 1: a random subset of the same size.
     rng = np.random.default_rng(a.seed)
@@ -284,20 +352,55 @@ def cmd_localize(a) -> int:
     print(f"    coherence   active {c_act:.4f}  vs no-interaction {c_n2:.4f}"
           f"  -> {c_act - c_n2:+.4f}")
     print(f"    (orientation selection by interaction, beyond the load)")
-    print(f"    PR          active {pr_act:.4f}  vs no-interaction {pr_n2:.4f}"
+    print(f"    PR   unit   active {pr_act:.4f}  vs no-interaction {pr_n2:.4f}"
           f"  vs random {pr_n1:.4f}")
-    print(f"    (below the nulls means spatially MORE concentrated)")
+    print(f"    (WHICH ELEMENTS are active, matched cardinality; below the "
+          f"nulls means spatially MORE concentrated)")
+    print(f"    PR   moment active {prm_act:.4f}  vs its own unit "
+          f"{pr_act:.4f}  -> {prm_act - pr_act:+.4f}")
+    print(f"    (WHERE THE MOMENT IS within the active set -- slip "
+          f"heterogeneity, NOT comparable to the nulls)")
 
-    # C(r): spatial organization of coherence, against a position shuffle.
-    Mt = M.moment_tensors(net.tris[act], st.s[act], fric.slip_dir[act], MU)
+    # HOW SIMILAR ARE THE TWO SETS AT ALL? Printed before any statistic that
+    # compares them, because it bounds every such comparison: two sets that
+    # overlap by 99 % cannot differ much in anything measured on membership,
+    # and a reader shown only the differences would not know that.
+    inter = int((act & m2).sum())
+    print(f"\n  active vs no-interaction null: {inter} shared of {n_act} "
+          f"({inter / n_act:.1%}); symmetric difference {2 * (n_act - inter)}")
+
+    # C(r): spatial organization of coherence.
+    #
+    # THREE ROWS, BECAUSE THE POSITION SHUFFLE ALONE IS NOT A CONTROL. Shuffling
+    # positions among active elements destroys fault membership, so its excess
+    # reports "a fault is a coherent object" -- which is true by construction --
+    # on top of anything mechanical. The no-interaction null holds the fault
+    # structure fixed and changes only which elements are active, so it is the
+    # row that isolates interaction. Both are computed at UNIT slip, for the
+    # same reason the participation ratio is: weighting one row by real slip and
+    # the other by ones measures the weighting, not the mechanics.
     radii = np.geomspace(2.0 * net.h, net.meta["box_xy_km"] / 3.0, 6)
-    cr = M.coherence_vs_radius(cent[act], Mt, radii, seed=a.seed)
+
+    def cr_unit(mask):
+        Mu = M.moment_tensors(net.tris[mask], np.ones(int(mask.sum())),
+                              fric.slip_dir[mask], MU)
+        return M.coherence_vs_radius(cent[mask], Mu, radii, seed=a.seed)
+
+    Mt = M.moment_tensors(net.tris[act], st.s[act], fric.slip_dir[act], MU)
+    cr_mom = M.coherence_vs_radius(cent[act], Mt, radii, seed=a.seed)
     perm = rng.permutation(n_act)
-    crs = M.coherence_vs_radius(cent[act][perm], Mt, radii, seed=a.seed)
+    cr_shuf = M.coherence_vs_radius(cent[act][perm], Mt, radii, seed=a.seed)
+    cr_act = cr_unit(act)
+    cr_null = cr_unit(m2)
+
     print(f"\n  C(r): is coherence ORGANIZED IN SPACE?")
-    print(f"    {'r km':>7} {'active':>9} {'shuffled':>9} {'excess':>9}")
-    for r, x, y in zip(radii, cr, crs):
-        print(f"    {r:7.2f} {x:9.4f} {y:9.4f} {x - y:+9.4f}")
+    print(f"    {'r km':>7} {'act(mom)':>9} {'shuffled':>9} | "
+          f"{'act(unit)':>9} {'null(unit)':>10} {'excess':>9}")
+    for r, m_, s_, a_, n_ in zip(radii, cr_mom, cr_shuf, cr_act, cr_null):
+        print(f"    {r:7.2f} {m_:9.4f} {s_:9.4f} | "
+              f"{a_:9.4f} {n_:10.4f} {a_ - n_:+9.4f}")
+    print(f"    (the LAST column is the mechanical one: same fault geometry, "
+          f"same weighting, only the active set differs)")
     return 0
 
 

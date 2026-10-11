@@ -516,6 +516,41 @@ def shape_indices(points):
     return float((ev[1] - ev[2]) / ev[0]), float((ev[0] - ev[1]) / ev[0])
 
 
+def promoting_share(P, mask, *, min_frac: float = 1e-3) -> float:
+    """Of the coupling WITHIN a set, what share of it promotes failure?
+
+    ``sum max(P_ij,0) / sum |P_ij|`` over ordered pairs inside ``mask``,
+    restricted to couplings above ``min_frac`` of the diagonal so that the
+    answer is about neighbours rather than about the far field, where millions
+    of negligible terms of either sign would swamp it.
+
+    Above 0.5 the set is net mutually PROMOTING -- its members push each other
+    toward failure; below 0.5 they shadow each other. This is the statistic
+    that reads the physics directly, and it exists because moment-tensor
+    coherence cannot see position at all while the SIGN of every interaction is
+    set by position. Measured on two identically oriented patches at the same
+    separation: coplanar offsets transfer +0.001 to +0.041, while an offset one
+    element along strike AND one off-plane transfers -0.023. Same orientation,
+    same distance, opposite sign -- so a set whose members sit in each other's
+    promoting lobes behaves nothing like one whose members sit in the shadows,
+    and no orientation-only statistic can tell them apart.
+    """
+    P = np.asarray(P, float)
+    idx = np.flatnonzero(np.asarray(mask, bool))
+    if idx.size < 2:
+        return float("nan")
+    diag = np.abs(P[np.arange(P.shape[0]), np.arange(P.shape[0])])
+    pos = 0.0
+    tot = 0.0
+    for i in idx:
+        row = P[i, idx]
+        keep = np.abs(row) > min_frac * diag[i]
+        r = row[keep]
+        pos += float(np.maximum(r, 0.0).sum())
+        tot += float(np.abs(r).sum())
+    return pos / tot if tot > 0.0 else float("nan")
+
+
 def slip_dispersion(directions):
     """``1 - ||mean unit vector||``: 0 when slip is perfectly aligned.
 

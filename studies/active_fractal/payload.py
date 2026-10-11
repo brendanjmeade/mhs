@@ -380,6 +380,9 @@ def main() -> int:
     ap.add_argument("--drop-ratio", type=float, default=Fr.DROP_RATIO)
     ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--cache", default=None,
+                    help="matrix cache directory; without it a 20k-element "
+                         "config re-assembles for 40 minutes")
     ap.add_argument("--stress-sources", default="faults",
                     choices=("faults", "elements"))
     ap.add_argument("--verify-stress", type=int, default=0,
@@ -395,7 +398,8 @@ def main() -> int:
     print(f"[{a.config}] seed {a.seed}")
     net = R.build(a.config, a.seed)
     R.describe(net)
-    mat, info = K.assemble(net, mu=R.MU, lam=R.LAM, workers=a.workers)
+    mat, info = K.assemble(net, mu=R.MU, lam=R.LAM, workers=a.workers,
+                           cache_dir=a.cache)
     fric = Fr.build_friction(net, drop_ratio=a.drop_ratio)
     P = K.project(mat, fric.slip_dir, fric.slip_dir)
     lam0 = float(np.nanmin(fric.first_failure_lambda()))
@@ -434,11 +438,16 @@ def main() -> int:
     geom = np.ascontiguousarray(net.tris, dtype=np.float32).tobytes()
     (out / "fractal.geom.bin").write_bytes(geom)
 
-    cell = net.meta["cascade_cell_km"]
+    # ``R.window_of`` rather than the cascade cell and ``R.BOX_XY`` directly:
+    # a power-law network has no cascade cell and its box is not 40 km, so
+    # reading those two fields here produced a window for a geometry that is
+    # not the one being published. ``d_geom`` stays None when the window is
+    # unusable, and the page then has no dimension to show -- correct, because
+    # a 100 km domain holding a 38 km fault has no decade to fit a slope in.
     try:
-        win = M.window_for(cell, R.BOX_XY)
+        win = R.window_of(net)
         d_fit = M.dimension(net.tris, n_radii=10, **win)
-        d_geom = {"known": net.meta["d_geom_known"],
+        d_geom = {"known": net.meta.get("d_geom_known"),
                   "calibrated": M.calibrated(d_fit),
                   "window_km": [win["r_lo"], win["r_hi"]]}
     except ValueError:

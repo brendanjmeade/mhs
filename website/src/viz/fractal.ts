@@ -46,6 +46,10 @@ const STRESS_MAP: MapName = "viridis";   // a different map: a different quantit
 const LOCKED = [0.84, 0.84, 0.86];      // grey: never slipped
 const FPS = 12;                          // frames per second when playing
 
+// Slack left around the fitted bounding box, so the outermost fault does not
+// sit flush against the canvas edge.
+const FIT_MARGIN = 1.06;
+
 // Samples along each view ray through the stress volume. 96 against a 40-cell
 // grid oversamples ~2.4x, which is what keeps the shell from stippling when the
 // camera looks along a grid axis.
@@ -174,6 +178,8 @@ export class FractalScene {
   private el: HTMLElement;
   private scene = new Scene();
   private camera: PerspectiveCamera;
+  private corners: Vector3[] = [];
+  private userMoved = false;
   private renderer: WebGLRenderer;
   private controls: OrbitControls;
   private colours: Float32BufferAttribute;
@@ -211,22 +217,84 @@ export class FractalScene {
     this.scene.add(new Mesh(geo, new MeshBasicMaterial({
       vertexColors: true, side: DoubleSide })));
 
-    const half = Math.max(
-      ...Array.from({ length: pos.length / 3 }, (_, i) =>
-        Math.max(Math.abs(pos[i * 3]), Math.abs(pos[i * 3 + 1]))));
+    let half = 0;
+    for (let i = 0; i < pos.length; i += 3) {
+      half = Math.max(half, Math.abs(pos[i]), Math.abs(pos[i + 1]));
+    }
     this.scene.add(freeSurface(half * 1.05));
 
+    // FIT THE BOUNDING BOX TO THE FRUSTUM, rather than placing the camera at a
+    // fixed multiple of the horizontal half-extent. The old placement was tuned
+    // against a 40 km cube centred on the origin and silently cropped a 100 km
+    // network: it ignored the depth extent, the view diagonal, the field of
+    // view and the aspect ratio, all four of which set how far back the camera
+    // has to be. The eight corners are kept rather than a bounding radius
+    // because a sphere around a 100 x 100 x 40 km slab is mostly empty and
+    // frames it at about half the scale it could be.
     const c = centre(pos);
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < pos.length; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        if (pos[i + k] < lo[k]) lo[k] = pos[i + k];
+        if (pos[i + k] > hi[k]) hi[k] = pos[i + k];
+      }
+    }
+    this.corners = [];
+    for (let b = 0; b < 8; b++) {
+      this.corners.push(new Vector3(
+        (b & 1 ? hi : lo)[0], (b & 2 ? hi : lo)[1], (b & 4 ? hi : lo)[2]));
+    }
+
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.target.copy(c);
-    this.camera.position.set(c.x + half * 1.9, c.y - half * 2.2, c.z + half * 1.5);
+    this.camera.position.set(c.x + 0.59, c.y - 0.68, c.z + 0.46);  // direction
+    this.fitView();
     this.controls.update();              // orient now, or frame one draws blank
+
+    // Re-fit on resize only until the visitor takes over: the aspect ratio is
+    // part of the fit, so a window change can crop an untouched view, but
+    // yanking the camera back after someone has orbited is worse.
+    this.controls.addEventListener("start", () => { this.userMoved = true; });
 
     this.resize();
     addEventListener("resize", () => this.resize());
     this.controls.addEventListener("change", () => this.render());
+  }
+
+  /** Push the camera back along its current direction until every bounding-box
+   *  corner is inside the frustum, horizontally and vertically.
+   *
+   *  For a corner at depth `z` toward the camera and lateral offset `x`, the
+   *  camera at distance `d` sees it `d - z` away, where the half-width is
+   *  `(d - z) tan(hHalf)`. So the corner fits when `d >= z + |x|/tan(hHalf)`,
+   *  and the needed distance is the largest such bound over all sixteen
+   *  constraints. Depth enters with the right sign, so the near corners of a
+   *  tilted slab push the camera back and the far ones do not. */
+  private fitView() {
+    const vHalf = (this.camera.fov * Math.PI) / 360;
+    const tanV = Math.tan(vHalf);
+    const tanH = tanV * this.camera.aspect;
+    const t = this.controls.target;
+    const f = this.camera.position.clone().sub(t).normalize();  // toward camera
+    const r = new Vector3().crossVectors(this.camera.up, f);
+    // Degenerate only when the view axis is parallel to world up, which the
+    // starting direction and OrbitControls' polar clamp both avoid.
+    r.lengthSq() < 1e-12 ? r.set(1, 0, 0) : r.normalize();
+    const u = new Vector3().crossVectors(f, r).normalize();
+
+    let d = 0;
+    const v = new Vector3();
+    for (const p of this.corners) {
+      v.copy(p).sub(t);
+      const z = v.dot(f);
+      d = Math.max(d, z + Math.abs(v.dot(r)) / tanH,
+                      z + Math.abs(v.dot(u)) / tanV);
+    }
+    this.camera.position.copy(t).addScaledVector(f, d * FIT_MARGIN);
+    this.camera.updateProjectionMatrix();
   }
 
   setArray(name: string, bytes: Uint8Array) {
@@ -386,9 +454,14 @@ export class FractalScene {
   resize() {
     const w = this.el.clientWidth || 800;
     const h = Math.max(420, Math.round(w * 0.62));
-    this.renderer.setSize(w, h, false);
+    // updateStyle MUST be true while setPixelRatio is 2: with it false
+    // three.js sets only the drawing buffer, so the canvas element's CSS
+    // size falls back to that buffer and renders at devicePixelRatio times
+    // its container -- measured as an exact 2x overflow on retina.
+    this.renderer.setSize(w, h, true);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    if (!this.userMoved) this.fitView();
     this.render();
   }
 
@@ -511,10 +584,13 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
     });
     th.addEventListener("input", () => { scene.setThreshold(Number(th.value)); showTh(); });
   } else {
-    const hint = root.querySelector<HTMLElement>('[data-ctl="iso"]');
-    if (hint) hint.remove();
-    const hint2 = root.querySelector<HTMLElement>('[data-ctl="thresh"]');
-    if (hint2) hint2.remove();
+    // Remove the PANEL, not just the two controls inside it: an emptied panel
+    // still carries its own bottom margin, which reads as a missing row.
+    const panel = root.querySelector<HTMLElement>("[data-iso-panel]");
+    if (panel) panel.remove();
+    else for (const k of ["iso", "thresh"]) {
+      root.querySelector<HTMLElement>(`[data-ctl="${k}"]`)?.remove();
+    }
   }
 
   const strip = document.createElement("div");
