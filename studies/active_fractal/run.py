@@ -42,6 +42,7 @@ import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+import cascade as C                                         # noqa: E402
 import friction as Fr                                        # noqa: E402
 import kernel as K                                          # noqa: E402
 import measure as M                                         # noqa: E402
@@ -182,6 +183,124 @@ def cmd_calibrate(a) -> int:
     return 0
 
 
+def cmd_localize(a) -> int:
+    """Load a cloud quasi-statically and ask whether slip ALIGNS and LOCALIZES.
+
+    THE DECOMPOSITION, which is sharper than it first looks. Global
+    moment-tensor coherence depends only on the orientations and slip
+    directions of the active elements, NOT on where they are -- so a
+    position-randomized null is identical to the active set for it, and global
+    coherence tests exactly one thing: did interaction select more mutually
+    aligned ORIENTATIONS than the loading does on its own? The spatial question
+    is separate and is answered by the radial profile C(r) against a
+    position-shuffled active set, and by the participation ratio and the
+    clusters against matched-cardinality nulls.
+
+    So:
+      global C      active vs no-interaction null   -> orientation selection
+      C(r)          active vs position-shuffled     -> spatial organization
+      PR, clusters  active vs both nulls            -> spatial localization
+    """
+    net = build(a.config, a.seed)
+    print(f"[{a.config}] seed {a.seed}")
+    describe(net)
+    mat, info = K.assemble(net, mu=MU, lam=LAM, workers=a.workers,
+                           cache_dir=a.cache)
+    fric = Fr.build_friction(net, drop_ratio=a.drop_ratio)
+    P = K.project(mat, fric.slip_dir, fric.slip_dir)
+    B = K.branching_ratio(P)
+    ev_min = float(np.linalg.eigvalsh(-0.5 * (P + P.T)).min())
+    print(f"  branching ratio B: mean {B.mean():.4f} p90 "
+          f"{np.percentile(B, 90):.4f} max {B.max():.4f}")
+    print(f"  min eig sym(-P) {ev_min:.4g} "
+          f"({'positive definite' if ev_min > 0 else 'INDEFINITE -- '
+             'uniqueness not guaranteed, relying on solver-independence'})")
+
+    lam0 = float(np.nanmin(fric.first_failure_lambda()))
+    st, ev = C.run_history(net, fric, P, shear_modulus=MU,
+                           lam_max=a.lam_factor * lam0)
+    sz = np.array([e.n_slipped for e in ev]) if ev else np.array([0])
+    act = st.s > 0.0
+    n_act = int(act.sum())
+    print(f"  {len(ev)} events to lam {st.lam:.5f} "
+          f"({a.lam_factor}x first failure), all converged "
+          f"{all(e.converged for e in ev)}")
+    print(f"  active {n_act}/{net.n_elements} = {n_act / net.n_elements:.1%}; "
+          f"event size mean {sz.mean():.2f} max {sz.max()}")
+    if n_act < 50:
+        print("  too few active elements to say anything; stopping.")
+        return 0
+
+    cent = net.tris.mean(axis=1)
+    from mhs import tdcs
+    nrm = tdcs.unit_normals(net.tris)
+
+    def stats(mask, label, weight=None):
+        Mt = M.moment_tensors(net.tris[mask], st.s[mask] if weight is None
+                              else weight[mask], fric.slip_dir[mask], MU)
+        coh = M.coherence(Mt)
+        w = np.linalg.norm(Mt, axis=(1, 2))
+        pr = M.participation_ratio(cent[mask], w, a.cell,
+                                   available=cent)
+        S = N.fabric(nrm[mask])
+        lab = M.connected_clusters(cent[mask], a.reach * net.h)
+        sizes = np.bincount(lab)
+        big = lab == int(np.argmax(sizes))
+        pla, lin = M.shape_indices(cent[mask][big])
+        loc = np.zeros((int(mask.sum()), 3))
+        loc[:, :2] = fric.slip_dir[mask]
+        disp = M.slip_dispersion(tdcs.to_cartesian(net.tris[mask], loc))
+        print(f"    {label:22s} C {coh:.4f}  PR {pr:.4f}  "
+              f"S1 {S[0]:.4f}  clusters {sizes.size:5d}  "
+              f"largest {sizes.max():5d}  planarity {pla:.3f}  "
+              f"linearity {lin:.3f}  slip disp {disp:.3f}")
+        return coh, pr, S[0]
+
+    print("\n  ACTIVE SET against its nulls "
+          f"(cell {a.cell} km, cluster reach {a.reach} h):")
+    c_act, pr_act, s_act = stats(act, "active")
+
+    # Null 2: the no-interaction set, same cardinality, chosen by the load
+    # alone. This is the one the headline claim has to beat.
+    score = -fric.first_failure_lambda()
+    order = np.argsort(-score)[:n_act]
+    m2 = np.zeros(net.n_elements, bool)
+    m2[order] = True
+    c_n2, pr_n2, s_n2 = stats(m2, "null: no interaction",
+                              weight=np.ones(net.n_elements))
+
+    # Null 1: a random subset of the same size.
+    rng = np.random.default_rng(a.seed)
+    c1 = []
+    for k in range(3):
+        m1 = np.zeros(net.n_elements, bool)
+        m1[rng.choice(net.n_elements, n_act, replace=False)] = True
+        c1.append(stats(m1, f"null: random {k + 1}",
+                        weight=np.ones(net.n_elements)))
+    c_n1 = float(np.mean([v[0] for v in c1]))
+    pr_n1 = float(np.mean([v[1] for v in c1]))
+
+    print(f"\n  THE COMPARISONS:")
+    print(f"    coherence   active {c_act:.4f}  vs no-interaction {c_n2:.4f}"
+          f"  -> {c_act - c_n2:+.4f}")
+    print(f"    (orientation selection by interaction, beyond the load)")
+    print(f"    PR          active {pr_act:.4f}  vs no-interaction {pr_n2:.4f}"
+          f"  vs random {pr_n1:.4f}")
+    print(f"    (below the nulls means spatially MORE concentrated)")
+
+    # C(r): spatial organization of coherence, against a position shuffle.
+    Mt = M.moment_tensors(net.tris[act], st.s[act], fric.slip_dir[act], MU)
+    radii = np.geomspace(2.0 * net.h, net.meta["box_xy_km"] / 3.0, 6)
+    cr = M.coherence_vs_radius(cent[act], Mt, radii, seed=a.seed)
+    perm = rng.permutation(n_act)
+    crs = M.coherence_vs_radius(cent[act][perm], Mt, radii, seed=a.seed)
+    print(f"\n  C(r): is coherence ORGANIZED IN SPACE?")
+    print(f"    {'r km':>7} {'active':>9} {'shuffled':>9} {'excess':>9}")
+    for r, x, y in zip(radii, cr, crs):
+        print(f"    {r:7.2f} {x:9.4f} {y:9.4f} {x - y:+9.4f}")
+    return 0
+
+
 def cmd_geometry(a) -> int:
     """Build a network and measure its geometry. No matrix, so it is cheap."""
     net = build(a.config, a.seed)
@@ -229,6 +348,18 @@ def main() -> int:
         p.add_argument("--workers", type=int, default=None)
         p.add_argument("--cache", default=None)
         p.set_defaults(fn=fn)
+    lz = sub.add_parser("localize")
+    lz.add_argument("--config", default="cloud_uniform", choices=sorted(CONFIGS))
+    lz.add_argument("--seed", type=int, default=1)
+    lz.add_argument("--workers", type=int, default=12)
+    lz.add_argument("--cache", default=None)
+    lz.add_argument("--drop-ratio", type=float, default=0.9)
+    lz.add_argument("--lam-factor", type=float, default=3.0)
+    lz.add_argument("--cell", type=float, default=2.0,
+                    help="km, the cell for the participation ratio")
+    lz.add_argument("--reach", type=float, default=1.5,
+                    help="cluster adjacency radius, in units of h")
+    lz.set_defaults(fn=cmd_localize)
     c = sub.add_parser("calibrate")
     c.add_argument("--elements", type=int, default=2000)
     c.add_argument("--h", type=float, default=0.5)
