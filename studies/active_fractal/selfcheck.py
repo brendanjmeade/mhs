@@ -434,6 +434,83 @@ def c_kernel() -> None:
                f"closest pair {dmin / net.h:.2f} h apart")
 
 
+def c_crack() -> None:
+    """PHASE 0: the mollified solve against a penny-shaped shear crack.
+
+    The one 3-D crack geometry with a closed form, and therefore the gate that
+    says whether growth work can proceed at all. Frictionless, so the LCP's
+    answer IS the classical traction-free crack under a uniform stress drop:
+
+        delta(r) = delta_0 sqrt(1 - r^2/a^2),  delta_0 = 24/(7 pi) d_tau a / mu
+
+    WHAT MOLLIFICATION COSTS IS MEASURED HERE AND NOWHERE ELSE in either
+    repository. The error is NOT uniform: it concentrates within a few eps of
+    the crack front, which is exactly where a growth criterion would be
+    evaluated -- and that is the quantitative argument for an ENERGETIC growth
+    criterion, a global integral dominated by the accurate interior, over any
+    front-local quantity.
+    """
+    print("\n[crack] a penny-shaped shear crack, which has a closed form")
+    import mhs                                                # noqa: PLC0415
+    a, mu_, lam_, dtau, depth = 1.0, 30.0, 30.0, 0.01, -20.0
+    want_C = 24.0 / (7.0 * math.pi) * dtau / mu_              # slip per km of a
+
+    got = {}
+    for eps_over_h in (0.2, 0.1, 0.05):
+        h = 0.1 * a
+        eps = eps_over_h * h
+        tris = N.disc_mesh(a, h, depth=depth)
+        n = tris.shape[0]
+        raw = mhs.interaction_matrix(
+            tris=tris, material=mhs.Material(mu=mu_, lam=lam_), eps=eps,
+            receiver=Kmod.RECEIVER, source=Kmod.SOURCE, obs_tris=tris)
+        frame = mhs.tdcs.slip_frame(tris)
+        sd = np.stack([frame[:, 0, 0], frame[:, 1, 0]], axis=1)
+        sd /= np.linalg.norm(sd, axis=1, keepdims=True)
+        P = Kmod.project(Kmod.to_source_major(raw), sd, sd)
+        del raw
+        sol = St.solve(P, np.full(n, dtau), np.zeros(n), 1.0, max_sweeps=20000)
+        del P
+        r = np.hypot(*tris.mean(axis=1)[:, :2].T)
+        prof = np.sqrt(np.maximum(0.0, a * a - r * r))
+        inner = r < 0.5 * a
+        C = float((sol.delta[inner] * prof[inner]).sum()
+                  / (prof[inner] ** 2).sum())
+        pred = C * prof
+        r2 = 1.0 - float(((sol.delta - pred) ** 2).sum()) / float(
+            ((sol.delta - sol.delta.mean()) ** 2).sum())
+        dev = np.abs(sol.delta - pred) / sol.delta.max()
+        far = (a - r) / eps > 10.0
+        near = ((a - r) / eps >= 1.0) & ((a - r) / eps < 3.0)
+        got[eps_over_h] = (C / want_C, r2, float(np.median(dev[far])),
+                           float(np.median(dev[near])), n, sol.converged)
+        print(f"       eps/h {eps_over_h:4.2f}  n {n:4d}  C/analytic "
+              f"{C / want_C:.4f}  R2 {r2:.5f}  dev far {np.median(dev[far]):.5f}"
+              f"  near {np.median(dev[near]):.5f}")
+
+    ref = got[0.1]
+    check("the Eshelby coefficient is recovered", abs(ref[0] - 1.0), 0.03)
+    check("the slip profile is elliptical", 1.0 - ref[1], 0.01)
+    check_true("every crack solve converged",
+               all(v[5] for v in got.values()), "")
+
+    # CONVERGENCE IN eps, which is the process-zone statement: the mollified
+    # solution approaches the sharp-crack answer as the regularization
+    # vanishes. Gated as an ORDERING rather than a value, because the floor is
+    # set by h and the point is the direction.
+    errs = [abs(got[e][0] - 1.0) for e in (0.2, 0.1, 0.05)]
+    check_true("error falls as eps falls",
+               errs[0] > errs[1] > errs[2],
+               " > ".join(f"{v:.4f}" for v in errs))
+
+    # AND THE ERROR IS CONCENTRATED AT THE FRONT. If this ever inverted, a
+    # front-local growth criterion would be as good as an energetic one and
+    # the argument for work optimization would weaken.
+    check_true("error concentrates near the front",
+               ref[3] > 4.0 * ref[2],
+               f"near {ref[3]:.4f} vs far {ref[2]:.4f}")
+
+
 def c_load() -> None:
     """The FULL stress tensor: the loading path, its ceiling, and the locked set.
 
@@ -956,7 +1033,8 @@ def c_cloud() -> None:
 
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,
-           "kernel": c_kernel, "load": c_load, "static": c_static,
+           "kernel": c_kernel, "crack": c_crack, "load": c_load,
+           "static": c_static,
            "spectrum": c_spectrum, "slip": c_slip, "align": c_align,
            "cloud": c_cloud}
 

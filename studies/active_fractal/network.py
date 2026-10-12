@@ -513,6 +513,64 @@ class _Hash:
         return ok
 
 
+def disc_mesh(a: float, h: float, *, depth: float = -20.0,
+              normal=(0.0, 0.0, 1.0)) -> np.ndarray:
+    """A TILING triangulation of a disc of radius ``a``: the crack primitive.
+
+    Equilateral lattice, up- and down-pointing triangles sharing edges, keeping
+    those whose centroid falls inside ``a``. Elements TILE rather than merely
+    sit side by side, and that is the point: the coplanarity sweep measured a
+    perforated sheet of disconnected patches to be a far stiffer object than a
+    continuous crack -- compliance comes from contiguity, coherence from
+    coplanarity, and a crack needs both.
+
+    WHY A DISC. It is one of the few 3-D crack geometries with a closed-form
+    solution, so it is the validation target rather than a production
+    geometry. Under uniform shear with no friction the slip is elliptical,
+    ``delta(r) = delta_0 sqrt(1 - r^2/a^2)`` with
+    ``delta_0 = 24/(7 pi) d_tau a / mu`` (Eshelby 1957), and the mollified
+    solve reproduces that coefficient to 0.6-2 % depending on ``eps``.
+
+    ``depth`` places the crack deep enough that the free surface is weak; the
+    half-space kernel has no full-space mode, so "infinite medium" is
+    approximated rather than exact and the depth is reported.
+    """
+    dy = h * math.sqrt(3.0) / 2.0
+    nx = int(math.ceil(a / h)) + 2
+    ny = int(math.ceil(a / dy)) + 2
+    tri = []
+    for j in range(-ny, ny + 1):
+        y0 = j * dy
+        off = 0.5 * h * (j & 1)
+        for i in range(-nx, nx + 1):
+            x0 = i * h + off
+            up = [(x0, y0), (x0 + h, y0), (x0 + 0.5 * h, y0 + dy)]
+            dn = [(x0 + h, y0), (x0 + 1.5 * h, y0 + dy),
+                  (x0 + 0.5 * h, y0 + dy)]
+            for t in (up, dn):
+                c = np.mean(t, axis=0)
+                if c[0] ** 2 + c[1] ** 2 <= a * a:
+                    tri.append(t)
+    out = np.zeros((len(tri), 3, 3))
+    out[:, :, :2] = np.asarray(tri)
+    out[:, :, 2] = depth
+
+    n_hat = np.asarray(normal, float)
+    n_hat /= np.linalg.norm(n_hat)
+    if abs(float(n_hat @ np.array([0.0, 0.0, 1.0])) - 1.0) > 1e-12:
+        # Rotate the flat disc onto the requested normal about the axis
+        # perpendicular to both, which is the minimal rotation.
+        z = np.array([0.0, 0.0, 1.0])
+        v = np.cross(z, n_hat)
+        c = float(z @ n_hat)
+        vx = np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]],
+                       [-v[1], v[0], 0.0]])
+        R = np.eye(3) + vx + vx @ vx / (1.0 + c)
+        mid = out.mean(axis=(0, 1))
+        out = (out - mid) @ R.T + mid
+    return out
+
+
 def build_aligned(*, seed: int, n_elements: int = 5000, h: float = 0.5,
                   n_planes: int = 20, scatter_over_h: float = 0.0,
                   tilt_deg: float = 0.0, spacing_over_h: float = 1.5,
