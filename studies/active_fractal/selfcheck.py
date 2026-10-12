@@ -434,6 +434,41 @@ def c_kernel() -> None:
                dmin > 0.9 * net.h,
                f"closest pair {dmin / net.h:.2f} h apart")
 
+    # THE NORMAL ROW'S SIGN, pinned against an INDEPENDENT route, because
+    # nothing crashes if it is backwards. `project_normal` is TENSION
+    # positive, the opposite of `friction.resolve_tensor`'s sigma_n, and the
+    # two live modules apart; reversed, the coupled solve silently clamps the
+    # wrong side of a step, which is the entire content of a stepping
+    # asymmetry. The independent route is the full stress tensor from
+    # `mhs.stress_matrix`, resolved by resolve_tensor's own convention.
+    print("       [sign] the normal row against mhs.stress_matrix")
+    from mhs.matrices import COLLOCATION_SHRINK                # noqa: PLC0415
+    hs = 0.075
+    srcs = N.disc_mesh(0.30, hs, depth=-20.0)
+    recs = srcs.copy()
+    recs[:, :, 0] += 0.42                      # offset OUT of the source plane
+    recs[:, :, 2] += 0.25
+    matl = mhs.Material(mu=30.0, lam=30.0)
+    frs = mhs.tdcs.slip_frame(srcs)
+    xdir = np.stack([frs[:, 0, 0], frs[:, 1, 0]], axis=1)     # unit +x slip
+    rws = mhs.interaction_matrix(
+        tris=srcs, material=matl, eps=0.1 * hs, receiver=Kmod.RECEIVER,
+        source=Kmod.SOURCE, obs_tris=recs)
+    row = Kmod.project_normal(Kmod.to_source_major(rws), xdir).sum(axis=0)
+    del rws
+    cart = np.zeros((srcs.shape[0], 3))
+    cart[:, 0] = 1.0
+    Sm = mhs.stress_matrix(
+        mhs.collocation_points(recs, 0, COLLOCATION_SHRINK), srcs, matl,
+        0.1 * hs)
+    sg2 = np.einsum("omnsk,sk->omn", Sm, cart)
+    del Sm
+    nh = mhs.tdcs.slip_frame(recs)[:, 2, :]
+    trc = np.einsum("omn,on->om", sg2, nh)
+    sn_comp = -np.einsum("om,om->o", trc, nh)  # resolve_tensor's convention
+    check("project_normal is tension-positive, i.e. minus sigma_n",
+          float(np.abs(row + sn_comp).max() / np.abs(row).max()), 1e-12)
+
 
 def c_crack() -> None:
     """PHASE 0: the mollified solve against a penny-shaped shear crack.
@@ -1048,6 +1083,64 @@ def c_static() -> None:
     one = St.solve(np.array([[-2.0]]), np.array([1.0]), np.array([1.0]), 3.0)
     check("one element matches the closed form",
           abs(float(one.delta[0]) - (3.0 - 1.0) / 2.0), 1e-12)
+
+    # [g] sigma_n COUPLED TO SLIP, which a stepping asymmetry needs and the
+    # frictionless solve above cannot represent at all. Two cracks offset by
+    # +dz or -dz are the two stepping senses, and the whole effect rests on one
+    # symmetry: the SHEAR they exchange is EVEN in that sense while the NORMAL
+    # traction is ODD. That is a mirror symmetry of the elastic problem, so a
+    # frictionless criterion is blind to left- versus right-stepping EXACTLY
+    # rather than weakly, and any measured asymmetry is the coupling alone.
+    # Gated because the claim is structural: were P to stop being even, the
+    # asymmetry would stop meaning what it gets reported to mean.
+    print("       [coupled] sigma_n coupled to slip: the stepping symmetry")
+    import mhs                                                # noqa: PLC0415
+    hc, ac_, mu_c = 0.075, 0.30, 30.0
+    base = N.disc_mesh(ac_, hc, depth=-20.0)
+    sg = 0.01 * (np.outer([1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+                 + np.outer([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]))
+
+    def pair(dz):
+        t = np.concatenate([base, base.copy()])
+        t[base.shape[0]:, :, 0] += 1.4 * ac_
+        t[base.shape[0]:, :, 2] += dz
+        tq, _ = Fr.resolve_tensor(t, sg)
+        sdp = tq / np.maximum(np.linalg.norm(tq, axis=1), 1e-300)[:, None]
+        rw = mhs.interaction_matrix(
+            tris=t, material=mhs.Material(mu=mu_c, lam=mu_c), eps=0.1 * hc,
+            receiver=Kmod.RECEIVER, source=Kmod.SOURCE, obs_tris=t)
+        sm = Kmod.to_source_major(rw)
+        out = (Kmod.project(sm, sdp, sdp), Kmod.project_normal(sm, sdp))
+        del rw, sm
+        return out
+
+
+    Pp, Np_ = pair(+0.25)
+    Pm, Nm_ = pair(-0.25)
+    check("shear transfer is EVEN in the stepping sense",
+          float(np.abs(Pp - Pm).max() / np.abs(Pp).max()), 1e-9)
+    check("normal transfer is ODD in the stepping sense",
+          float(np.abs(Np_ + Nm_).max() / np.abs(Np_).max()), 1e-6)
+    # In-plane slip induces no normal traction on a COPLANAR element, so the
+    # coupling cannot act on a single flat crack at all: it lives entirely
+    # between non-parallel elements. That is also why the coupled operator
+    # keeps its P-matrix property on this geometry.
+    check("coplanar slip induces no normal traction on itself",
+          float(np.abs(np.diagonal(Np_)).max() / np.abs(Np_).max()), 1e-15)
+
+    # AND THE COUPLED OPERATOR MUST STAY A P-MATRIX, or `solve` loses the
+    # uniqueness every claim in this module rests on. Letting the operator
+    # depend on the solution is exactly when bifurcation becomes possible, so
+    # it is checked rather than assumed -- on a network of mixed orientations
+    # it is an open question.
+    print(f"         min eig sym(-P) uncoupled "
+          f"{np.linalg.eigvalsh(-0.5 * (Pp + Pp.T))[0]:+.4f}")
+    for muf in (0.3, 0.6):
+        Pe = Pp + muf * Np_
+        em = float(np.linalg.eigvalsh(-0.5 * (Pe + Pe.T))[0])
+        check_true(f"the coupled operator is a P-matrix at mu_f {muf}",
+                   em > 0.0 and float(Pe.diagonal().max()) < 0.0,
+                   f"min eig {em:+.4f}, max diag {Pe.diagonal().max():+.3e}")
 
 
 def c_spectrum() -> None:

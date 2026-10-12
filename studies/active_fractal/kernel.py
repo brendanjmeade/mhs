@@ -306,3 +306,22 @@ def normal_block(K: np.ndarray) -> np.ndarray:
     it every step, which is why it is a view rather than a copy.
     """
     return K[:, :, RECEIVER.index("normal"), :]
+
+
+def project_normal(K: np.ndarray, src_dir: np.ndarray) -> np.ndarray:
+    """``(n_src, n_rec)`` normal traction from unit slip along ``src_dir``.
+
+    The companion of :func:`project` for the row that one discards, and
+    source-major for the same reason.
+
+    TENSION POSITIVE, which is the OPPOSITE sign from
+    ``friction.resolve_tensor``'s ``sigma_n``, and the two live modules apart
+    -- so it is pinned rather than reasoned about. Against the full stress
+    tensor from ``mhs.stress_matrix``, resolved through ``resolve_tensor``'s
+    own compression-positive convention, the correlation is -1.00000000 and
+    the agreement 4e-16. A sign error here crashes nothing: it silently swaps
+    which side of a step is clamped, and that is the entire content of a
+    stepping asymmetry.
+    """
+    return np.ascontiguousarray(
+        np.einsum("jbi,jb->ji", normal_block(K), src_dir))
