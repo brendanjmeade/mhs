@@ -38,6 +38,7 @@ import friction as Fr                                        # noqa: E402
 import kernel as Kmod                                        # noqa: E402
 import measure as M                                          # noqa: E402
 import network as N                                          # noqa: E402
+import spectrum as Sp                                        # noqa: E402
 import static as St                                          # noqa: E402
 
 CHECKS: list[tuple[str, bool, str]] = []
@@ -565,6 +566,118 @@ def c_static() -> None:
           abs(float(one.delta[0]) - (3.0 - 1.0) / 2.0), 1e-12)
 
 
+def c_spectrum() -> None:
+    """Soft modes: the limits are known, so they are checked rather than eyeballed.
+
+    The claim the modes carry is that the lowest eigenvector of ``sym(-P)``
+    picks out the mutually-promoting subset -- the structure the network would
+    localize onto. These pin the machinery that claim rests on.
+    """
+    print("\n[spectrum] soft modes of the elastic operator")
+
+    # [a] NO INTERACTION, NO SOFT MODES. A diagonal operator has every
+    # eigenvalue equal to the self-stiffness, so there is nothing to localize
+    # onto. This is the control for the whole idea: if soft modes survived
+    # here they would not be an interaction effect.
+    n = 40
+    d = np.full(n, 3.0)
+    Pd = -np.diag(d)
+    w, V = Sp.soft_modes(Pd, 5)
+    check("a diagonal operator has no soft end",
+          float(w.max() - w.min()), 1e-10)
+    check("its eigenvalue is the self-stiffness", abs(float(w[0]) - 3.0), 1e-10)
+
+    # [b] A MUTUALLY PROMOTING BLOCK IS SOFT, and softer the larger it is.
+    # Promoting means P_ij > 0, hence -P_ij < 0: a cooperative off-diagonal.
+    # The all-ones vector on such a block is its softest pattern, with
+    # eigenvalue d - (m-1)c, which is checked in closed form.
+    soft = []
+    for m in (2, 4, 8):
+        P = -np.diag(np.full(n, 3.0))
+        c = 0.2
+        for i in range(m):
+            for j in range(m):
+                if i != j:
+                    P[i, j] = c                      # promoting
+        w, V = Sp.soft_modes(P, 3)
+        want = 3.0 - (m - 1) * c
+        check(f"promoting block of {m}: eigenvalue matches d-(m-1)c",
+              abs(float(w[0]) - want), 1e-9)
+        soft.append(float(w[0]))
+        # the softest mode must live ON the block, and all of one sign
+        v = V[:, 0]
+        on = float((v[:m] ** 2).sum())
+        check_true(f"promoting block of {m}: mode sits on the block",
+                   on > 0.99, f"{on:.4f} of the energy")
+        st = Sp.measure(w, V, _FakeNet(n))[0]
+        check_true(f"promoting block of {m}: elements slip TOGETHER",
+                   st.sign_coherence > 0.99,
+                   f"sign coherence {st.sign_coherence:.4f}")
+        check_true(f"promoting block of {m}: n_effective ~ {m}",
+                   abs(st.n_effective - m) < 0.15 * m,
+                   f"n_eff {st.n_effective:.2f}")
+    check_true("a bigger promoting block is softer",
+               soft[0] > soft[1] > soft[2],
+               " > ".join(f"{v:.3f}" for v in soft))
+
+    # [c] SHADOWING SOFTENS A DIFFERENT MODE, and this is the check that
+    # sharpened the claim. A first version asserted that a shadowing block is
+    # simply stiff; it is not. With positive diagonal d and off-diagonal
+    # -P_ij = +c, the block's eigenvalues are d + (m-1)c for the all-together
+    # pattern and d - c for the m-1 patterns in which elements slip AGAINST
+    # each other. So shadowing does produce modes below d -- just oscillatory
+    # ones, and only by c rather than by (m-1)c.
+    #
+    # The physically meaningful separation is therefore SIGN COHERENCE, not
+    # the eigenvalue alone: a localizing structure is one whose soft mode has
+    # its elements slipping TOGETHER. That is what these three checks pin.
+    m, c = 4, 0.2
+    Pp = -np.diag(np.full(n, 3.0))
+    Ps = -np.diag(np.full(n, 3.0))
+    for i in range(m):
+        for j in range(m):
+            if i != j:
+                Pp[i, j] = c                         # promoting
+                Ps[i, j] = -c                        # shadowing
+    wp, Vp = Sp.soft_modes(Pp, 3)
+    ws, Vs = Sp.soft_modes(Ps, 3)
+    sp = Sp.measure(wp, Vp, _FakeNet(n))[0]
+    ss = Sp.measure(ws, Vs, _FakeNet(n))[0]
+    check_true("shadowing's softest mode is NOT cooperative",
+               ss.sign_coherence < 0.2,
+               f"sign coherence {ss.sign_coherence:.4f} against promoting's "
+               f"{sp.sign_coherence:.4f}")
+    check_true("promoting is softer than shadowing at equal |c|",
+               float(wp[0]) < float(ws[0]) - 1e-9,
+               f"{float(wp[0]):.3f} < {float(ws[0]):.3f}")
+    # The all-together pattern on a shadowing block is STIFFER than uncoupled,
+    # which is the statement "shadowing resists collective slip".
+    ones = np.zeros(n); ones[:m] = 1.0 / np.sqrt(m)
+    stiff = float(ones @ (-0.5 * (Ps + Ps.T)) @ ones)
+    check_true("shadowing makes the all-together pattern STIFFER",
+               stiff > 3.0 + 1e-9,
+               f"{stiff:.3f} against the uncoupled 3.0")
+
+    # [d] The quadratic form sees only the symmetric part, which is why a
+    # non-symmetric P is still legitimately handled.
+    rng = np.random.default_rng(0)
+    A = rng.normal(size=(12, 12))
+    x = rng.normal(size=12)
+    check("v^T A v equals v^T sym(A) v",
+          abs(float(x @ A @ x) - float(x @ (0.5 * (A + A.T)) @ x)), 1e-10)
+
+
+class _FakeNet:
+    """Minimal stand-in: measure() needs centroids and fault ids only."""
+
+    def __init__(self, n):
+        self.n_elements = n
+        self.n_faults = n
+        self.fault_id = np.arange(n)
+        self.tris = np.zeros((n, 3, 3))
+        self.tris[:, :, 0] = np.arange(n)[:, None]
+
+
 def c_slip() -> None:
     """The quasi-static cascade: equilibrium, finiteness, and rule robustness."""
     print("\n[slip] quasi-static Coulomb loading")
@@ -788,7 +901,8 @@ def c_cloud() -> None:
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,
            "kernel": c_kernel, "load": c_load, "static": c_static,
-           "slip": c_slip, "align": c_align, "cloud": c_cloud}
+           "spectrum": c_spectrum, "slip": c_slip, "align": c_align,
+           "cloud": c_cloud}
 
 
 def main() -> bool:

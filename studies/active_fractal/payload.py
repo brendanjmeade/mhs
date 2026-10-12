@@ -372,6 +372,116 @@ def stress_volume(net, slip_scalar, fric, *, grid: int, workers: int | None,
     return out, meta
 
 
+def theta_mu_sweep(net, mat, lam: float, thetas, mus, *,
+                   mean_stress_ratio: float, drop_ratio: float,
+                   verbose: bool = True):
+    """Static solutions over a grid of stress ORIENTATION and FRICTION.
+
+    THE INTERACTION MATRIX IS ASSEMBLED ONCE AND NEVER AGAIN. ``K`` depends on
+    geometry alone, so rotating the regional stress does not touch it -- what
+    changes is each element's SLIP DIRECTION, and therefore the projected
+    operator ``P``. One re-projection per orientation, which reads the 19 GiB
+    matrix and contracts it, against forty minutes to re-assemble. That is the
+    entire reason a two-dimensional sweep is affordable at this size.
+
+    ORIENTATION IS THE PARAMETER A NETWORK CANNOT ABSORB. Friction can be
+    rescaled, the load can be rescaled, but rotating the stress relative to a
+    FIXED set of fault planes asks which populations a given tectonic regime
+    selects -- which is exactly what critically-stressed-fracture analysis is
+    used for, and the comparison against that screening is computed here for
+    free at every grid point.
+
+    Frames are stored row-major in ``(theta, mu)``, so frame
+    ``i_theta * n_mu + i_mu``. Nesting in mu is verified SEPARATELY AT EVERY
+    ORIENTATION, because it is a measured property of this operator and not a
+    theorem -- ``A = -P`` is not a Z-matrix -- and the critical-friction array
+    is meaningless without it.
+    """
+    import static as St                                        # noqa: PLC0415
+    n = net.n_elements
+    thetas = np.asarray(thetas, float)
+    mus = np.asarray(mus, float)
+    slip = np.zeros((thetas.size * mus.size, n))
+    crit = np.full((thetas.size, n), -1, np.int64)
+    stats, per_theta = [], []
+
+    for it, th in enumerate(thetas):
+        t0 = time.time()
+        ref = Fr.build_friction(net, azimuth_deg=float(th),
+                                mean_stress_ratio=mean_stress_ratio,
+                                drop_ratio=drop_ratio)
+        P = K.project(mat, ref.slip_dir, ref.slip_dir)
+        ev = float(np.linalg.eigvalsh(-0.5 * (P + P.T)).min())
+        if ev <= 0.0:
+            raise SystemExit(
+                f"sym(-P) is indefinite at azimuth {th:.1f} deg "
+                f"(min eig {ev:.4g}). The LCP may have several solutions or "
+                f"none, so these frames would not be THE answer.")
+        t_proj = time.time() - t0
+
+        warm = None
+        base = it * mus.size
+        for im, mu in enumerate(mus):
+            fr = Fr.build_friction(net, mu_mean=float(mu),
+                                   azimuth_deg=float(th),
+                                   mean_stress_ratio=mean_stress_ratio,
+                                   drop_ratio=drop_ratio)
+            d, g_s, _ = C.coefficients(fr)
+            sol = St.solve(P, d, g_s, lam, warm=warm)
+            if not sol.converged:
+                raise SystemExit(
+                    f"no convergence at azimuth {th:.1f} deg, mu {mu:.4f} "
+                    f"(residual {sol.residual:.3e}).")
+            slip[base + im] = sol.delta
+            warm = sol.delta.copy()
+            scr = St.critically_stressed(fr, lam)
+            inter = int((sol.active & scr).sum())
+            union = int((sol.active | scr).sum())
+            stats.append({
+                "theta": float(th), "mu": float(mu),
+                "n_active": sol.n_active, "n_screened": int(scr.sum()),
+                "added": int((sol.active & ~scr).sum()),
+                "removed": int((scr & ~sol.active).sum()),
+                "jaccard": (inter / union) if union else 1.0,
+                "locked_fraction": fr.locked_fraction(),
+                "moment_Nm": float(R.MU * np.sum(net.areas() * sol.delta)
+                                   * C.MOMENT_TO_NM),
+                "sweeps": sol.sweeps})
+
+        # NESTING IS MEASURED, NOT ASSUMED, AND NOT REQUIRED. LCP monotonicity
+        # in mu would need A = -P to be a Z-matrix -- every coupling
+        # promoting -- and the dislocation kernel has shadowing lobes, so an
+        # element held locked at low mu by a neighbour's shadow may be freed
+        # at high mu when that neighbour stops slipping. At azimuth 0 that
+        # escape is never taken; at 15 deg it is, by one element. So the
+        # viewer reads the active set from the PER-FRAME slip array, which is
+        # exact either way, and this records how often the escape happens
+        # together with how big the slips involved are -- a violator at the
+        # solver's tolerance is noise, one at millimetres is physics.
+        block = slip[base:base + mus.size] > 0.0
+        vmask = np.zeros(n, bool)
+        for f in range(1, mus.size):
+            vmask |= block[f] & ~block[f - 1]
+        vn = int(vmask.sum())
+        vmax = (float(slip[base:base + mus.size][:, vmask].max()) if vn
+                else 0.0)
+        has = block.any(axis=0)
+        crit[it] = np.where(has, block.shape[0] - 1 - block[::-1].argmax(0), -1)
+
+        a0, a1 = stats[base], stats[base + mus.size - 1]
+        per_theta.append({"theta": float(th), "min_eig_sym_negP": ev,
+                          "project_s": t_proj, "n_mu_nonmonotone": vn,
+                          "max_slip_of_nonmonotone_km": vmax})
+        if verbose:
+            print(f"    azimuth {th:6.1f} deg  SHmax {(135.0 - th) % 180:6.1f} "
+                  f"  active {a0['n_active']:6d} -> {a1['n_active']:6d}"
+                  f"  jaccard {a0['jaccard']:.3f}-{a1['jaccard']:.3f}"
+                  f"  non-monotone {vn:3d}"
+                  f"{'' if not vn else f' (max {vmax*1e3:.2e} m)'}"
+                  f"  proj {t_proj:.0f}s  eig {ev:.2f}", flush=True)
+    return slip, crit, stats, per_theta
+
+
 def _principal(fric, lam: float, k: float) -> dict:
     """Principal values and axes of the TOTAL regional stress, compression
     positive, sorted so index 0 is the maximum compression.
@@ -483,7 +593,10 @@ def main() -> int:
                          "friction.py on why 0 bounds the usable load")
     ap.add_argument("--lam-factor", type=float, default=LAM_MAX_FACTOR,
                     help="load ceiling as a multiple of the first failure")
-    ap.add_argument("--sweep", default="lam", choices=("lam", "mu"),
+    ap.add_argument("--n-theta", type=int, default=12,
+                    help="stress orientations over [0,180) for a grid sweep")
+    ap.add_argument("--sweep", default="lam",
+                    choices=("lam", "mu", "theta_mu"),
                     help="what the frames vary: the loading history (lam) or "
                          "the friction coefficient at fixed load (mu)")
     ap.add_argument("--mu-min", type=float, default=0.35)
@@ -529,7 +642,20 @@ def main() -> int:
             f"failure). Pass --lam-factor {cap / lam0:.2f} or lower, or "
             f"--mean-stress-ratio 1 for a load with no ceiling.")
 
-    if a.sweep == "mu":
+    if a.sweep == "theta_mu":
+        thetas = np.linspace(0.0, 180.0, a.n_theta, endpoint=False)
+        mus = np.linspace(a.mu_min, a.mu_max, a.frames)
+        print(f"  GRID SWEEP at fixed lam {lam_max:.5f}: "
+              f"{a.n_theta} orientations x {a.frames} frictions = "
+              f"{a.n_theta * a.frames} static solves", flush=True)
+        cum, crit2, stats, per_theta = theta_mu_sweep(
+            net, mat, lam_max, thetas, mus,
+            mean_stress_ratio=a.mean_stress_ratio, drop_ratio=a.drop_ratio)
+        # No increment array for a grid: "the previous frame" is ambiguous on
+        # a 2-D lattice, and shipping one would invite reading a step in
+        # orientation as a change in friction.
+        inc, crit, grid = None, None, mus
+    elif a.sweep == "mu":
         mus = np.linspace(a.mu_min, a.mu_max, a.frames)
         print(f"  SWEEPING FRICTION at fixed lam {lam_max:.5f}: "
               f"mu {a.mu_min} to {a.mu_max} over {a.frames} static solves")
@@ -551,6 +677,8 @@ def main() -> int:
     arrays = {}
     worst_ratio = 0.0
     for name, arr in (("slip", cum), ("incr", inc)):
+        if arr is None:
+            continue                       # a grid sweep ships no increment
         buf, meta = encode_log_u8(arr.ravel())
         got, bound = roundtrip(arr.ravel(), buf, meta)
         ratio = got / bound if bound > 0 else 0.0
@@ -564,7 +692,7 @@ def main() -> int:
                 f"publish this payload.")
         path = out / f"fractal.{name}.bin"
         path.write_bytes(buf)
-        meta.update({"bytes": len(buf), "frames": a.frames, "n": n,
+        meta.update({"bytes": len(buf), "frames": int(arr.shape[0]), "n": n,
                      "order": "frame-major: buf[f*n + i] is element i at "
                               "frame f",
                      "sha256": hashlib.sha256(buf).hexdigest()[:16],
@@ -592,18 +720,34 @@ def main() -> int:
     payload = {
         "schema": SCHEMA, "nodata": NODATA, "levels": LEVELS,
         "config": a.config, "unit": "km of slip",
-        "n_elements": n, "n_faults": net.n_faults, "frames": a.frames,
+        # DERIVED FROM THE DATA, never from the argument. A grid sweep ships
+        # n_theta * n_mu frames while --frames names only the mu count, and
+        # declaring the argument shipped 300 frames of slip labelled as 25 --
+        # which the viewer refused, correctly, rather than reading a quarter
+        # of the array.
+        "n_elements": n, "n_faults": net.n_faults,
+        "frames": int(cum.shape[0]),
         "lam": [float(v) for v in grid],
         # WHAT THE FRAMES VARY. The viewer labels its slider from this and
         # must not guess: a mu sweep is a family of exact static solutions
         # with a NESTED active set, a lam sweep is one path with a growing
         # one, and reading either as the other inverts the animation.
         "sweep": {"kind": a.sweep,
-                  "label": "friction" if a.sweep == "mu" else "load",
-                  "symbol": "\u03bc" if a.sweep == "mu" else "\u03bb",
+                  "label": ("friction" if a.sweep in ("mu", "theta_mu")
+                            else "load"),
+                  "symbol": ("\u03bc" if a.sweep in ("mu", "theta_mu")
+                             else "\u03bb"),
                   "values": [float(v) for v in grid],
-                  "lam_fixed": float(lam_max) if a.sweep == "mu" else None,
-                  "nested": a.sweep == "mu"},
+                  "lam_fixed": (float(lam_max)
+                                if a.sweep in ("mu", "theta_mu") else None),
+                  "nested": a.sweep in ("mu", "theta_mu"),
+                  "grid": ({"n_theta": int(a.n_theta), "n_mu": int(a.frames),
+                            "theta_deg": [float(v) for v in thetas],
+                            "mu": [float(v) for v in mus],
+                            "order": "frame = i_theta * n_mu + i_mu",
+                            "shmax_azimuth_deg":
+                                [float((135.0 - v) % 180.0) for v in thetas]}
+                           if a.sweep == "theta_mu" else None)},
         "geometry": {"file": "fractal.geom.bin", "dtype": "float32",
                      "shape": [n, 3, 3], "bytes": len(geom),
                      "sha256": hashlib.sha256(geom).hexdigest()[:16]},
@@ -625,6 +769,22 @@ def main() -> int:
     }
     # fault_id is small and the viewer needs it to outline whole faults.
     payload["fault_id"]["values"] = [int(v) for v in net.fault_id]
+    if a.sweep == "theta_mu":
+        # ONE CRITICAL-FRICTION MAP PER ORIENTATION. Because the active set is
+        # nested in mu at every azimuth (verified above), this determines the
+        # exact active set at ANY mu, not just the sampled ones -- 20771 bytes
+        # per orientation against 20771 per (orientation, mu) frame.
+        payload["critical_friction"] = {
+            "inline": True, "never": -1, "per_theta": True,
+            "frame_index": [[int(v) for v in row] for row in crit2],
+            "meaning": "critical_friction[i_theta][i] is the largest mu INDEX "
+                       "at which element i still slips at that orientation. "
+                       "The active set is nested in mu at almost every "
+                       "orientation but not quite all, so this is the LAST mu "
+                       "that slips and not a guarantee that every lower mu "
+                       "does; the viewer reads membership from the per-frame "
+                       "slip array, which is exact regardless."}
+        payload["per_theta"] = per_theta
     if crit is not None:
         # CRITICAL FRICTION, as a frame index per element so the viewer can
         # colour by it without a second decode. -1 means "never slips in this
@@ -673,7 +833,27 @@ def main() -> int:
     # The two sweeps carry different per-frame quantities, so the summary
     # reads whichever this payload actually has rather than assuming.
     last = stats[-1]
-    if a.sweep == "mu":
+    if a.sweep == "theta_mu":
+        import statistics as _st
+        j = [v["jaccard"] for v in stats]
+        ad = [v["added"] for v in stats]
+        rm = [v["removed"] for v in stats]
+        print(f"  grid: {len(stats)} solves over {a.n_theta} orientations "
+              f"x {a.frames} frictions")
+        print(f"  vs critically-stressed screening across the WHOLE grid: "
+              f"Jaccard {min(j):.4f}-{max(j):.4f} (median {_st.median(j):.4f})")
+        print(f"  interaction adds {min(ad)}-{max(ad)} elements and removes "
+              f"{min(rm)}-{max(rm)}, over {n} total")
+        act = [v["n_active"] for v in stats]
+        print(f"  active ranges {min(act)}-{max(act)} "
+              f"({min(act)/n:.1%}-{max(act)/n:.1%})")
+        best = max(stats, key=lambda v: v["n_active"])
+        worst = min(stats, key=lambda v: v["n_active"])
+        print(f"  most active:  azimuth {best['theta']:.1f} deg, mu "
+              f"{best['mu']:.3f} -> {best['n_active']}")
+        print(f"  least active: azimuth {worst['theta']:.1f} deg, mu "
+              f"{worst['mu']:.3f} -> {worst['n_active']}")
+    elif a.sweep == "mu":
         never = sum(1 for v in payload["critical_friction"]["frame_index"]
                     if v < 0)
         print(f"  final: at mu {last['mu']:.3f}, {last['n_active']}/{n} slip "

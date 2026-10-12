@@ -35,7 +35,8 @@
 import {
   BackSide, BoxGeometry, BufferGeometry, Color, Data3DTexture, DataTexture,
   DoubleSide, Float32BufferAttribute, GLSL3, LineBasicMaterial, LinearFilter,
-  LineSegments, Mesh, MeshBasicMaterial, PerspectiveCamera, RedFormat, Scene,
+  Group, LineSegments, Mesh, MeshBasicMaterial, PerspectiveCamera,
+  RedFormat, Scene,
   ShaderMaterial, UnsignedByteType, Vector3, WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
@@ -153,9 +154,12 @@ export interface FractalPayload {
     locked_fraction?: number; moment_Nm?: number;
   }[];
   stress?: StressMeta;
-  sweep?: { kind: "lam" | "mu"; label: string; symbol: string;
-            values: number[]; lam_fixed: number | null; nested: boolean };
-  critical_friction?: { frame_index: number[]; never: number };
+  sweep?: { kind: "lam" | "mu" | "theta_mu"; label: string; symbol: string;
+            values: number[]; lam_fixed: number | null; nested: boolean;
+            grid?: { n_theta: number; n_mu: number; theta_deg: number[];
+                     mu: number[]; shmax_azimuth_deg: number[] } | null };
+  critical_friction?: { frame_index: number[] | number[][]; never: number;
+                        per_theta?: boolean };
   regional_stress?: { regime: string; principal_GPa: number[];
                       axes: number[][]; mean_stress_ratio: number;
                       lam: number };
@@ -183,8 +187,7 @@ function centre(pos: Float32Array): Vector3 {
  *  few degrees of vertical for every regime here, and an arrow along the view
  *  axis reads as a dot.
  */
-function stressAxes(half: number, axes: number[][],
-                    vals: number[], wantCompression: boolean): LineSegments {
+function stressAxes(half: number, wantCompression: boolean): LineSegments {
   const v: number[] = [];
   const R = half * 1.22;              // outside the free-surface grid
   const head = half * 0.07;
@@ -204,18 +207,13 @@ function stressAxes(half: number, axes: number[][],
       }
     }
   };
-  // Pick the two most horizontal principal axes; index 0 is max compression.
-  const horiz = axes
-    .map((a, i) => ({ i, v: new Vector3(a[0], a[1], a[2]) }))
-    .filter(o => Math.abs(o.v.z) < 0.7);
-  for (const o of horiz) {
-    const isCompression = o.i === 0;  // axes[0] is sigma_1 by construction
-    if (isCompression !== wantCompression) continue;
-    o.v.z = 0;
-    if (o.v.lengthSq() < 1e-9) continue;
-    o.v.normalize();
-    arrow(o.v, isCompression);        // inward for sigma_1, outward for sigma_3
-  }
+  // BUILT AT AZIMUTH ZERO AND ROTATED, rather than built from the payload's
+  // axes each time. sigma_1 lies along +y (north) here and the whole group is
+  // turned to the current SHmax azimuth, so the orientation convention is
+  // applied in exactly one place and the arrows cannot drift out of step with
+  // the slider. Verified against the payload's own eigenvectors at theta = 0.
+  arrow(wantCompression ? new Vector3(0, 1, 0) : new Vector3(1, 0, 0),
+        wantCompression);
   const g = new BufferGeometry();
   g.setAttribute("position", new Float32BufferAttribute(v, 3));
   // Warm for compression, cool for extension -- the map convention, and the
@@ -244,6 +242,7 @@ export class FractalScene {
   private scene = new Scene();
   private camera: PerspectiveCamera;
   private corners: Vector3[] = [];
+  private stressGroup = new Group();
   private userMoved = false;
   private renderer: WebGLRenderer;
   private controls: OrbitControls;
@@ -258,6 +257,7 @@ export class FractalScene {
   //: before shipping it. 255 means it never slips anywhere in the range,
   //: which is drawn grey rather than at the end of the ramp.
   private critical?: Uint8Array;
+  private criticalByTheta?: Uint8Array[];
   private nested = false;
   //: "incr" suits a loading history, where the interesting frame-to-frame
   //: quantity is what just slipped. A friction sweep accumulates nothing, so
@@ -298,10 +298,8 @@ export class FractalScene {
     }
     this.scene.add(freeSurface(half * 1.05));
     if (stress) {
-      for (const comp of [true, false]) {
-        this.scene.add(stressAxes(half, stress.axes, stress.principal_GPa,
-                                  comp));
-      }
+      for (const comp of [true, false]) this.stressGroup.add(stressAxes(half, comp));
+      this.scene.add(this.stressGroup);
     }
 
     // FIT THE BOUNDING BOX TO THE FRUSTUM, rather than placing the camera at a
@@ -398,11 +396,35 @@ export class FractalScene {
   /** Switch the default view to suit a friction sweep. */
   setSweepMu() { this.mode = "slip"; }
 
+  /** Turn the stress arrows to an SHmax azimuth, measured clockwise from +y.
+   *  Azimuth a means the compression axis points along (sin a, cos a), which
+   *  is the group rotated by -a about the vertical. */
+  setStressAzimuth(deg: number) {
+    this.stressGroup.rotation.z = -deg * Math.PI / 180;
+    this.render();
+  }
+
+  /** For a grid sweep: which orientation's critical-friction map to colour by. */
+  setThetaIndex(it: number) {
+    if (this.criticalByTheta) {
+      this.critical = this.criticalByTheta[it] ?? this.critical;
+    }
+  }
+
   /** The per-element critical friction, for a mu sweep. */
-  setCritical(idx: number[], never: number) {
-    this.critical = new Uint8Array(this.n).fill(255);
-    for (let i = 0; i < this.n; i++) {
-      if (idx[i] !== never) this.critical[i] = Math.min(254, idx[i]);
+  setCritical(idx: number[] | number[][], never: number, perTheta = false) {
+    const one = (row: number[]) => {
+      const out = new Uint8Array(this.n).fill(255);
+      for (let i = 0; i < this.n; i++) {
+        if (row[i] !== never) out[i] = Math.min(254, row[i]);
+      }
+      return out;
+    };
+    if (perTheta) {
+      this.criticalByTheta = (idx as number[][]).map(one);
+      this.critical = this.criticalByTheta[0];
+    } else {
+      this.critical = one(idx as number[]);
     }
     this.nested = true;
   }
@@ -636,7 +658,8 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
   const slot = (key: string) => root.querySelector<HTMLElement>(`[data-ctl="${key}"]`)!;
 
   const sel = document.createElement("select");
-  const isMu = p.sweep?.kind === "mu";
+  const grid = p.sweep?.grid ?? null;
+  const isMu = p.sweep?.kind === "mu" || p.sweep?.kind === "theta_mu";
   const LABEL = isMu ? MODE_LABEL_MU : MODE_LABEL;
   for (const m of (isMu ? ["slip", "activation", "incr"]
                         : ["incr", "slip", "activation"]) as Mode[]) {
@@ -651,13 +674,38 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
   play.textContent = "play";
   slot("play").appendChild(play);
 
+  // ON A GRID SWEEP THE SLIDER RANGE IS n_mu, NOT p.frames. The frames form a
+  // 2-D lattice indexed `i_theta * n_mu + i_mu`, so a single slider over all
+  // of them would walk orientation and friction together.
+  const nMu = grid ? grid.n_mu : p.frames;
   const rng = document.createElement("input");
-  rng.type = "range"; rng.min = "0"; rng.max = String(p.frames - 1);
+  rng.type = "range"; rng.min = "0"; rng.max = String(nMu - 1);
   rng.step = "1"; rng.value = "0";
   const val = document.createElement("span");
   val.className = "val";
   slot("frame").appendChild(rng);
   slot("frame").appendChild(val);
+
+  // The second slider: stress orientation. Built only for a grid sweep, and
+  // the page leaves an empty slot for it that is removed when absent, so a
+  // one-dimensional payload does not render a dead control.
+  let thetaRng: HTMLInputElement | null = null;
+  let thetaVal: HTMLSpanElement | null = null;
+  const thetaSlot = root.querySelector<HTMLElement>('[data-ctl="theta"]');
+  if (grid && thetaSlot) {
+    thetaRng = document.createElement("input");
+    thetaRng.type = "range"; thetaRng.min = "0";
+    thetaRng.max = String(grid.n_theta - 1);
+    thetaRng.step = "1"; thetaRng.value = "0";
+    thetaVal = document.createElement("span");
+    thetaVal.className = "val";
+    thetaSlot.appendChild(thetaRng);
+    thetaSlot.appendChild(thetaVal);
+  } else if (thetaSlot) {
+    thetaSlot.remove();
+  }
+  const thetaIdx = () => (thetaRng ? Number(thetaRng.value) : 0);
+  const frameOf = (iMu: number) => (grid ? thetaIdx() * grid.n_mu + iMu : iMu);
 
   // The stress isosurface, if the payload carries one. Absent is normal: the
   // volume costs an hour of kernel evaluation, so a payload may ship without
@@ -670,11 +718,13 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
       console.warn("stress volume unavailable:", e);
     }
   }
-  if (p.sweep?.kind === "mu") scene.setSweepMu();
+  if (p.sweep?.kind === "mu" || p.sweep?.kind === "theta_mu") scene.setSweepMu();
   if (p.critical_friction) {
     scene.setCritical(p.critical_friction.frame_index,
-                      p.critical_friction.never);
+                      p.critical_friction.never,
+                      !!p.critical_friction.per_theta);
   }
+  if (grid) scene.setStressAzimuth(grid.shmax_azimuth_deg[0]);
 
   if (scene.hasStress && p.stress) {
     const box = document.createElement("input");
@@ -726,7 +776,11 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
 
   const describe = (f: number) => {
     const st: any = p.frame_stats[f];
-    rng.value = String(f);
+    rng.value = String(grid ? f % grid.n_mu : f);
+    if (thetaRng && thetaVal && grid) {
+      thetaVal.textContent =
+        `SHmax ${grid.shmax_azimuth_deg[thetaIdx()].toFixed(0)}°`;
+    }
     const sym = p.sweep?.symbol ?? "λ";
     const x = isMu ? st.mu : st.lam;
     val.textContent = `${sym} = ${x.toFixed(isMu ? 3 : 4)}`;
@@ -747,13 +801,24 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
         + `<span class="mid">log scale, grey = ${isMu ? "locked at this μ"
                                                       : "never slipped"}</span>`
         + `<span>${fmt(hi)}${unit}</span>`;
+    const gridLine = grid
+      ? `SHmax ${grid.shmax_azimuth_deg[thetaIdx()].toFixed(0)}° · `
+        + `μ = ${st.mu.toFixed(3)} · ${st.n_active} of ${p.n_elements} slip `
+        + `(${(100 * st.n_active / p.n_elements).toFixed(1)} %) · `
+        + `screening predicts ${st.n_screened}, differing by `
+        + `${st.added} added and ${st.removed} removed `
+        + `(Jaccard ${st.jaccard.toFixed(4)}) · `
+        + `${(100 * st.locked_fraction).toFixed(1)} % can never slip · `
+        + `M₀ ${st.moment_Nm.toExponential(2)} N m`
+      : "";
     status.textContent = isMu
-      ? `frame ${f + 1} of ${p.frames} · μ = ${st.mu.toFixed(3)} · `
+      ? (grid ? gridLine
+        : `frame ${f + 1} of ${p.frames} · μ = ${st.mu.toFixed(3)} · `
         + `${st.n_active} of ${p.n_elements} elements slip `
         + `(${(100 * st.n_active / p.n_elements).toFixed(1)} %) · `
         + `screening alone predicts ${st.n_screened} · `
         + `${(100 * st.locked_fraction).toFixed(1)} % can never slip at any `
-        + `load · M₀ ${st.moment_Nm.toExponential(2)} N m`
+        + `load · M₀ ${st.moment_Nm.toExponential(2)} N m`)
       : `frame ${f + 1} of ${p.frames} · ${st.n_ever} of ${p.n_elements} elements`
       + ` have slipped (${(100 * st.n_ever / p.n_elements).toFixed(1)} %)`
       + ` · ${st.events_cumulative} events · ${st.slipped_this_frame} slipped in`
@@ -767,16 +832,29 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
   });
   rng.addEventListener("input", () => {
     scene.pause(); play.textContent = "play";
-    scene.setFrame(Number(rng.value));
+    scene.setFrame(frameOf(Number(rng.value)));
     describe(scene.currentFrame);
   });
+  if (thetaRng && grid) {
+    thetaRng.addEventListener("input", () => {
+      scene.pause(); play.textContent = "play";
+      const it = thetaIdx();
+      // The arrows and the critical-friction map both belong to ONE
+      // orientation; moving the slider without turning them would show this
+      // orientation's slip under the previous one's stress.
+      scene.setStressAzimuth(grid.shmax_azimuth_deg[it]);
+      scene.setThetaIndex(it);
+      scene.setFrame(frameOf(Number(rng.value)));
+      describe(scene.currentFrame);
+    });
+  }
   play.addEventListener("click", () => {
     if (scene.isPlaying) { scene.pause(); play.textContent = "play"; }
     else { scene.play(); play.textContent = "pause"; }
   });
   scene.onTick = (f) => describe(f);
 
-  scene.setMode("incr");
+  scene.setMode(sel.value as Mode);
   scene.setFrame(0);
   describe(0);
 }

@@ -7,3 +7,6 @@ __pycache__/
 .DS_Store
 build/
 dist/
+
+# Study outputs: regenerable from run.py, and large.
+studies/active_fractal/out/

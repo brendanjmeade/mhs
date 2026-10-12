@@ -44,18 +44,20 @@ const M = (src: string, display = true) =>
       elements.
     </div>
     <p class="contact">
-      The slider is the <b>friction coefficient</b>, not time. Every frame is
-      a separate <i>static solution</i> at its own &mu;, each the unique
-      answer at that friction and none of them depending on the ones before.
-      Nothing in this animation propagates, and nothing accumulates.
+      The sliders are <b>friction</b> and <b>stress orientation</b>, not time.
+      Each of the 300 cells is a separate <i>static solution</i> &mdash; the
+      unique answer at that (&mu;, orientation) &mdash; and none depends on
+      any other. Nothing here propagates and nothing accumulates.
     </p>
     <p class="contact">
-      Blue arrows at the free surface are the <b>regional stress</b>: pointing
+      Arrows at the free surface are the <b>regional stress</b> and turn with
+      the orientation slider: <span style="color:#c2410c"><b>warm</b></span>
       inward along the maximum compression
-      (<i>&sigma;</i><sub>1</sub>&nbsp;=&nbsp;904&nbsp;MPa, trending
-      NW&ndash;SE) and outward along the minimum
-      (<i>&sigma;</i><sub>3</sub>&nbsp;&asymp;&nbsp;0). The load is held fixed
-      at <i>&lambda;</i>&nbsp;=&nbsp;0.4525 while &mu; sweeps.
+      (<i>&sigma;</i><sub>1</sub>&nbsp;=&nbsp;904&nbsp;MPa),
+      <span style="color:#1f6feb"><b>cool</b></span> outward along the minimum
+      (<i>&sigma;</i><sub>3</sub>&nbsp;&asymp;&nbsp;0). The load magnitude is
+      held fixed at <i>&lambda;</i>&nbsp;=&nbsp;0.4525 throughout; only its
+      direction and the friction change.
     </p>
     <div class="links">
       <div><a href={`${base}concepts/`}>How the kernel works</a></div>
@@ -68,6 +70,9 @@ const M = (src: string, display = true) =>
       <label data-ctl="mode"><span>colour</span></label>
       <span data-ctl="play"></span>
       <div class="rng" data-ctl="frame"><span>friction</span></div>
+    </div>
+    <div class="panel">
+      <div class="rng" data-ctl="theta"><span>stress orientation</span></div>
     </div>
     <div class="panel" data-iso-panel>
       <span data-ctl="iso"></span>
@@ -331,13 +336,27 @@ const M = (src: string, display = true) =>
   </p>
 
   <ul>
-    <li><b>Membership</b>: the screening is nearly right. Across
-      &mu;&nbsp;=&nbsp;0.40 to 0.80 the two sets differ by well under
-      3&nbsp;% of the network at every value.</li>
+    <li><b>Membership</b>: the screening is close, but <i>how</i> close
+      depends strongly on the stress orientation. Over the full grid of 12
+      orientations &times; 25 frictions the Jaccard index with the static
+      solve ranges <b>0.872 to 0.999</b>, median 0.986. Interaction adds up
+      to <b>1,509</b> elements and removes up to 552.</li>
     <li><b>Moment</b>: the screening cannot speak to it at all, being a
       yes/no test with no slip. Interaction concentrates moment by a factor of
       about 2.2 relative to the footprint carrying it.</li>
   </ul>
+
+  <div class="note">
+    <b>That orientation dependence was invisible from a single
+    orientation, and an earlier version of this page reported only the
+    single-orientation figure of "well under 3&nbsp;%".</b> The worst
+    disagreement is at SHmax&nbsp;105&deg; (Jaccard 0.872, an eighth of the
+    network), the best at SHmax&nbsp;0&deg; and 165&deg; (under 0.1&nbsp;%).
+    So whether the standard screening is adequate is not a property of the
+    network alone &mdash; it is a property of the network <i>and</i> the
+    tectonic regime acting on it, which is precisely what the second slider
+    exists to show.
+  </div>
 
   <p>
     Because the solve is cheap, the network can also be <b>grown fault by
@@ -383,18 +402,33 @@ const M = (src: string, display = true) =>
   </p>
 
   <p>
-    <b>The active set is nested in <i>&mu;</i>, but nothing about it is
-    linear.</b> Raising friction can only shrink the screened set, by
-    construction. With interaction it need not: LCP monotonicity requires
-    <b>A</b> to be a <i>Z</i>-matrix &mdash; every off-diagonal coupling
-    promoting &mdash; and the dislocation kernel has shadowing lobes too, with
-    only 44&nbsp;% of pairs satisfying the condition here. So an element held
-    locked at low <i>&mu;</i> by a neighbour's stress shadow could in
-    principle be freed at high <i>&mu;</i> when that neighbour stops slipping.
-    Measured across <i>&mu;</i>&nbsp;=&nbsp;0.40 to 0.80, that escape is
-    <i>never taken</i>: zero violations of nesting, at every adjacent pair and
-    across the full range. The theorem does not apply and the conclusion holds
-    anyway.
+    <b>The active set is <i>almost</i> nested in <i>&mu;</i>, and the
+    exceptions are real.</b> Raising friction can only shrink the screened
+    set, by construction. With interaction it need not: LCP monotonicity
+    requires <b>A</b> to be a <i>Z</i>-matrix &mdash; every off-diagonal
+    coupling promoting &mdash; and the dislocation kernel has shadowing lobes
+    too, with only 44&nbsp;% of pairs satisfying the condition here. So an
+    element held locked at low <i>&mu;</i> by a neighbour's stress shadow can
+    be <i>freed</i> at high <i>&mu;</i> when that neighbour stops slipping.
+  </p>
+
+  <div class="note">
+    <b>An earlier version of this page said that escape is never taken. That
+    was measured at one stress orientation and stated as though it held
+    everywhere.</b> Across twelve orientations it is taken at three of them
+    &mdash; 1 element at SHmax&nbsp;120&deg;, <b>142</b> at 105&deg;, 6 at
+    165&deg;, and none at the other nine. The elements involved slip
+    2.5&ndash;11.6&nbsp;m, so this is mechanics and not solver tolerance,
+    whose floor is around 10<sup>&minus;8</sup>&nbsp;m. The prediction that
+    non-monotonicity is <i>permitted</i> was right; the claim that it never
+    happens came from a sample of one.
+  </div>
+
+  <p>
+    Nothing downstream depends on it either way. The viewer reads membership
+    from the per-frame slip array, which is exact whether or not the set
+    nests; "critical friction" is reported as the <i>largest</i> <i>&mu;</i>
+    at which an element slips, not as a guarantee that every lower one does.
   </p>
 
   <p>

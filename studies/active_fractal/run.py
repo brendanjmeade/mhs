@@ -34,6 +34,8 @@ has to be picklable.
 from __future__ import annotations
 
 import argparse
+import json
+import dataclasses
 import math
 import pathlib
 import sys
@@ -47,6 +49,7 @@ import friction as Fr                                        # noqa: E402
 import kernel as K                                          # noqa: E402
 import measure as M                                         # noqa: E402
 import network as N                                         # noqa: E402
+import spectrum as Sp                                      # noqa: E402
 import static as St                                        # noqa: E402
 
 #: Material, in the project's units. nu = 0.25 at mu = lam, which is the value
@@ -603,6 +606,75 @@ def cmd_grow(a) -> int:
     return 0
 
 
+def cmd_spectrum(a) -> int:
+    """The network's soft modes: what it would localize onto, and how softly.
+
+    Needs no friction and no load -- only the elastic operator -- so it says
+    which structures are available to localize BEFORE any constitutive choice
+    is made. See ``spectrum.py`` for why that is the localization question.
+    """
+    net, P, fric, d, g_s, g_d, lam0 = _setup(a)
+    diag = P[np.arange(P.shape[0]), np.arange(P.shape[0])]
+    w, V = Sp.soft_modes(P, a.n_modes, verbose=True)
+    modes = Sp.measure(w, V, net)
+
+    th = Sp.weakening_threshold(w, diag)
+    print(f"\n  THE COLLECTIVE ADVANTAGE")
+    print(f"    lambda_min (softest collective mode) {th['lambda_min']:.4g}")
+    print(f"    |P_ii| median {th['diag_median']:.4g}, min "
+          f"{th['diag_min']:.4g}")
+    print(f"    a collective mode destabilises at a weakening rate "
+          f"{th['collective_advantage_median']:.1f}x smaller than the median "
+          f"patch needs ({th['collective_advantage_min']:.1f}x vs the "
+          f"softest patch)")
+
+    print(f"\n  SOFTEST MODES  (n_eff = participating elements; sign = do "
+          f"they slip together?)")
+    print(f"    {'#':>3} {'lambda':>9} {'n_eff':>9} {'sign':>6} "
+          f"{'faults90':>9} {'planar':>7} {'linear':>7} {'extent km':>10} "
+          f"{'top fault %':>11}")
+    for m in modes[:a.show]:
+        print(f"    {m.index:3d} {m.eigenvalue:9.4f} {m.n_effective:9.1f} "
+              f"{m.sign_coherence:6.3f} {m.n_faults_90:9d} "
+              f"{m.planarity:7.3f} {m.linearity:7.3f} {m.extent_km:10.2f} "
+              f"{100 * m.top_fault_share:10.1f}%")
+
+    # THE HEADLINE COMPARISON. A mode spread over the whole network is
+    # homogenization; one on a handful of faults is an incipient structure.
+    ne = np.array([m.n_effective for m in modes])
+    sc = np.array([m.sign_coherence for m in modes])
+    nf = np.array([m.n_faults_90 for m in modes])
+    print(f"\n  ACROSS {len(modes)} SOFTEST MODES")
+    print(f"    n_effective  {ne.min():.0f} to {ne.max():.0f} of "
+          f"{net.n_elements} elements "
+          f"({ne.min()/net.n_elements:.2%} to {ne.max()/net.n_elements:.2%})")
+    print(f"    faults carrying 90 % of a mode: {nf.min()} to {nf.max()} "
+          f"of {net.n_faults}")
+    print(f"    sign coherence {sc.min():.3f} to {sc.max():.3f}; "
+          f"{int((sc > 0.5).sum())} of {len(modes)} are cooperative")
+
+    if a.out:
+        out = pathlib.Path(a.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        # Signed, per-mode normalised so each fills the byte range: the
+        # question a mode answers is WHERE it lives and with what sign, not
+        # its absolute amplitude, which is arbitrary for an eigenvector.
+        norm = V / np.abs(V).max(axis=0, keepdims=True)
+        buf = np.clip(np.round(128.0 + 127.0 * norm), 0, 255).astype(np.uint8)
+        (out.with_suffix(".bin")).write_bytes(
+            np.ascontiguousarray(buf.T).tobytes())     # mode-major
+        meta = {"n_modes": int(V.shape[1]), "n_elements": int(V.shape[0]),
+                "encoding": "uint8, 128 = zero, linear in v/max|v| per mode",
+                "order": "mode-major: buf[k*n + i] is element i in mode k",
+                "eigenvalues": [float(x) for x in w],
+                "threshold": th,
+                "modes": [dataclasses.asdict(m) for m in modes]}
+        out.write_text(json.dumps(meta, indent=1, default=str))
+        print(f"\n  wrote {out} + {out.with_suffix('.bin')} "
+              f"({buf.size / 1024:.0f} kB)")
+    return 0
+
+
 def cmd_geometry(a) -> int:
     """Build a network and measure its geometry. No matrix, so it is cheap."""
     net = build(a.config, a.seed)
@@ -707,6 +779,13 @@ def main() -> int:
                         "addition does to the rest")
     gr.add_argument("--steps", type=int, default=24,
                     help="growth points, geometrically spaced in fault count")
+    sp = _static_parser(sub, "spectrum", cmd_spectrum,
+                        "soft modes of the elastic operator: what the network "
+                        "would localize onto")
+    sp.add_argument("--n-modes", type=int, default=64)
+    sp.add_argument("--show", type=int, default=20)
+    sp.add_argument("--out", default=None,
+                    help="write a mode payload for the 3-D viewer")
     gr.add_argument("--n-drop", type=int, default=20,
                     help="faults to leave out one at a time; half the "
                          "largest, half at random")

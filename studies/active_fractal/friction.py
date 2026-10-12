@@ -101,9 +101,13 @@ plane, and that part is geometry, so it stays.
 
 THERE ARE TWO FRICTION COEFFICIENTS, AND THE EXPERIMENT HAS NO MECHANISM
 WITHOUT THEM. With a single coefficient -- pure Coulomb, no weakening -- the
-quasi-static solution is a CONTINUOUS function of the load: an element that
-reaches ``F = 0`` begins to slip at zero rate, its slip grows smoothly as the
-load rises, and nothing ever jumps. There are then no events, no cascades and
+quasi-static solution is a CONTINUOUS function of the load. Friction that does
+not weaken cannot go unstable: a patch unloads itself at stiffness
+``k = |K_ii|`` and instability needs ``k < |dtau/ddelta|``, which is 0 here, so
+the inequality fails at every patch size and stress. Past failure the slip
+grows from ZERO SLIP at a FINITE rate ``d/|K_ii|`` -- it is the slip AMOUNT at
+onset that vanishes, and hence the event size, not the rate -- and nothing
+ever jumps. There are then no events, no cascades and
 no avalanche statistics to collect, which the first version of the solver
 demonstrated by advancing the load to the first failure and then relaxing zero
 slip forever.
@@ -116,15 +120,26 @@ element from one to the other, which forces a finite slip increment of
 ``(mu_s - mu_d) * sigma_eff / |K_ii|``, and that increment is what loads the
 neighbours and can trigger them in turn.
 
-``drop_ratio`` is therefore the single most important physical parameter here:
-at 1.0 there are no avalanches by construction, and the smaller it is the
-larger the cascades. It is swept, not fixed.
+``drop_ratio`` therefore decides whether events exist AT ALL -- at 1.0 there
+are none by construction and the value is refused -- and it sets the moment
+each carries and how many there are. It does NOT set how large they are in
+elements: the drop cancels from the triggering ratio, because a failing
+element slips ``Delta_tau/|K_ii|`` while the gap its neighbour must re-close
+after relocking is itself proportional to ``Delta_tau``. Measured, a 25x
+change in the drop moved mean avalanche size by under 2 %. An earlier version
+of this note called it "the single most important physical parameter", which
+``kernel.branching_ratio``'s own docstring contradicts.
+
+NONE OF WHICH THE STATIC PROBLEM NEEDS. At one load the single-coefficient
+problem is an LCP with a unique solution -- see ``static.py`` -- and the two
+static solutions bracket the whole stick-slip history exactly.
 
 Units are km and GPa, the project's convention. 1 MPa = 1e-3 GPa.
 """
 from __future__ import annotations
 
 import dataclasses
+import math
 
 import numpy as np
 
@@ -166,6 +181,31 @@ LOAD_TENSORS = {
                         [0.0, 0.0, 0.0],
                         [0.0, 0.0, -1.0]]),
 }
+
+
+def rotate_about_vertical(sigma: np.ndarray, deg: float) -> np.ndarray:
+    """Rotate a stress tensor counter-clockwise about the vertical axis.
+
+    The regional stress has an ORIENTATION as well as a shape and a size, and
+    it is the one parameter a fault network cannot be re-meshed to absorb:
+    rotating the stress relative to a fixed network asks which fault
+    populations a given tectonic regime selects, which is what
+    critically-stressed-fracture analysis is used for in practice.
+
+    PERIOD 180 DEGREES, not 360. A stress tensor is symmetric, so sigma and
+    its rotation by 180 deg are identical; and for a pure-shear deviator the
+    rotation by 90 deg negates it, interchanging sigma_1 and sigma_3. Sweeping
+    [0, 180) therefore covers every distinct orientation exactly once.
+
+    Only the vertical axis is swept. Tilting the principal frame out of
+    horizontal changes the FAULTING REGIME -- strike-slip to thrust or normal
+    -- which ``LOAD_TENSORS`` already offers as separate named states rather
+    than as a continuum.
+    """
+    t = math.radians(float(deg))
+    c, s_ = math.cos(t), math.sin(t)
+    R = np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]])
+    return R @ np.asarray(sigma, float) @ R.T
 
 
 def resolve_tensor(tris: np.ndarray,
@@ -284,6 +324,7 @@ def build_friction(net, *, regime: str = "strike_slip",
                    sigma_eff: float = SIGMA_EFF_UNIFORM,
                    pore_ratio: float = RHO_W_G / RHO_G,
                    mean_stress_ratio: float = 0.0,
+                   azimuth_deg: float = 0.0,
                    seed: int = 0) -> Friction:
     """Strength and resolved load for a network.
 
@@ -319,7 +360,8 @@ def build_friction(net, *, regime: str = "strike_slip",
             f"mean_stress_ratio must be >= 0; got {mean_stress_ratio}. A "
             f"negative value would make the loading path REDUCE the mean "
             f"stress, driving every plane toward tension at once.")
-    tau_load, sigma_n_load = resolve_tensor(tris, LOAD_TENSORS[regime])
+    tau_load, sigma_n_load = resolve_tensor(
+        tris, rotate_about_vertical(LOAD_TENSORS[regime], azimuth_deg))
     # The isotropic part of the loading path. It resolves the same normal
     # stress onto every plane and no shear onto any, so folding it in here
     # leaves every downstream formula untouched. See the module docstring.
@@ -371,6 +413,7 @@ def build_friction(net, *, regime: str = "strike_slip",
             "tau_load_mag_range": [float(mag.min()), float(mag.max())],
             "n_unloadable": int(flat.sum()),
             "mean_stress_ratio": float(mean_stress_ratio),
+            "azimuth_deg": float(azimuth_deg),
             "units": "km, GPa"}
     fric = Friction(mu=mu, mu_dynamic=mu * float(drop_ratio),
                     sigma_eff_0=sig0, tau_load=tau_load,
