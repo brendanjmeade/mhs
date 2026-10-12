@@ -670,19 +670,46 @@ def c_crack() -> None:
     # these two apart is the distinction that cost a run when an expectation
     # and a measurement disagreed and the measurement was right.
     rng_f = np.random.default_rng(0)
-    for c_true in (1.0, 0.75, 0.60):
-        ph = rng_f.uniform(-math.pi, math.pi, 400)
-        rr = 1.0 + rng_f.uniform(-0.05, 0.05, 400)
-        gn = ((np.cos(ph) ** 2 + c_true * np.sin(ph) ** 2)
-              * (1.0 - 2.0 * (rr - 1.0)))
-        ct = np.zeros((401, 3))
-        ct[1:, 0], ct[1:, 1] = rr * np.cos(ph), rr * np.sin(ph)
-        onf = np.zeros(401, bool)
-        onf[0] = True
-        c_s, _ = Gr.front_anisotropy(ct, onf, np.arange(1, 401), gn,
-                                     np.array([1.0, 0.0]))
-        check(f"the anisotropy fit recovers a synthetic c = {c_true:.2f}",
-              abs(c_s - c_true), 0.002)
+    nsyn = 84                      # the production front's candidate count
+    psyn = np.linspace(-math.pi, math.pi, nsyn, endpoint=False)
+    rsyn = 1.0 + rng_f.uniform(-0.02, 0.02, nsyn)
+    ctsyn = np.zeros((nsyn + 1, 3))
+    ctsyn[1:, 0] = rsyn * np.cos(psyn)
+    ctsyn[1:, 1] = rsyn * np.sin(psyn)
+    onsyn = np.zeros(nsyn + 1, bool)
+    onsyn[0] = True
+    cdsyn = np.arange(1, nsyn + 1)
+    arsyn = np.full(nsyn + 1, 0.5)
+    sdir = np.array([1.0, 0.0])
+
+    def synth(c_true, arc):
+        """Gains built the way `front_gains(arc=w)` measures them."""
+        out = np.empty(cdsyn.size)
+        for k, cc in enumerate(cdsyn):
+            patch = (Gr.arc_patch(ctsyn, cdsyn, cc, arc) if arc > 1
+                     else np.array([cc]))
+            p = np.arctan2(ctsyn[patch, 1], ctsyn[patch, 0])
+            r = np.hypot(ctsyn[patch, 0], ctsyn[patch, 1])
+            w = arsyn[patch] / arsyn[patch].sum()
+            out[k] = ((w * (np.cos(p) ** 2 + c_true * np.sin(p) ** 2)).sum()
+                      * (1.0 - 2.0 * ((w * r).sum() - 1.0)))
+        return out
+
+    for arc_s in (1, 9):
+        for c_true in (1.0, 0.75, 0.60):
+            gn = synth(c_true, arc_s)
+            c_s, _ = Gr.front_anisotropy(ctsyn, onsyn, cdsyn, gn, sdir,
+                                         arc=arc_s, areas=arsyn)
+            check(f"the arc-{arc_s} fit recovers a synthetic c = {c_true:.2f}",
+                  abs(c_s - c_true), 0.002)
+    # AND THAT THE ARC CORRECTION IS DOING SOMETHING, so the clause above
+    # cannot pass by the correction being a no-op. Fitting arc-9 gains as if
+    # they were centre values must read HIGH, because averaging an azimuthal
+    # ratio over 39 degrees of front compresses it toward one.
+    naive, _ = Gr.front_anisotropy(ctsyn, onsyn, cdsyn, synth(0.60, 9), sdir)
+    check_true("ignoring the arc biases c high, which is why arc is passed",
+               naive > 0.60 + 0.02, f"centre-value fit reads {naive:.4f} "
+                                    f"against 0.6000")
 
     Pm, tr, cn, ar2, sd2, dd, gg = base
 
@@ -740,6 +767,14 @@ def c_crack() -> None:
     # closed form while falling h moves it toward, so a tolerance tuned to
     # this combination would pass for the wrong reason and break on a
     # resolution change that improved the physics.
+    #
+    # AND THE FIX IS NOT EXERCISED ON REAL GAINS HERE, deliberately, because
+    # this clause cannot afford the resolution it needs: the front row holds
+    # about 25 cells, so an arc of 9 would span 130 degrees and stop being a
+    # local measurement at all. The synthetic clauses above gate the
+    # estimator; the fix's effect on the physics is measured at production
+    # resolution, where arc 9 and 15 bracket the closed form at -1.0 % and
+    # +1.2 % against the one-cell -18.3 %.
     check_true("the anisotropy strengthens with nu",
                fronts[0.0] > fronts[nu_],
                f"c {fronts[0.0]:.4f} at nu 0 vs {fronts[nu_]:.4f} at {nu_:.2f}")
