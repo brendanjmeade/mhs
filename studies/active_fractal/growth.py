@@ -4,8 +4,33 @@ GROWTH AS ACTIVATION, WHICH IS WHY THIS IS CHEAP. The matrix is assembled ONCE
 for a candidate lattice and growth turns cells on through ``static.solve``'s
 ``include`` mask. No remeshing, no re-assembly, and the front is implicit in
 which cells are active -- the same machinery the fault-network growth verb
-uses. It sets aside the 3-D front representation the XFEM literature calls the
-hard part until it is actually needed, which is non-planar growth.
+uses.
+
+OUT OF PLANE IT CANNOT BE ACTIVATION, because a kinked cell is in no lattice,
+so :func:`kink_candidates` BUILDS one on each front edge. That is the 3-D
+front representation the XFEM literature calls the hard part, and it stays
+cheap here for two reasons: the edge IS the exact local tangent, so no tangent
+has to be estimated, and the candidate blocks are rectangular, so the parent
+block is assembled once and only the border is new (verified bit-identical to
+assembling the whole thing).
+
+WHAT IT SAYS SO FAR IS THAT THE FRONT STAYS PUT. Under pure remote shear the
+preferred kink is theta = 0 at both the mode-II and mode-III tips, with gains
+symmetric in theta to six digits as the loading's symmetry demands -- a shear
+crack grows in its own plane, which is why faults are planar surfaces. That is
+not merely the trigonometry of a kinked plane resolving less shear: holding
+the candidate's drive at full ``d_tau`` to isolate the elastic term still
+costs 38.0 % at the mode-III tip and 36.9 % at the mode-II tip by 30 degrees.
+The two tips resist nearly EQUALLY; an earlier reading had the mode-III tip
+four times weaker, which was two coincident candidates (see
+:func:`front_edges`).
+
+The honest limit on that is arc length against mode purity. An arc must be
+long to suppress the one-cell bump term and short to sample one mode, and at
+a/h = 12 an arc of nine spans about 33 degrees and mixes the two -- visible in
+the drive at the "mode-III" tip reading 0.7533 at 30 degrees where pure mode
+III would give cos(30) = 0.8660. Mode purity within 10 degrees needs a/h = 48,
+about 16,700 cells.
 
 THE CRITERION IS ENERGETIC, NOT A STRESS INTENSITY FACTOR, and that is forced
 rather than chosen: mollification removes the r^-1/2 singularity that DEFINES
@@ -373,6 +398,102 @@ def front_anisotropy(centers, on, cand, gain, slip_dir, *, arc=1, areas=None):
             best_c, best_r = float(c), r
     ss = float(((gain - gain.mean()) ** 2).sum())
     return best_c, (1.0 - best_r / ss if ss > 0 else float("nan"))
+
+
+class Front(typing.NamedTuple):
+    """The active set's boundary, ONE ENTRY PER DISTINCT CANDIDATE POSITION."""
+
+    cell: np.ndarray      # (m,)      parent cell index
+    edge: np.ndarray      # (m, 2, 3) the shared edge, in the parent's order
+    apex: np.ndarray      # (m, 3)    the parent's third vertex
+    mid: np.ndarray       # (m, 3)    the planar candidate's centroid
+
+
+def front_edges(tris: np.ndarray, on: np.ndarray, *, tol=1e-3) -> Front:
+    """Edges of the active set whose across-edge neighbour is not active.
+
+    EDGE-BASED, NOT CELL-BASED, because the edge IS the exact local front
+    tangent -- so out-of-plane growth needs no tangent estimate. (Estimating
+    one from a cell's active neighbours is 43 degrees wrong at worst here,
+    since a front triangle has only 1.14 active neighbours on average.)
+
+    The planar continuation across an edge is the parallelogram completion
+    ``q = v0 + v1 - p``, which on an equilateral TILING is exactly the
+    neighbouring cell: measured, 162 hits out of 162 with centroid agreement
+    8e-17. That identity is what makes ``theta = 0`` in
+    :func:`kink_candidates` reproduce planar growth rather than approximate it.
+
+    ONE ENTRY PER POSITION IS A CORRECTNESS REQUIREMENT, not tidiness. A
+    triangle just outside a ragged front can share edges with TWO different
+    active cells, so two edges generate the SAME candidate. Admitting both
+    puts coincident elements in a trial: the added area counts twice while the
+    pair's mutual interaction equals its self-interaction, so the gain per unit
+    area is wrong. It cost 31 % in the one quantity the kink scan cross-checks
+    -- two candidates 0.000 h apart turned a tip-to-tip gain ratio of 0.677
+    into 0.515 against a closed form of 0.750 -- and it also invented a
+    four-fold difference between the mode-II and mode-III tips that is not
+    there.
+    """
+    cen = tris.mean(axis=1)
+    h = float(np.sqrt(4.0 / np.sqrt(3.0) * 0.5 * np.linalg.norm(
+        np.cross(tris[0, 1] - tris[0, 0], tris[0, 2] - tris[0, 0]))))
+    cell, edge, apex, mid = [], [], [], []
+    for i in np.flatnonzero(on):
+        for a, b, c in ((0, 1, 2), (1, 2, 0), (2, 0, 1)):
+            v0, v1, p = tris[i, a], tris[i, b], tris[i, c]
+            m = (v0 + v1 + (v0 + v1 - p)) / 3.0
+            d2 = ((cen - m) ** 2).sum(axis=1)
+            j = int(np.argmin(d2))
+            if d2[j] <= (tol * h) ** 2 and on[j]:
+                continue                       # the neighbour is active
+            if mid and np.min(((np.array(mid) - m) ** 2).sum(axis=1)) < (
+                    tol * h) ** 2:
+                continue                       # this position already taken
+            cell.append(i)
+            edge.append([v0, v1])
+            apex.append(p)
+            mid.append(m)
+    return Front(np.array(cell, np.int64), np.array(edge).reshape(-1, 2, 3),
+                 np.array(apex).reshape(-1, 3), np.array(mid).reshape(-1, 3))
+
+
+def kink_candidates(front: Front, theta: float,
+                    which=None) -> np.ndarray:
+    """``(m, 3, 3)`` candidate triangles, rotated out of plane by ``theta``.
+
+    Growth out of plane CANNOT be activation, which is what separates this
+    from :func:`step`: a kinked cell is in no lattice, so it is built. Each
+    candidate keeps its parent's front edge and rotates the planar
+    continuation apex about that edge, which is rigid -- edge length and area
+    are preserved to 1.000000 at every ``theta``.
+
+    THE VERTEX ORDER IS (v1, v0, q), AND THE LATTICE DECIDES THAT, not taste:
+    adjacent triangles in a consistent tiling traverse their shared edge in
+    OPPOSITE directions, and 288 of 288 interior edges match (v1, v0, q)
+    against 0 of 288 for (v0, v1, q). The wrong order flips the slip frame's
+    handedness and so the SIGN of the self-interaction -- measured, +618.75
+    where the parent diagonal is -618.75 -- which destroys the negative
+    definiteness the LCP rests on while ``tdcs.unit_normals`` still reports a
+    perfectly innocent ``n_z = 1``. Callers must still check the projected
+    diagonal; this only avoids guaranteeing it wrong.
+
+    ``theta``'s sense is tied to the original ``v0 -> v1`` direction so its
+    sign keeps one geometric meaning despite that swap. Beyond about 60
+    degrees the candidate normal approaches horizontal, where ``tdcs``'s
+    hemisphere flip is float noise, so callers cap it.
+    """
+    e = front.edge if which is None else front.edge[which]
+    p = front.apex if which is None else front.apex[which]
+    v0, v1 = e[:, 0], e[:, 1]
+    q = v0 + v1 - p
+    ax = v1 - v0
+    ax = ax / np.linalg.norm(ax, axis=1, keepdims=True)
+    m = 0.5 * (v0 + v1)
+    r = q - m
+    rot = (r * np.cos(theta)
+           + np.cross(ax, r) * np.sin(theta)
+           + ax * (ax * r).sum(axis=1, keepdims=True) * (1.0 - np.cos(theta)))
+    return np.stack([v1, v0, m + rot], axis=1)
 
 
 def step(P, d, g, areas, centers, on, *, pitch, batch=1, warm=None,

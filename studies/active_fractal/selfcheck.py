@@ -741,6 +741,88 @@ def c_crack() -> None:
             del Pf
     del Pm, base
 
+    # PHASE 3: OUT-OF-PLANE CANDIDATES, whose correctness is geometric and so
+    # can be pinned without a single solve. Growth out of plane cannot be
+    # activation -- a kinked cell is in no lattice -- so candidates are BUILT,
+    # and three things must hold or nothing downstream means anything.
+    print("       [kink] out-of-plane candidates: the identity, rigidity, sign")
+    hk = 0.075
+    trk = N.disc_mesh(0.30, hk, depth=depth)
+    cnk = trk.mean(axis=1)
+    onk = cnk[:, 0] ** 2 + cnk[:, 1] ** 2 <= 0.04
+    fr3 = Gr.front_edges(trk, onk)
+    c0 = Gr.kink_candidates(fr3, 0.0)
+
+    # (i) theta = 0 REPRODUCES the lattice, vertices and winding both. This is
+    # what makes planar growth the special case of out-of-plane growth rather
+    # than a separate code path, and the winding half is the one that bites:
+    # the reversed order flips the slip frame and the self-interaction's sign
+    # while leaving n_z reporting a perfectly innocent 1.
+    def cyclic(a, b):
+        a = [tuple(np.round(v, 9)) for v in a]
+        b = [tuple(np.round(v, 9)) for v in b]
+        return any(a == b[i:] + b[:i] for i in range(3))
+
+    exact = 0
+    for k in range(fr3.cell.size):
+        d2 = ((cnk - c0[k].mean(axis=0)) ** 2).sum(axis=1)
+        j = int(np.argmin(d2))
+        if d2[j] < 1e-18 and cyclic(trk[j], c0[k]):
+            exact += 1
+    check_true("theta = 0 reproduces the lattice cell, winding included",
+               exact == fr3.cell.size, f"{exact} of {fr3.cell.size}")
+
+    # (ii) THE ROTATION IS RIGID. Edge length and area must not move, or a
+    # kink angle is confounded with a change of element size.
+    e0 = np.linalg.norm(c0[:, 1] - c0[:, 0], axis=1)
+    a0 = 0.5 * np.linalg.norm(np.cross(c0[:, 1] - c0[:, 0],
+                                       c0[:, 2] - c0[:, 0]), axis=1)
+    worst_e = worst_a = 0.0
+    for th in (10.0, 30.0, 60.0):
+        ck = Gr.kink_candidates(fr3, math.radians(th))
+        ek = np.linalg.norm(ck[:, 1] - ck[:, 0], axis=1)
+        ak = 0.5 * np.linalg.norm(np.cross(ck[:, 1] - ck[:, 0],
+                                           ck[:, 2] - ck[:, 0]), axis=1)
+        worst_e = max(worst_e, float(np.abs(ek / e0 - 1.0).max()))
+        worst_a = max(worst_a, float(np.abs(ak / a0 - 1.0).max()))
+        # The normal tilts by exactly theta, which is also the statement that
+        # the rotation axis is the front edge and nothing else.
+        nz = mhs.tdcs.unit_normals(ck)[:, 2]
+        check(f"the normal tilts by exactly {th:.0f} deg",
+              float(np.abs(nz - math.cos(math.radians(th))).max()), 1e-12)
+    check("kinking preserves the front edge", worst_e, 1e-12)
+    check("kinking preserves the element area", worst_a, 1e-12)
+
+    # (iii) ONE CANDIDATE PER POSITION. A triangle outside a ragged front can
+    # share edges with two active cells, and admitting both puts coincident
+    # elements in a trial -- area counted twice, mutual interaction equal to
+    # self-interaction. Measured, that misread a tip-to-tip gain ratio by 31 %
+    # and invented a four-fold difference between the two tips.
+    cc = c0.mean(axis=1)
+    dmk = np.linalg.norm(cc[:, None, :] - cc[None, :, :], axis=2)
+    np.fill_diagonal(dmk, np.inf)
+    check_true("no two candidates coincide",
+               float(dmk.min()) > 0.3 * hk,
+               f"min separation {dmk.min() / hk:.4f} h")
+
+    # AND THE SIGN SURVIVES ASSEMBLY, which geometry alone cannot promise:
+    # slip on a kinked cell must still relieve the shear that drives it.
+    sig3 = dtau * (np.outer([1.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+                   + np.outer([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]))
+
+    def proj_diag(tk):
+        tq, _ = Fr.resolve_tensor(tk, sig3)
+        sdk = tq / np.maximum(np.linalg.norm(tq, axis=1), 1e-300)[:, None]
+        rw3 = mhs.interaction_matrix(
+            tris=tk, material=mhs.Material(mu=mu_, lam=lam_), eps=0.1 * hk,
+            receiver=Kmod.RECEIVER, source=Kmod.SOURCE, obs_tris=tk)
+        return Kmod.project(Kmod.to_source_major(rw3), sdk, sdk).diagonal()
+
+    for th in (0.0, 30.0):
+        dg = proj_diag(Gr.kink_candidates(fr3, math.radians(th)))
+        check_true(f"kinked cells at {th:.0f} deg relieve their own shear",
+                   float(dg.max()) < 0.0, f"worst diagonal {dg.max():+.4e}")
+
     # THE SIGN, which no discretization produces on its own: more energy is
     # released growing ALONG slip than across it, whenever nu > 0.
     check_true("dE/dA is larger along slip than across it (c < 1)",
