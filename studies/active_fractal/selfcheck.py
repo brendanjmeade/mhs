@@ -1095,6 +1095,33 @@ def c_static() -> None:
     # asymmetry would stop meaning what it gets reported to mean.
     print("       [coupled] sigma_n coupled to slip: the stepping symmetry")
     import mhs                                                # noqa: PLC0415
+    # THE ENERGY SPLIT'S SUM IDENTITY, which needs no assembly and is the
+    # standing check on how the asymmetry gets attributed. Only
+    # shear + clamp = total is forced; everything the decomposition claims
+    # beyond that is measured. Passing P_eff where the BARE P belongs
+    # double-counts the clamping and the halves cancel, which once turned a
+    # -11.9 % asymmetry into 0.00 % -- so the identity is pinned here and the
+    # misuse cannot survive it.
+    rng_e = np.random.default_rng(11)
+    ne = 60
+    Pe_ = -np.eye(ne) * 5.0 + 0.2 * rng_e.standard_normal((ne, ne))
+    Ne_ = 0.4 * rng_e.standard_normal((ne, ne))
+    de_ = np.abs(rng_e.standard_normal(ne))
+    ae_ = 0.5 + rng_e.random(ne)
+    mue = 0.3 + 0.4 * rng_e.random(ne)
+    e_sh, e_cl = St.energy_split(Pe_, Ne_, mue, de_, ae_)
+    want_e = St.released_energy(Pe_ + mue[None, :] * Ne_, de_, ae_)
+    check("the energy split sums to the released energy",
+          abs(float(e_sh.sum() + e_cl.sum()) - want_e) / abs(want_e), 1e-13)
+    # And the misuse it guards against is not a no-op: feeding P_eff in as
+    # the shear operator must give a DIFFERENT number, or the check is idle.
+    bad_sh, bad_cl = St.energy_split(Pe_ + mue[None, :] * Ne_, Ne_, mue,
+                                     de_, ae_)
+    check_true("double-counting the clamp term really does change the answer",
+               abs(float(bad_sh.sum() + bad_cl.sum()) - want_e)
+               > 0.01 * abs(want_e),
+               f"{float(bad_sh.sum() + bad_cl.sum()):.5e} vs {want_e:.5e}")
+
     hc, ac_, mu_c = 0.075, 0.30, 30.0
     base = N.disc_mesh(ac_, hc, depth=-20.0)
     sg = 0.01 * (np.outer([1.0, 0.0, 0.0], [0.0, 0.0, 1.0])

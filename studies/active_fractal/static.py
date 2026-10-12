@@ -187,6 +187,48 @@ def released_energy(P: np.ndarray, delta: np.ndarray,
     return -0.5 * float((a * (P.T @ d) * d).sum())
 
 
+def energy_split(P: np.ndarray, Nrm: np.ndarray, mu: np.ndarray,
+                 delta: np.ndarray, areas: np.ndarray):
+    """``(E_shear, E_clamp)`` per element, summing to :func:`released_energy`.
+
+    THE SPLIT IS ALONG THE OPERATOR, since ``P_eff = P + mu N`` makes
+    ``E = -1/2 sum A_i (P_eff^T d)_i d_i`` separate exactly into a shear part
+    and a clamping part. The two answer different questions: the clamping
+    part is the coupling entering the functional directly, the shear part is
+    the coupling changing the SOLUTION and that feeding back.
+
+    ``P`` MUST BE THE BARE SHEAR OPERATOR, not ``P_eff``. ``P_eff`` already
+    contains ``mu N``, so passing it counts the clamping twice and the halves
+    then cancel to almost nothing -- a reconstructed asymmetry came out
+    0.00 % where the measurement it had to reproduce was -11.9 %. That was
+    caught only because it disagreed with a number already trusted, which is
+    why the gate pins the SUM identity rather than the pieces.
+
+    A PER-ELEMENT TERM IS BOOKKEEPING AND NOT A LOCAL ENERGY: the quadratic
+    form is not diagonal, so one entry means nothing by itself. A partition
+    of the sum is exact, and that is all attribution needs.
+
+    WHAT IT SHOWED on the stepping asymmetry. The clamping term is purely
+    ANTISYMMETRIC in the stepping sense -- ``Nrm`` is odd there while the slip
+    is even -- and it OPPOSES the net asymmetry one for one, while the shear
+    term carries the answer at twice the size:
+
+        odd(E_clamp)/odd(E) = -1.0051    odd(E_shear)/odd(E) = +2.0052
+
+    each to a spread of 0.016 across a sixfold range of offset AND through
+    the reversal, where only ``shear + clamp = total`` is forced. So the
+    asymmetry is a GLOBAL SLIP REDISTRIBUTION rather than a tip being
+    clamped, which is why the tip's own ``sigma_n`` fails to predict it; by
+    region it splits 50/32/18 between the far crack, the near crack and the
+    advancing front, constant to 0.010 in the far crack's share.
+    """
+    d = np.asarray(delta, float)
+    a = np.asarray(areas, float)
+    m = np.asarray(mu, float)
+    return (-0.5 * a * (P.T @ d) * d,
+            -0.5 * a * m * (Nrm.T @ d) * d)
+
+
 def coulomb_coupled(P: np.ndarray, Nrm: np.ndarray, fric):
     """``(P_eff, d, g)`` for the LCP with ``sigma_n`` COUPLED to slip.
 
