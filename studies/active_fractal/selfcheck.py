@@ -444,6 +444,9 @@ def c_crack() -> None:
 
         delta(r) = delta_0 sqrt(1 - r^2/a^2),  delta_0 = 24/(7 pi) d_tau a / mu
 
+    at the nu = 1/4 this clause runs at; `growth.penny` carries the general
+    nu, which the nu sweep needed and which this clause now reads from.
+
     WHAT MOLLIFICATION COSTS IS MEASURED HERE AND NOWHERE ELSE in either
     repository. The error is NOT uniform: it concentrates within a few eps of
     the crack front, which is exactly where a growth criterion would be
@@ -454,7 +457,12 @@ def c_crack() -> None:
     print("\n[crack] a penny-shaped shear crack, which has a closed form")
     import mhs                                                # noqa: PLC0415
     a, mu_, lam_, dtau, depth = 1.0, 30.0, 30.0, 0.01, -20.0
-    want_C = 24.0 / (7.0 * math.pi) * dtau / mu_              # slip per km of a
+    # The closed forms are nu dependent and `growth.penny` is where that is
+    # stated; this clause runs at nu = 1/4, where they take the familiar
+    # 24/(7 pi), 8/7 and 12/(7 pi) values that phases 0 and 1 were built on.
+    nu_ = mhs.Material(mu=mu_, lam=lam_).nu_if_you_must
+    pen = Gr.penny(nu_)
+    want_C = pen.slip * dtau / mu_                            # slip per km of a
 
     got = {}
     for eps_over_h in (0.2, 0.1, 0.05):
@@ -532,11 +540,12 @@ def c_crack() -> None:
         del Pm
         return en, float(ar.sum()), so.converged
 
-    print("       [energy] E = (8/7) d_tau^2 a^3 / mu, and dE/dA vs Irwin")
+    print(f"       [energy] E = {pen.energy:.5f} d_tau^2 a^3 / mu at nu "
+          f"= {nu_:.3f}, and dE/dA vs Irwin")
     ratios, Es, As = [], {}, {}
     for aa in (1.0, 1.4):
         en, ar, okc = solve_crack(aa, 0.1 * aa, 0.01 * aa)
-        want_E = 8.0 / 7.0 * dtau ** 2 * aa ** 3 / mu_
+        want_E = pen.energy * dtau ** 2 * aa ** 3 / mu_
         ratios.append(en / want_E)
         Es[aa], As[aa] = en, ar
         print(f"         a {aa:4.2f}  E {en:.5e}  E/analytic {en/want_E:.4f}"
@@ -555,7 +564,7 @@ def c_crack() -> None:
     en2, ar2, ok2 = solve_crack(1.2, 0.1, 0.01)
     en1, ar1, ok1 = solve_crack(1.0, 0.1, 0.01)
     G = (en2 - en1) / (ar2 - ar1)
-    want_G = 12.0 / (7.0 * math.pi) * dtau ** 2 * 1.1 / mu_
+    want_G = pen.g * dtau ** 2 * 1.1 / mu_
     print(f"         G by compliance {G:.5e}  G/analytic {G/want_G:.4f}")
     check("dE/dA reproduces Irwin's G", abs(G / want_G - 1.0), 0.08)
     # AND THE BIAS IS SHARED. This is what makes a 1.3 % offset harmless for
@@ -601,7 +610,10 @@ def c_crack() -> None:
             warm = so2.delta
         shp = Gr.shape_ratio(cn, onm)
         out[rot] = (Ee, shp, int(onm.sum()), nn)
-        del Pm
+        if rot:
+            del Pm
+        else:
+            base = (Pm, tr, cn, ar2, sd2, dd, gg)      # reused below, at two nu
         print(f"         rot {rot:4.0f} deg  lattice {nn:4d}  active "
               f"{int(onm.sum()):4d}  E {Ee:.5e}  shape {shp:.4f}")
     rel = abs(out[0.0][0] - out[30.0][0]) / out[0.0][0]
@@ -614,11 +626,16 @@ def c_crack() -> None:
     # inherited. Loosening a tolerance until it passed would be tuning the
     # gate to the answer.
     #
-    # At production resolution it IS resolvable and it agrees: 2346 cells,
-    # h = 0.075, fourteen steps, the crude aspect changed +0.148 against
-    # +0.132 on the rotated lattice while the energy tracked to 0.71 % worst
-    # and 0.10 % at the final step. The energy check below is the one this
-    # clause can actually support.
+    # AND AT PRODUCTION RESOLUTION IT IS RESOLVABLE AND IT DOES NOT AGREE,
+    # which an earlier version of this comment got wrong by reading the crude
+    # aspect. 2346 cells, h = 0.075, fourteen steps: in `shape_ratio` the two
+    # lattices' initial ellipses agree to 0.0058, yet the paths end 0.0952
+    # apart -- the divergence is ACCUMULATED, not inherited, and the shape
+    # change is +0.054 against +0.144, a factor of 2.6. The crude aspect hid
+    # that inside its own 0.0733 initial offset. Energy meanwhile tracks to
+    # 0.71 % worst and 0.10 % at the final step, so the energy check below is
+    # the one this clause can support -- at ANY resolution, not merely this
+    # one. See `growth`'s module docstring for why nu = 1/4 is the worst case.
     print(f"         shape {out[0.0][1]:.4f} vs {out[30.0][1]:.4f} -- NOT "
           f"gated: the initial ellipse already differs by 0.096 here")
     # The elongation itself: a shear crack grows along the slip direction
@@ -626,6 +643,106 @@ def c_crack() -> None:
     # equilibrium aspect is not known in closed form.
     check_true("a shear crack elongates along slip (shape > 1)",
                out[0.0][1] > 1.0, f"shape {out[0.0][1]:.4f}")
+
+    # WHY IT ELONGATES, which the sign above does not establish. Around a
+    # circular shear crack the energy release rate must follow
+    #
+    #     G(phi)/G(0) = cos^2 phi + (1 - nu) sin^2 phi
+    #
+    # phi from the slip direction -- `growth.penny(nu).front`. That is the one
+    # closed form here with no counterpart at fixed nu: the slip, the energy
+    # and the global dE/dA are all azimuthal integrals carrying the same
+    # (1-nu)/(2-nu), so a criterion that preferred the WRONG direction would
+    # reproduce every one of them. This measures dE/dA around a single front,
+    # with no growth and no path, and reads the azimuthal coefficient off it.
+    #
+    # Gated at TWO nu because the prediction contains a sign change, which is
+    # much harder to reproduce by accident than a magnitude: at nu = 0 the
+    # front is ISOTROPIC and an ellipse rounds up instead of elongating.
+    # nu = 1/4 costs no assembly (the rot-0 matrix above is already at it);
+    # nu = 0 costs one more on the same lattice, and that is the whole price
+    # of the clause.
+    print("       [front] dE/dA around a circular front vs cos^2 + (1-nu) sin^2")
+    # FIRST THAT THE ESTIMATOR IS UNBIASED, separately from whether the
+    # physics is. Synthetic gains built from a known c, carrying the same
+    # radial modulation the lattice imposes, must come back exactly -- so a
+    # bias in the measured c below is discretization and not the fit. Keeping
+    # these two apart is the distinction that cost a run when an expectation
+    # and a measurement disagreed and the measurement was right.
+    rng_f = np.random.default_rng(0)
+    for c_true in (1.0, 0.75, 0.60):
+        ph = rng_f.uniform(-math.pi, math.pi, 400)
+        rr = 1.0 + rng_f.uniform(-0.05, 0.05, 400)
+        gn = ((np.cos(ph) ** 2 + c_true * np.sin(ph) ** 2)
+              * (1.0 - 2.0 * (rr - 1.0)))
+        ct = np.zeros((401, 3))
+        ct[1:, 0], ct[1:, 1] = rr * np.cos(ph), rr * np.sin(ph)
+        onf = np.zeros(401, bool)
+        onf[0] = True
+        c_s, _ = Gr.front_anisotropy(ct, onf, np.arange(1, 401), gn,
+                                     np.array([1.0, 0.0]))
+        check(f"the anisotropy fit recovers a synthetic c = {c_true:.2f}",
+              abs(c_s - c_true), 0.002)
+
+    Pm, tr, cn, ar2, sd2, dd, gg = base
+
+    def anisotropy(Pmat, rad=0.60):
+        onc = cn[:, 0] ** 2 + cn[:, 1] ** 2 <= rad * rad
+        cand, gain, _, _ = Gr.front_gains(Pmat, dd, gg, ar2, cn, onc,
+                                          pitch=hh, max_sweeps=20000)
+        c_, r2_ = Gr.front_anisotropy(cn, onc, cand, gain, sd2[0])
+        return c_, r2_, int(onc.sum()), int(cand.size)
+
+    fronts = {}
+    for nu_f in (nu_, 0.0):
+        if nu_f == nu_:
+            Pf = Pm
+        else:
+            mat = mhs.Material.from_mu_nu(mu_, nu_f)
+            rwf = mhs.interaction_matrix(
+                tris=tr, material=mat, eps=ee, receiver=Kmod.RECEIVER,
+                source=Kmod.SOURCE, obs_tris=tr)
+            Pf = Kmod.project(Kmod.to_source_major(rwf), sd2, sd2)
+            del rwf
+        c_, r2_, nact, ncd = anisotropy(Pf)
+        fronts[nu_f] = c_
+        want_f = Gr.penny(nu_f).front
+        print(f"         nu {nu_f:4.2f}  front {nact:4d} active, {ncd:3d} "
+              f"candidates  c {c_:.4f} vs 1-nu {want_f:.4f} "
+              f"({100 * (c_ / want_f - 1):+.1f} %)  R2 {r2_:.4f}")
+        if Pf is not Pm:
+            del Pf
+    del Pm, base
+
+    # THE SIGN, which no discretization produces on its own: more energy is
+    # released growing ALONG slip than across it, whenever nu > 0.
+    check_true("dE/dA is larger along slip than across it (c < 1)",
+               fronts[nu_] < 1.0, f"c {fronts[nu_]:.4f} at nu {nu_:.2f}")
+    # AND IT VANISHES AT nu = 0, the prediction's own sign change and the
+    # reason this is mode mixity rather than a directional bug -- a bug does
+    # not know about nu. This one IS gated against the closed form, because
+    # c = 1 at nu = 0 is where the measurement is accurate: production reads
+    # 1.0370 by this fit and 1.0102 by the wedge, against 1.
+    check("the front is isotropic at nu = 0", abs(fronts[0.0] - 1.0), 0.15)
+    # THE ORDERING rather than the value at nu > 0, and the reason is a
+    # measured bias, not coarse resolution. A one-cell gain carries the
+    # bump's own self-interaction, which the lattice's fixed cell aspect
+    # keeps alive under refinement: c plateaus at 0.4900 for a/h = 12 and 18
+    # alike against a closed form of 0.6000, and spreading the perturbation
+    # over a 24-51 degree arc recovers 0.545-0.576. So the slope of c in nu
+    # comes out 35 % steep everywhere and gating the value would gate the
+    # bias. `growth.front_anisotropy` carries the numbers.
+    #
+    # THIS CLAUSE'S OWN -2.8 % AT nu = 1/4 IS FORTUITOUS and must not be read
+    # as the measurement being accurate here. It is the coarsest lattice of
+    # any run (a/h = 4) and has the largest eps/a = 0.025; production, eight
+    # times better resolved, reads -8.7 %. Falling eps moves c AWAY from the
+    # closed form while falling h moves it toward, so a tolerance tuned to
+    # this combination would pass for the wrong reason and break on a
+    # resolution change that improved the physics.
+    check_true("the anisotropy strengthens with nu",
+               fronts[0.0] > fronts[nu_],
+               f"c {fronts[0.0]:.4f} at nu 0 vs {fronts[nu_]:.4f} at {nu_:.2f}")
 
 
 def c_load() -> None:

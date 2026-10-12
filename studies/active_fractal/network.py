@@ -528,8 +528,11 @@ def disc_mesh(a: float, h: float, *, depth: float = -20.0,
     solution, so it is the validation target rather than a production
     geometry. Under uniform shear with no friction the slip is elliptical,
     ``delta(r) = delta_0 sqrt(1 - r^2/a^2)`` with
-    ``delta_0 = 24/(7 pi) d_tau a / mu`` (Eshelby 1957), and the mollified
-    solve reproduces that coefficient to 0.6-2 % depending on ``eps``.
+    ``delta_0 = 8(1-nu)/(pi(2-nu)) d_tau a / mu`` (Eshelby 1957) -- the
+    familiar ``24/(7 pi)`` being its value at ``nu = 1/4`` and nothing more
+    general. ``growth.penny`` states that coefficient, the energy and the
+    front anisotropy in one place; the mollified solve reproduces the slip
+    one to 0.6-2 % depending on ``eps``.
 
     ``depth`` places the crack deep enough that the free surface is weak; the
     half-space kernel has no full-space mode, so "infinite medium" is
