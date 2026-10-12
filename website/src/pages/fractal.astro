@@ -351,22 +351,64 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
   <h2>Why there is a strength drop</h2>
 
   <p>
-    With a single friction coefficient this experiment has no mechanism. The
-    quasi-static solution is then <b>continuous</b> in the load: an element
-    reaching its failure criterion begins to slip at zero rate, no event has a
-    finite size, and there is nothing to count. The first version of the solver
+    With a single friction coefficient this experiment has no mechanism,
+    because friction that does not weaken cannot go unstable. A patch unloads
+    itself elastically at a stiffness <i>k</i>&nbsp;=&nbsp;|<i>K<sub>ii</sub></i>|,
+    and instability requires the strength to fall with slip faster than that
+    &mdash; the classical criterion <i>k</i>&nbsp;&lt;&nbsp;|d&tau;/d&delta;|.
+    Non-weakening Coulomb friction has d&tau;/d&delta;&nbsp;=&nbsp;0, so the
+    inequality can never be satisfied at any patch size, stress or stiffness.
+  </p>
+
+  <p>
+    The consequence is that the quasi-static solution is <b>continuous</b> in
+    the load. Beyond failure, equilibrium pins the traction to the strength, so
+    slip follows
+    &delta;(&lambda;)&nbsp;=&nbsp;(&lambda;&thinsp;&tau;'&nbsp;&minus;&nbsp;&tau;<sub>p</sub>)/|<i>K<sub>ii</sub></i>|
+    &mdash; it grows from <i>zero slip</i> at a <i>finite</i> rate
+    &tau;'/|<i>K<sub>ii</sub></i>|. Nothing jumps, so no event has a finite
+    size and there is nothing to count. The first version of the solver
     demonstrated exactly that, advancing the load to the first failure and then
     relaxing zero slip indefinitely.
   </p>
 
   <p>
-    So an element has a static strength it must reach to fail and a lower
-    dynamic strength it relaxes down to, and the difference between them is
-    what loads its neighbours and can trigger them in turn. The ratio between
-    the two is the single most important physical parameter on this page; at
-    1.0 there are no cascades by construction, and the code refuses that value
-    rather than returning a null result that would look like a finding.
+    So an element has a static strength
+    &tau;<sub>p</sub>&nbsp;=&nbsp;&mu;<sub>s</sub>&sigma;'<sub>n</sub> it
+    must reach to fail and a residual strength
+    &tau;<sub>r</sub>&nbsp;=&nbsp;&mu;<sub>d</sub>&sigma;'<sub>n</sub> it
+    relaxes down to. The drop
+    &Delta;&tau;&nbsp;=&nbsp;&tau;<sub>p</sub>&nbsp;&minus;&nbsp;&tau;<sub>r</sub>
+    forces a finite slip
+    &Delta;&delta;&nbsp;=&nbsp;&Delta;&tau;/|<i>K<sub>ii</sub></i>| the instant
+    an element fails, and that slip is what loads its neighbours and can
+    trigger them in turn. This is slip-weakening in the limit of zero
+    weakening distance, so the nucleation length collapses to zero and every
+    element is unstable at any size &mdash; the price of not resolving a
+    breakdown zone. Here
+    &mu;<sub>s</sub>&nbsp;=&nbsp;0.6 and
+    &mu;<sub>d</sub>&nbsp;=&nbsp;0.54 against 150&nbsp;MPa give
+    90&nbsp;&rarr;&nbsp;81&nbsp;MPa, a <b>9&nbsp;MPa stress drop</b>, which sits
+    inside the 1&ndash;10&nbsp;MPa range observed for real earthquakes. At a
+    ratio of 1.0 there are no cascades by construction, and the code refuses
+    that value rather than returning a null result that would look like a
+    finding.
   </p>
+
+  <div class="note">
+    <b>It does not follow that the drop sets the avalanche statistics, and
+    measurement says it does not.</b> A failing element slips
+    &Delta;&tau;/|<i>K<sub>ii</sub></i>| and delivers
+    <i>K<sub>ji</sub></i>&Delta;&tau;/|<i>K<sub>ii</sub></i>| to its neighbour,
+    while the gap that neighbour must re-close after relocking is itself
+    proportional to &Delta;&tau; &mdash; so the drop cancels from the
+    triggering ratio, which is pure geometry. Measured: a <b>25&times; change
+    in the drop moved mean avalanche size by under 2&nbsp;%</b>, with
+    events&nbsp;&times;&nbsp;drop constant to 9&nbsp;%. What the drop does set
+    is whether events exist at all, the moment carried by each, and how many
+    there are &mdash; not how large they are in elements, which is most of what
+    this page measures.
+  </div>
 
   <h2>What the solver choice costs</h2>
 
