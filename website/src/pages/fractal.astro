@@ -1,10 +1,18 @@
 ---
 import Base from "../layouts/Base.astro";
+import katex from "katex";
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+
+// Typeset at BUILD time, not in the browser: no client JS, and
+// throwOnError makes a malformed expression fail the build rather than
+// render as red garbage on the live page. Base.astro already loads the CSS.
+const M = (src: string, display = true) =>
+  katex.renderToString(src, { displayMode: display, throwOnError: true,
+                              output: "html" });
 ---
 <Base
   title="mhs — Active fractal"
-  description="Quasi-static Coulomb loading of a synthetic 3-D fault network: 538 power-law faults from 2 to 38 km, 20771 mollified elements, and the subset that actually slips as the regional load rises."
+  description="The unique static frictional solution on a synthetic 3-D fault network: 538 power-law faults, 20771 mollified elements, and which of them slip as the friction coefficient varies."
   current="fractal"
 >
   <Fragment slot="sidebar">
@@ -12,9 +20,10 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     <p>
       A synthetic fault network with no slip prescribed anywhere. Each element
       carries a frictional strength, and slip is permitted only where the
-      resolved stress reaches it. The regional load rises; faults activate,
-      their stress changes load every other fault, and the network finds a new
-      equilibrium.
+      resolved stress reaches it. Faults that slip change the stress on every
+      other fault, so the set that slips is the solution of a coupled problem
+      rather than a per-fault test &mdash; and at a fixed load that solution
+      is <b>unique</b>.
     </p>
     <p>
       538 faults with <b>power-law lengths</b> from 2.0 to 37.9&nbsp;km in a
@@ -35,9 +44,18 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
       elements.
     </div>
     <p class="contact">
-      The slider is the <b>load parameter</b>, not time. Every frame is an
-      equilibrium: all elements locked, every shear stress below its static
-      strength. Nothing in this animation propagates.
+      The slider is the <b>friction coefficient</b>, not time. Every frame is
+      a separate <i>static solution</i> at its own &mu;, each the unique
+      answer at that friction and none of them depending on the ones before.
+      Nothing in this animation propagates, and nothing accumulates.
+    </p>
+    <p class="contact">
+      Blue arrows at the free surface are the <b>regional stress</b>: pointing
+      inward along the maximum compression
+      (<i>&sigma;</i><sub>1</sub>&nbsp;=&nbsp;904&nbsp;MPa, trending
+      NW&ndash;SE) and outward along the minimum
+      (<i>&sigma;</i><sub>3</sub>&nbsp;&asymp;&nbsp;0). The load is held fixed
+      at <i>&lambda;</i>&nbsp;=&nbsp;0.4525 while &mu; sweeps.
     </p>
     <div class="links">
       <div><a href={`${base}concepts/`}>How the kernel works</a></div>
@@ -49,15 +67,28 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     <div class="panel">
       <label data-ctl="mode"><span>colour</span></label>
       <span data-ctl="play"></span>
-      <div class="rng" data-ctl="frame"><span>load</span></div>
+      <div class="rng" data-ctl="frame"><span>friction</span></div>
     </div>
     <div class="panel" data-iso-panel>
       <span data-ctl="iso"></span>
       <div class="rng" data-ctl="thresh"><span>threshold</span></div>
     </div>
-    <div data-canvas class="canvas" aria-label="A synthetic three-dimensional fault network of 538 power-law faults, coloured by which elements slip as the regional load increases"></div>
+    <div data-canvas class="canvas" aria-label="A synthetic three-dimensional fault network of 538 power-law faults, coloured by which elements slip as the friction coefficient increases, with arrows showing the regional stress axes"></div>
     <div data-bar class="bar"></div>
     <p data-status class="status">loading…</p>
+  </div>
+
+  <div class="note">
+    <b>The slip magnitudes are large and are not a prediction.</b> Median
+    slip is 12&ndash;16&nbsp;m across the sweep and the maximum reaches
+    98&nbsp;m, because the load sits at
+    <i>&lambda;</i>/<i>&sigma;<sub>c</sub></i>&nbsp;=&nbsp;3.0 &mdash; a
+    differential stress well above any crustal state &mdash; and a static
+    solution has no healing, no viscous relaxation and no prior slip history
+    to have relieved it. The load was chosen to give a large enough active
+    set to measure, which it does. <i>Which</i> elements slip, and how moment
+    distributes across them, are the results; how far they slip is what the
+    equations give at that load and should be read as such.
   </div>
 
   <h2>What <i>&lambda;</i> is</h2>
@@ -89,6 +120,137 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     <i>&lambda;</i> alone means nothing: the problem is invariant under scaling
     <i>&lambda;</i> and <i>&sigma;<sub>c</sub></i> together, so the physical
     parameter is the <i>ratio</i> of the two, never either by itself.
+  </p>
+
+  <h2>The problem, written out</h2>
+
+  <p>
+    Let <i>&delta;<sub>i</sub></i> be the slip on element <i>i</i>, along its
+    own slip direction. The shear traction it carries is the regional field
+    plus everything every other element's slip transfers to it:
+  </p>
+
+  <Fragment set:html={M(String.raw`\tau_i(\lambda,\boldsymbol\delta)\;=\;\underbrace{\lambda\,d_i}_{\text{regional}}\;+\;\underbrace{\textstyle\sum_j K_{ji}\,\delta_j}_{\text{transferred}}`)} />
+
+  <p>
+    <i>K</i> is the elastostatic stress-transfer operator &mdash; the one
+    <code>mhs</code> assembles &mdash; and <i>d<sub>i</sub></i> is how fast
+    the regional field drives element <i>i</i> per unit of load. Its strength
+    is Coulomb,
+    <i>g<sub>i</sub></i>&nbsp;=&nbsp;<i>&mu;</i>&thinsp;<i>&sigma;</i>'<sub><i>n,i</i></sub>,
+    so the <b>yield function</b> is
+  </p>
+
+  <Fragment set:html={M(String.raw`F_i \;=\; \tau_i - g_i \;=\; \lambda d_i + \sum_j K_{ji}\delta_j - g_i .`)} />
+
+  <p>
+    Friction is then three statements, not one. Slip is non-negative, because
+    it runs one way along the driving direction. Traction never exceeds
+    strength. And an element slips <i>only</i> while it is exactly at yield:
+  </p>
+
+  <Fragment set:html={M(String.raw`\delta_i \ge 0, \qquad F_i \le 0, \qquad \delta_i\,F_i = 0 .`)} />
+
+  <p>
+    That last line is the whole of it. Each element is either locked
+    (<i>&delta;<sub>i</sub></i>&nbsp;=&nbsp;0 and
+    <i>F<sub>i</sub></i>&nbsp;&lt;&nbsp;0) or slipping
+    (<i>&delta;<sub>i</sub></i>&nbsp;&gt;&nbsp;0 and
+    <i>F<sub>i</sub></i>&nbsp;=&nbsp;0), and never anything else.
+  </p>
+
+  <h3>In standard form</h3>
+
+  <p>
+    Write <i>w</i>&nbsp;=&nbsp;&minus;<i>F</i> for the margin to failure,
+    <b>A</b>&nbsp;=&nbsp;&minus;<b>K</b>, and
+    <i>q</i>&nbsp;=&nbsp;<i>g</i>&nbsp;&minus;&nbsp;<i>&lambda;d</i>. The three
+    conditions become
+  </p>
+
+  <Fragment set:html={M(String.raw`w = \mathbf{A}\boldsymbol\delta + q, \qquad \boldsymbol\delta \ge 0, \qquad w \ge 0, \qquad \boldsymbol\delta^{\mathsf T} w = 0,`)} />
+
+  <p>
+    which is the <b>Linear Complementarity Problem</b>
+    LCP(<i>q</i>,&nbsp;<b>A</b>) exactly as it is posed in contact mechanics.
+    The sign flip is not cosmetic: <b>A</b>'s diagonal is
+    <i>A<sub>ii</sub></i>&nbsp;=&nbsp;&minus;<i>K<sub>ii</sub></i>&nbsp;&gt;&nbsp;0,
+    because an element's own slip <i>relieves</i> its own shear, and that
+    positive diagonal is what everything below rests on.
+  </p>
+
+  <h3>Why there is exactly one answer</h3>
+
+  <p>
+    LCP(<i>q</i>,&nbsp;<b>A</b>) has a unique solution for <i>every</i>
+    <i>q</i> if and only if <b>A</b> is a <b>P-matrix</b> &mdash; all
+    principal minors positive (Cottle, Pang &amp; Stone, Thm&nbsp;3.3.7). A
+    sufficient condition, and the one actually checkable on an assembled
+    operator, is positive definiteness:
+  </p>
+
+  <Fragment set:html={M(String.raw`x^{\mathsf T}\mathbf{A}\,x > 0 \;\; \forall x \ne 0 \quad\Longleftrightarrow\quad \tfrac12(\mathbf{A}+\mathbf{A}^{\mathsf T}) \succ 0 \quad\Longrightarrow\quad \mathbf{A}\ \text{is a P-matrix.}`)} />
+
+  <p>
+    No symmetry is required, which matters here because collocation makes
+    <b>A</b> markedly non-symmetric. What is required is that smallest
+    eigenvalue of the symmetric part, and it is measured per run rather than
+    assumed: <b>2.4</b> on this network, against a matrix whose entries are
+    tens of GPa per km of slip.
+  </p>
+
+  <h3>How it is solved</h3>
+
+  <p>
+    Projected Gauss-Seidel &mdash; one sweep over the elements, each solved
+    for its own slip holding the others fixed, then clipped at zero:
+  </p>
+
+  <Fragment set:html={M(String.raw`\delta_i \;\longleftarrow\; \max\!\left(0,\; \delta_i - \frac{w_i}{A_{ii}}\right)`)} />
+
+  <p>
+    The clip is what makes it a complementarity solve rather than a linear
+    one: an element whose update would send it negative is simply locked. The
+    convergence test is the <b>natural residual</b>
+    max<sub><i>i</i></sub>&nbsp;|min(<i>&delta;<sub>i</sub></i>,&nbsp;<i>w<sub>i</sub></i>)|,
+    which is zero at the solution and nowhere else &mdash; a step-size test
+    would report success on a solver that had merely slowed down. ~141 sweeps
+    cold on 20,771 elements; a handful warm.
+  </p>
+
+  <h3>The screening, in the same notation</h3>
+
+  <p>
+    Critically-stressed fracture analysis is this problem with
+    <b>K</b>&nbsp;=&nbsp;0. The coupling vanishes, every element decouples,
+    and the solve collapses to one inequality per element:
+  </p>
+
+  <Fragment set:html={M(String.raw`\mathcal{A}_{\text{screen}} = \{\, i \;:\; \lambda d_i \ge g_i \,\}`)} />
+
+  <p>
+    No matrix, no iteration. That is the null this study measures against, and
+    the comparison is between that set and
+    &#123;<i>i</i>&nbsp;:&nbsp;<i>&delta;<sub>i</sub></i>&nbsp;&gt;&nbsp;0&#125;
+    from the full solve.
+  </p>
+
+  <h3>What is unique and what is not</h3>
+
+  <p>
+    The solution <i>&delta;</i>, and therefore the active set, is unique at
+    every <i>&lambda;</i> and every <i>&mu;</i>. On a <i>fixed</i> active set
+    <i>&#x1D49C;</i> the problem is linear,
+    <b>A</b><sub><i>&#x1D49C;&#x1D49C;</i></sub><i>&delta;</i><sub><i>&#x1D49C;</i></sub>&nbsp;=&nbsp;&minus;<i>q</i><sub><i>&#x1D49C;</i></sub>,
+    and <i>q</i> is affine in both parameters &mdash; so <i>&delta;</i> is
+    <b>piecewise linear</b>, with kinks exactly where the active set changes.
+    That is why the counts below move in lumps rather than smoothly.
+  </p>
+
+  <p>
+    What is <i>not</i> unique is the decomposition of slip into events. That
+    requires a strength drop, and a cascade has no unique end state &mdash;
+    which is the division this page is organised around.
   </p>
 
   <h2>The static solution, which is unique</h2>

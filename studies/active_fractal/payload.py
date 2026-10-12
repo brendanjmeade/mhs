@@ -372,6 +372,106 @@ def stress_volume(net, slip_scalar, fric, *, grid: int, workers: int | None,
     return out, meta
 
 
+def _principal(fric, lam: float, k: float) -> dict:
+    """Principal values and axes of the TOTAL regional stress, compression
+    positive, sorted so index 0 is the maximum compression.
+
+    ``LOAD_TENSORS`` is written in the tension-positive convention that
+    ``resolve_tensor`` flips, so the sign is applied here once and the axes
+    come out meaning what a structural geologist expects: axis 0 is SHmax.
+    """
+    # ONLY THE DEVIATORIC PART FLIPS SIGN. ``resolve_tensor`` returns
+    # ``sigma_n = -n.D.n``, so the compression-positive normal stress is
+    # ``sigma_c + lam(k - n.D.n) = n.[(sigma_c + lam k) I - lam D].n``. The
+    # confining and isotropic terms are ALREADY compression positive; negating
+    # the whole tensor flips them too, which is how a first version of this
+    # reported two negative principal stresses on a load that is compressive
+    # everywhere.
+    sig = ((fric.sigma_eff_0.mean() + lam * k) * np.eye(3)
+           - lam * Fr.LOAD_TENSORS[fric.meta["regime"]])
+    vals, vecs = np.linalg.eigh(sig)           # already compression positive
+    o = np.argsort(-vals)                      # sigma_1 >= sigma_2 >= sigma_3
+    return {"regime": fric.meta["regime"], "mean_stress_ratio": float(k),
+            "lam": float(lam),
+            "principal_GPa": [float(v) for v in vals[o]],
+            "axes": [[float(c) for c in vecs[:, i]] for i in o],
+            "note": "compression positive; axes[0] is the maximum "
+                    "compression direction (SHmax), axes[2] the minimum"}
+
+
+def mu_sweep(net, P, lam: float, mus, *, mean_stress_ratio: float,
+             drop_ratio: float, verbose: bool = True):
+    """Static solutions across a range of friction coefficients.
+
+    ONE SOLVE PER FRAME, each the UNIQUE answer at that ``mu`` -- so unlike
+    the loading history, a frame here depends on nothing that came before it
+    and the animation is a family of exact solutions rather than a path. The
+    sweep is only warm started, which by uniqueness can change the sweep count
+    and never the answer.
+
+    WHY MU IS THE BETTER SLIDER. The active set is NESTED in mu: measured over
+    0.40 to 0.80, zero elements slip at a higher friction than at a lower one.
+    So each element has a well defined CRITICAL FRICTION -- the largest mu at
+    which it still slips -- which is one number per element and the natural
+    thing to colour by. The loading parameter has no such invariant, because
+    there the set grows by a path rather than shrinking by a threshold.
+
+    That nesting is not guaranteed. LCP monotonicity needs ``A = -P`` to be a
+    Z-matrix, every coupling promoting, and only 44 % of pairs here satisfy
+    that -- the dislocation kernel has shadowing lobes. The theorem does not
+    apply and the conclusion holds anyway, which is why it is measured.
+    """
+    import static as St                                        # noqa: PLC0415
+    n = net.n_elements
+    mus = np.asarray(mus, float)
+    slip = np.zeros((mus.size, n))
+    stats = []
+    warm = None
+    for f, mu in enumerate(mus):
+        fr = Fr.build_friction(net, mu_mean=float(mu),
+                               drop_ratio=drop_ratio,
+                               mean_stress_ratio=mean_stress_ratio)
+        d, g_s, _ = C.coefficients(fr)
+        sol = St.solve(P, d, g_s, lam, warm=warm)
+        if not sol.converged:
+            raise SystemExit(
+                f"the static solve did not converge at mu {mu:.4f} "
+                f"(residual {sol.residual:.3e}). A frame that is not the "
+                f"solution must not be published.")
+        slip[f] = sol.delta
+        warm = sol.delta.copy()
+        screened = int(St.critically_stressed(fr, lam).sum())
+        stats.append({"mu": float(mu), "n_active": sol.n_active,
+                      "n_screened": screened, "sweeps": sol.sweeps,
+                      "residual": sol.residual,
+                      "moment_Nm": float(R.MU * np.sum(net.areas() * sol.delta)
+                                         * C.MOMENT_TO_NM),
+                      "locked_fraction": fr.locked_fraction()})
+        if verbose and (f % 10 == 0 or f == mus.size - 1):
+            print(f"    frame {f:4d}  mu {mu:.4f}  active {sol.n_active:6d}  "
+                  f"screened {screened:6d}  sweeps {sol.sweeps:4d}")
+
+    # NESTING, verified on what is about to be published rather than taken
+    # from a separate experiment. If it fails, the critical-friction array
+    # below is not well defined and must not be written.
+    viol = 0
+    for f in range(1, mus.size):
+        viol += int(((slip[f] > 0) & ~(slip[f - 1] > 0)).sum())
+    if viol:
+        raise SystemExit(
+            f"the active set is NOT nested in mu: {viol} elements slip at a "
+            f"higher friction than at a lower one. 'critical friction' is "
+            f"then not a single number per element and this payload would "
+            f"misrepresent it.")
+
+    # Critical friction: the largest mu at which an element still slips.
+    # NODATA for elements that never slip at any mu in the range.
+    active = slip > 0.0
+    last = np.where(active.any(axis=0), active.shape[0] - 1
+                    - active[::-1].argmax(axis=0), -1)
+    return slip, last, stats, viol
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--config", default="patch", choices=sorted(R.CONFIGS))
@@ -383,6 +483,11 @@ def main() -> int:
                          "friction.py on why 0 bounds the usable load")
     ap.add_argument("--lam-factor", type=float, default=LAM_MAX_FACTOR,
                     help="load ceiling as a multiple of the first failure")
+    ap.add_argument("--sweep", default="lam", choices=("lam", "mu"),
+                    help="what the frames vary: the loading history (lam) or "
+                         "the friction coefficient at fixed load (mu)")
+    ap.add_argument("--mu-min", type=float, default=0.35)
+    ap.add_argument("--mu-max", type=float, default=0.85)
     ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--out", default=None)
     ap.add_argument("--cache", default=None,
@@ -424,8 +529,22 @@ def main() -> int:
             f"failure). Pass --lam-factor {cap / lam0:.2f} or lower, or "
             f"--mean-stress-ratio 1 for a load with no ceiling.")
 
-    cum, inc, stats, grid = snapshots(net, fric, P, n_frames=a.frames,
-                                      lam_max=lam_max)
+    if a.sweep == "mu":
+        mus = np.linspace(a.mu_min, a.mu_max, a.frames)
+        print(f"  SWEEPING FRICTION at fixed lam {lam_max:.5f}: "
+              f"mu {a.mu_min} to {a.mu_max} over {a.frames} static solves")
+        cum, crit, stats, _ = mu_sweep(net, P, lam_max, mus,
+                                       mean_stress_ratio=a.mean_stress_ratio,
+                                       drop_ratio=a.drop_ratio)
+        # The second array is the change between adjacent mu, which is what
+        # "what did raising friction just switch off" looks like.
+        inc = np.zeros_like(cum)
+        inc[1:] = np.abs(np.diff(cum, axis=0))
+        grid = mus
+    else:
+        cum, inc, stats, grid = snapshots(net, fric, P, n_frames=a.frames,
+                                          lam_max=lam_max)
+        crit = None
     n = net.n_elements
 
     out.mkdir(parents=True, exist_ok=True)
@@ -475,12 +594,27 @@ def main() -> int:
         "config": a.config, "unit": "km of slip",
         "n_elements": n, "n_faults": net.n_faults, "frames": a.frames,
         "lam": [float(v) for v in grid],
+        # WHAT THE FRAMES VARY. The viewer labels its slider from this and
+        # must not guess: a mu sweep is a family of exact static solutions
+        # with a NESTED active set, a lam sweep is one path with a growing
+        # one, and reading either as the other inverts the animation.
+        "sweep": {"kind": a.sweep,
+                  "label": "friction" if a.sweep == "mu" else "load",
+                  "symbol": "\u03bc" if a.sweep == "mu" else "\u03bb",
+                  "values": [float(v) for v in grid],
+                  "lam_fixed": float(lam_max) if a.sweep == "mu" else None,
+                  "nested": a.sweep == "mu"},
         "geometry": {"file": "fractal.geom.bin", "dtype": "float32",
                      "shape": [n, 3, 3], "bytes": len(geom),
                      "sha256": hashlib.sha256(geom).hexdigest()[:16]},
         "arrays": {k: {"file": f"fractal.{k}.bin", **v}
                    for k, v in arrays.items()},
         "fault_id": {"inline": True},
+        # THE REGIONAL STRESS, as principal values and axes, so the viewer can
+        # draw it without restating the load tensor in TypeScript -- a
+        # convention written twice is a bug, and this one is already stated
+        # once in friction.LOAD_TENSORS.
+        "regional_stress": _principal(fric, lam_max, a.mean_stress_ratio),
         "frame_stats": stats,
         "d_geom": d_geom,
         "network": net.meta, "friction": fric.meta,
@@ -491,6 +625,17 @@ def main() -> int:
     }
     # fault_id is small and the viewer needs it to outline whole faults.
     payload["fault_id"]["values"] = [int(v) for v in net.fault_id]
+    if crit is not None:
+        # CRITICAL FRICTION, as a frame index per element so the viewer can
+        # colour by it without a second decode. -1 means "never slips in this
+        # range", which is categorically different from "slips at the lowest
+        # mu" and is drawn grey rather than at the end of the ramp.
+        payload["critical_friction"] = {
+            "inline": True, "frame_index": [int(v) for v in crit],
+            "never": -1,
+            "meaning": "largest frame (hence mu) at which the element still "
+                       "slips; the active set is nested so this is single "
+                       "valued, which mu_sweep verifies before writing it"}
     (out / "fractal.json").write_text(
         json.dumps(payload, indent=1, sort_keys=True, default=str))
 
@@ -525,10 +670,22 @@ def main() -> int:
     total = len(geom) + sum(v["bytes"] for v in arrays.values())
     print(f"  wrote fractal.json + 3 binaries, {total / 1024 ** 2:.2f} MiB "
           f"-> {out}")
-    print(f"  final: {stats[-1]['n_ever']}/{n} elements ever slipped "
-          f"({stats[-1]['n_ever'] / n:.1%}), "
-          f"{stats[-1]['events_cumulative']} events, "
-          f"M0 {stats[-1]['moment_cumulative_Nm']:.3e} N m")
+    # The two sweeps carry different per-frame quantities, so the summary
+    # reads whichever this payload actually has rather than assuming.
+    last = stats[-1]
+    if a.sweep == "mu":
+        never = sum(1 for v in payload["critical_friction"]["frame_index"]
+                    if v < 0)
+        print(f"  final: at mu {last['mu']:.3f}, {last['n_active']}/{n} slip "
+              f"({last['n_active'] / n:.1%}); screening predicts "
+              f"{last['n_screened']}; M0 {last['moment_Nm']:.3e} N m")
+        print(f"  {never}/{n} ({never / n:.1%}) never slip anywhere in "
+              f"mu {a.mu_min}-{a.mu_max}, so they have no critical friction")
+    else:
+        print(f"  final: {last['n_ever']}/{n} elements ever slipped "
+              f"({last['n_ever'] / n:.1%}), "
+              f"{last['events_cumulative']} events, "
+              f"M0 {last['moment_cumulative_Nm']:.3e} N m")
     return 0
 
 

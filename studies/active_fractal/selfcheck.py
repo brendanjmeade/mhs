@@ -459,6 +459,25 @@ def c_load() -> None:
                worst <= 0.0, f"worst F {worst:.3e} <= 0 over "
                              f"{int(locked.sum())} locked elements")
 
+    # THE TENSOR AND THE PER-ELEMENT RESOLUTION MUST AGREE. Every plane's
+    # effective normal stress is a Rayleigh quotient of the total stress, so
+    # it lies between the extreme principal values -- for ANY orientation.
+    # This ties friction.resolve_tensor to the tensor the page draws, and it
+    # is how a sign error in the drawn one was caught: flipping the isotropic
+    # part along with the deviatoric reported two negative principal stresses
+    # on a load that is compressive at every element.
+    import payload as PL                                      # noqa: PLC0415
+    for kk in (0.0, 2 / 3):
+        fk = Fr.build_friction(net, mean_stress_ratio=kk)
+        lk = 2.0 * float(np.nanmin(fk.first_failure_lambda()))
+        pr = PL._principal(fk, lk, kk)["principal_GPa"]
+        se = fk.sigma_eff_0 + lk * fk.sigma_n_load
+        check_true(f"k={kk:.2f}: sigma_eff lies inside the principal range",
+                   bool(se.min() >= min(pr) - 1e-9
+                        and se.max() <= max(pr) + 1e-9),
+                   f"[{se.min():+.4f}, {se.max():+.4f}] within "
+                   f"[{min(pr):+.4f}, {max(pr):+.4f}]")
+
     # first_failure_lambda must agree with the yield function it encodes:
     # at its own lambda an unlocked element is exactly at failure.
     lf = f0.first_failure_lambda()

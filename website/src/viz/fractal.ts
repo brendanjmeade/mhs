@@ -144,11 +144,21 @@ export interface FractalPayload {
   lam: number[];
   geometry: { file: string; shape: [number, number, number] };
   arrays: Record<string, ArrayMeta>;
+  // A lam sweep and a mu sweep carry different per-frame quantities; the
+  // fields are optional and `sweep.kind` says which to read.
   frame_stats: {
-    lam: number; events: number; events_cumulative: number;
-    moment_cumulative_Nm: number; n_ever: number; slipped_this_frame: number;
+    lam?: number; events?: number; events_cumulative?: number;
+    moment_cumulative_Nm?: number; n_ever?: number; slipped_this_frame?: number;
+    mu?: number; n_active?: number; n_screened?: number;
+    locked_fraction?: number; moment_Nm?: number;
   }[];
   stress?: StressMeta;
+  sweep?: { kind: "lam" | "mu"; label: string; symbol: string;
+            values: number[]; lam_fixed: number | null; nested: boolean };
+  critical_friction?: { frame_index: number[]; never: number };
+  regional_stress?: { regime: string; principal_GPa: number[];
+                      axes: number[][]; mean_stress_ratio: number;
+                      lam: number };
   d_geom: { known: number; calibrated: number; window_km: number[] } | null;
   network: Record<string, any>;
   friction: Record<string, any>;
@@ -159,6 +169,61 @@ function centre(pos: Float32Array): Vector3 {
   const n = pos.length / 3;
   for (let i = 0; i < pos.length; i += 3) { x += pos[i]; y += pos[i + 1]; z += pos[i + 2]; }
   return new Vector3(x / n, y / n, z / n);
+}
+
+/** The regional stress, as principal axes at the free surface.
+ *
+ *  Structural-geology convention: arrows point INWARD along the maximum
+ *  compression and OUTWARD along the minimum, which is how SHmax is drawn on
+ *  a map. The axes come from the payload rather than being recomputed here --
+ *  `friction.LOAD_TENSORS` states the tensor once, and restating it in
+ *  TypeScript is exactly the kind of duplicated convention that goes stale.
+ *
+ *  Only the two HORIZONTAL principal axes are drawn. The third is within a
+ *  few degrees of vertical for every regime here, and an arrow along the view
+ *  axis reads as a dot.
+ */
+function stressAxes(half: number, axes: number[][],
+                    vals: number[], wantCompression: boolean): LineSegments {
+  const v: number[] = [];
+  const R = half * 1.22;              // outside the free-surface grid
+  const head = half * 0.07;
+  const arrow = (dir: Vector3, inward: boolean) => {
+    for (const sgn of [1, -1]) {
+      const tip = dir.clone().multiplyScalar(sgn * R * (inward ? 1 : 1.18));
+      const tail = dir.clone().multiplyScalar(
+        sgn * R * (inward ? 1.42 : 0.80));
+      v.push(tail.x, tail.y, 0, tip.x, tip.y, 0);
+      // Two barbs, rotated in the horizontal plane about the tip.
+      const back = tail.clone().sub(tip).normalize().multiplyScalar(head);
+      for (const ang of [0.42, -0.42]) {
+        const c = Math.cos(ang), sn = Math.sin(ang);
+        v.push(tip.x, tip.y, 0,
+               tip.x + back.x * c - back.y * sn,
+               tip.y + back.x * sn + back.y * c, 0);
+      }
+    }
+  };
+  // Pick the two most horizontal principal axes; index 0 is max compression.
+  const horiz = axes
+    .map((a, i) => ({ i, v: new Vector3(a[0], a[1], a[2]) }))
+    .filter(o => Math.abs(o.v.z) < 0.7);
+  for (const o of horiz) {
+    const isCompression = o.i === 0;  // axes[0] is sigma_1 by construction
+    if (isCompression !== wantCompression) continue;
+    o.v.z = 0;
+    if (o.v.lengthSq() < 1e-9) continue;
+    o.v.normalize();
+    arrow(o.v, isCompression);        // inward for sigma_1, outward for sigma_3
+  }
+  const g = new BufferGeometry();
+  g.setAttribute("position", new Float32BufferAttribute(v, 3));
+  // Warm for compression, cool for extension -- the map convention, and the
+  // two must not share a colour or the picture states only "there is an axis
+  // here" rather than which way the rock is being pushed.
+  return new LineSegments(g, new LineBasicMaterial({
+    color: wantCompression ? 0xc2410c : 0x1f6feb,
+    transparent: true, opacity: 0.9 }));
 }
 
 function freeSurface(half: number): LineSegments {
@@ -188,6 +253,15 @@ export class FractalScene {
   private frames: number;
   private data: Record<string, Uint8Array> = {};
   private activation: Uint8Array;        // first frame with slip, 255 = never
+  //: For a mu sweep: the LAST frame in which an element slips. The active set
+  //: is nested in mu, so this is single valued -- the payload verifies that
+  //: before shipping it. 255 means it never slips anywhere in the range,
+  //: which is drawn grey rather than at the end of the ramp.
+  private critical?: Uint8Array;
+  private nested = false;
+  //: "incr" suits a loading history, where the interesting frame-to-frame
+  //: quantity is what just slipped. A friction sweep accumulates nothing, so
+  //: it opens on the slip at the current mu instead; setSweep flips it.
   private mode: Mode = "incr";
   private frame = 0;
   private playing = false;
@@ -197,7 +271,8 @@ export class FractalScene {
   private volMat?: ShaderMaterial;
   private stressMeta?: StressMeta;
 
-  constructor(el: HTMLElement, p: FractalPayload, pos: Float32Array) {
+  constructor(el: HTMLElement, p: FractalPayload, pos: Float32Array,
+              stress?: FractalPayload["regional_stress"]) {
     this.el = el;
     this.n = p.n_elements;
     this.frames = p.frames;
@@ -222,6 +297,12 @@ export class FractalScene {
       half = Math.max(half, Math.abs(pos[i]), Math.abs(pos[i + 1]));
     }
     this.scene.add(freeSurface(half * 1.05));
+    if (stress) {
+      for (const comp of [true, false]) {
+        this.scene.add(stressAxes(half, stress.axes, stress.principal_GPa,
+                                  comp));
+      }
+    }
 
     // FIT THE BOUNDING BOX TO THE FRUSTUM, rather than placing the camera at a
     // fixed multiple of the horizontal half-extent. The old placement was tuned
@@ -312,6 +393,18 @@ export class FractalScene {
         }
       }
     }
+  }
+
+  /** Switch the default view to suit a friction sweep. */
+  setSweepMu() { this.mode = "slip"; }
+
+  /** The per-element critical friction, for a mu sweep. */
+  setCritical(idx: number[], never: number) {
+    this.critical = new Uint8Array(this.n).fill(255);
+    for (let i = 0; i < this.n; i++) {
+      if (idx[i] !== never) this.critical[i] = Math.min(254, idx[i]);
+    }
+    this.nested = true;
   }
 
   /** Build the raymarched stress volume. Called once, if the payload has one. */
@@ -409,10 +502,18 @@ export class FractalScene {
       }
     };
     if (this.mode === "activation") {
+      // Two different quantities share this mode because they are the same
+      // idea under each sweep: for a LOAD sweep the first frame at which an
+      // element slips, for a FRICTION sweep the last. The set grows in one
+      // and shrinks in the other, so the visibility test flips with it --
+      // using the wrong one inverts the picture rather than erroring.
       const span = Math.max(1, this.frames - 1);
+      const src = this.nested && this.critical ? this.critical : this.activation;
       for (let i = 0; i < n; i++) {
-        const a = this.activation[i];
-        if (a === 255 || a > this.frame) { put(i, LOCKED[0], LOCKED[1], LOCKED[2]); continue; }
+        const a = src[i];
+        const hidden = a === 255 || (this.nested ? a < this.frame
+                                                 : a > this.frame);
+        if (hidden) { put(i, LOCKED[0], LOCKED[1], LOCKED[2]); continue; }
         const q = 1 + Math.round((a / span) * 254);
         put(i, t[q * 4] / 255, t[q * 4 + 1] / 255, t[q * 4 + 2] / 255);
       }
@@ -476,10 +577,20 @@ export class FractalScene {
   }
 }
 
+// The labels depend on WHAT THE FRAMES VARY, which the payload states. A mu
+// sweep is a family of exact static solutions with a nested active set, so
+// "cumulative" and "first slip" would both be wrong: nothing accumulates and
+// the interesting threshold is the LAST frame an element survives.
 const MODE_LABEL: Record<Mode, string> = {
   incr: "slip in this increment",
   slip: "cumulative slip",
   activation: "load at first slip",
+};
+
+const MODE_LABEL_MU: Record<Mode, string> = {
+  incr: "change from the previous μ",
+  slip: "slip at this μ",
+  activation: "critical friction",
 };
 
 export async function startFractal(root: HTMLElement, baseUrl: string) {
@@ -506,7 +617,7 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
     return;
   }
 
-  const scene = new FractalScene(host, p, pos);
+  const scene = new FractalScene(host, p, pos, p.regional_stress);
   for (const name of ["incr", "slip"]) {
     const meta = p.arrays[name];
     if (!meta) continue;
@@ -525,12 +636,15 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
   const slot = (key: string) => root.querySelector<HTMLElement>(`[data-ctl="${key}"]`)!;
 
   const sel = document.createElement("select");
-  for (const m of ["incr", "slip", "activation"] as Mode[]) {
+  const isMu = p.sweep?.kind === "mu";
+  const LABEL = isMu ? MODE_LABEL_MU : MODE_LABEL;
+  for (const m of (isMu ? ["slip", "activation", "incr"]
+                        : ["incr", "slip", "activation"]) as Mode[]) {
     const o = document.createElement("option");
-    o.value = m; o.textContent = MODE_LABEL[m];
+    o.value = m; o.textContent = LABEL[m];
     sel.appendChild(o);
   }
-  sel.value = "incr";
+  sel.value = isMu ? "slip" : "incr";   // must match the scene's own default
   slot("mode").appendChild(sel);
 
   const play = document.createElement("button");
@@ -556,6 +670,12 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
       console.warn("stress volume unavailable:", e);
     }
   }
+  if (p.sweep?.kind === "mu") scene.setSweepMu();
+  if (p.critical_friction) {
+    scene.setCritical(p.critical_friction.frame_index,
+                      p.critical_friction.never);
+  }
+
   if (scene.hasStress && p.stress) {
     const box = document.createElement("input");
     box.type = "checkbox";
@@ -605,21 +725,36 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
     ? v.toExponential(2) : v.toFixed(3);
 
   const describe = (f: number) => {
-    const st = p.frame_stats[f];
+    const st: any = p.frame_stats[f];
     rng.value = String(f);
-    val.textContent = `λ = ${st.lam.toFixed(4)}`;
+    const sym = p.sweep?.symbol ?? "λ";
+    const x = isMu ? st.mu : st.lam;
+    val.textContent = `${sym} = ${x.toFixed(isMu ? 3 : 4)}`;
     const meta = p.arrays[scene_mode()];
     const unit = scene_mode() === "activation" ? "" : " m of slip";
     const lo = meta ? meta.min * 1e3 : 0;
     const hi = meta ? meta.max * 1e3 : 0;
+    const vals = p.sweep?.values;
     ends.innerHTML = scene_mode() === "activation"
-      ? `<span>first to slip</span><span class="mid">load at first slip</span>`
-        + `<span>last to slip</span>`
+      ? (isMu
+        ? `<span>μ = ${vals ? vals[0].toFixed(2) : "low"}</span>`
+          + `<span class="mid">critical friction: the highest μ at which it`
+          + ` still slips</span>`
+          + `<span>μ = ${vals ? vals[vals.length - 1].toFixed(2) : "high"}</span>`
+        : `<span>first to slip</span><span class="mid">load at first slip</span>`
+          + `<span>last to slip</span>`)
       : `<span>${fmt(lo)}${unit}</span>`
-        + `<span class="mid">log scale, grey = never slipped</span>`
+        + `<span class="mid">log scale, grey = ${isMu ? "locked at this μ"
+                                                      : "never slipped"}</span>`
         + `<span>${fmt(hi)}${unit}</span>`;
-    status.textContent =
-      `frame ${f + 1} of ${p.frames} · ${st.n_ever} of ${p.n_elements} elements`
+    status.textContent = isMu
+      ? `frame ${f + 1} of ${p.frames} · μ = ${st.mu.toFixed(3)} · `
+        + `${st.n_active} of ${p.n_elements} elements slip `
+        + `(${(100 * st.n_active / p.n_elements).toFixed(1)} %) · `
+        + `screening alone predicts ${st.n_screened} · `
+        + `${(100 * st.locked_fraction).toFixed(1)} % can never slip at any `
+        + `load · M₀ ${st.moment_Nm.toExponential(2)} N m`
+      : `frame ${f + 1} of ${p.frames} · ${st.n_ever} of ${p.n_elements} elements`
       + ` have slipped (${(100 * st.n_ever / p.n_elements).toFixed(1)} %)`
       + ` · ${st.events_cumulative} events · ${st.slipped_this_frame} slipped in`
       + ` this increment · cumulative M₀ ${st.moment_cumulative_Nm.toExponential(2)} N m`;
