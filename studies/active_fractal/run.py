@@ -80,6 +80,16 @@ CONFIGS = {
                       l_min=2.0, l_max=40.0, h=1.0, box_xy=100.0,
                       z_top=-2.0, z_bottom=-42.0, a=1.5),
 
+    # --- equal-size elements on near-coplanar bands -------------------------
+    # THE CONTROL FOR SIZE. Every element is the same triangle, so the size
+    # hierarchy that produced the power-law network's soft modes -- which were
+    # nothing but crack compliance of its largest fault -- is absent. Only the
+    # perpendicular scatter about each band varies, which moves elements out of
+    # each other's promoting lobe and into the shadow without changing size,
+    # number, orientation statistics or density.
+    "aligned": dict(kind="aligned", n_elements=5000, h=0.5, n_planes=20,
+                    scatter_over_h=0.0, box_xy=12.0),
+
     # --- dense clouds: the element IS the fracture, coherence EMERGENT ------
     # The control: homogeneous background, so any localization is mechanical,
     # and the no-interaction null is spatially unstructured by construction.
@@ -105,6 +115,8 @@ def build(config: str, seed: int = 1, **over):
     kw.update(over)
     if kind == "cloud":
         return N.build_cloud(seed=seed, z_top=Z_TOP, **kw)
+    if kind == "aligned":
+        return N.build_aligned(seed=seed, **kw)
     if kind == "faults_pl":
         return N.build_network(seed=seed, aspect=2.0, **kw)
     return N.build_network(seed=seed, n_elements_target=10 ** 9,
@@ -675,6 +687,63 @@ def cmd_spectrum(a) -> int:
     return 0
 
 
+def cmd_coplanar(a) -> int:
+    """How coplanar must equal-size fractures be before they soften together?
+
+    THE EXPERIMENT THAT SEPARATES ARRANGEMENT FROM SIZE. Equal elements on
+    near-coplanar bands, sweeping the perpendicular scatter. At zero a band is
+    a fault; at a few element widths it is a cloud. Nothing else changes.
+
+    The prediction under test is geometric: the stress shadow subtends more
+    solid angle than the promoting lobe, so displacing elements perpendicular
+    to their band should move coupling weight from promoting to shadowing and
+    kill the cooperative mode. ``promoting_share`` measures exactly that, so
+    the mechanism is checked alongside the consequence rather than inferred
+    from it.
+    """
+    print(f"  {'scatter/h':>9} {'elems':>6} {'prun':>6} {'minEig':>8} "
+          f"{'lam_min':>8} {'|Pii|':>7} {'advan':>6} {'prom':>6} "
+          f"{'n_eff':>8} {'sign':>6} {'planes':>7} {'coop/64':>8}")
+    rows = []
+    for sc in a.scatter:
+        net = build("aligned", a.seed, scatter_over_h=float(sc),
+                    n_elements=a.elements, n_planes=a.planes)
+        mat, info = K.assemble(net, mu=MU, lam=LAM, workers=a.workers,
+                               cache_dir=a.cache)
+        fric = Fr.build_friction(net, drop_ratio=a.drop_ratio,
+                                 mean_stress_ratio=a.mean_stress_ratio)
+        P = K.project(mat, fric.slip_dir, fric.slip_dir)
+        del mat
+        ev = float(np.linalg.eigvalsh(-0.5 * (P + P.T)).min())
+        diag = np.abs(P[np.arange(P.shape[0]), np.arange(P.shape[0])])
+        prom = M.promoting_share(P, np.ones(net.n_elements, bool))
+        w, V = Sp.soft_modes(P, a.n_modes)
+        modes = Sp.measure(w, V, net)
+        coop = [m for m in modes if m.sign_coherence > 0.5]
+        best = max(modes, key=lambda m: (m.sign_coherence > 0.5,
+                                         m.n_effective))
+        print(f"  {sc:9.2f} {net.n_elements:6d} "
+              f"{net.meta['pruned_fraction']:5.1%} {ev:8.2f} "
+              f"{float(w[0]):8.2f} {np.median(diag):7.1f} "
+              f"{np.median(diag)/float(w[0]):6.1f} {prom:6.3f} "
+              f"{best.n_effective:8.1f} {best.sign_coherence:6.3f} "
+              f"{best.n_faults_90:7d} {len(coop):8d}"
+              f"{'' if ev > 0 else '   INDEFINITE'}", flush=True)
+        rows.append({"scatter_over_h": float(sc), "n": net.n_elements,
+                     "min_eig": ev, "lambda_min": float(w[0]),
+                     "diag_median": float(np.median(diag)),
+                     "promoting_share": prom,
+                     "best_n_eff": best.n_effective,
+                     "best_sign": best.sign_coherence,
+                     "best_planes": best.n_faults_90,
+                     "n_cooperative": len(coop)})
+        del P
+    if a.out:
+        pathlib.Path(a.out).write_text(json.dumps(rows, indent=1))
+        print(f"\n  wrote {a.out}")
+    return 0
+
+
 def cmd_geometry(a) -> int:
     """Build a network and measure its geometry. No matrix, so it is cheap."""
     net = build(a.config, a.seed)
@@ -786,6 +855,15 @@ def main() -> int:
     sp.add_argument("--show", type=int, default=20)
     sp.add_argument("--out", default=None,
                     help="write a mode payload for the 3-D viewer")
+    cp = _static_parser(sub, "coplanar", cmd_coplanar,
+                        "how coplanar must equal-size fractures be before "
+                        "they soften together?")
+    cp.add_argument("--scatter", type=float, nargs="+",
+                    default=[0.0, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0])
+    cp.add_argument("--elements", type=int, default=5000)
+    cp.add_argument("--planes", type=int, default=20)
+    cp.add_argument("--n-modes", type=int, default=64)
+    cp.add_argument("--out", default=None)
     gr.add_argument("--n-drop", type=int, default=20,
                     help="faults to leave out one at a time; half the "
                          "largest, half at random")

@@ -513,6 +513,170 @@ class _Hash:
         return ok
 
 
+def build_aligned(*, seed: int, n_elements: int = 5000, h: float = 0.5,
+                  n_planes: int = 20, scatter_over_h: float = 0.0,
+                  tilt_deg: float = 0.0, spacing_over_h: float = 1.5,
+                  eps_over_h: float = 0.1, box_xy: float = 12.0,
+                  z_top: float = -2.0, z_bottom: float = -14.0,
+                  vertical: bool = False,
+                  band_dip_deg: float = 85.0) -> Network:
+    """Equal-size elements on ``n_planes`` NEAR-coplanar bands.
+
+    THE ONE EXPERIMENT THAT SEPARATES COPLANARITY FROM SIZE. Every element is
+    the same equilateral triangle, so the size hierarchy that made the
+    power-law network's soft modes -- which turned out to be nothing but crack
+    compliance of its biggest fault -- is absent by construction. What varies
+    is how nearly coplanar the elements on a band are:
+
+        scatter_over_h = 0    a perfect plane; the band IS a fault
+        scatter_over_h ~ 1    elements displaced perpendicular by an element
+        scatter_over_h >> 1   a cloud, with the bands no longer meaningful
+
+    WHY PERPENDICULAR SCATTER IS THE RIGHT KNOB. The stress-transfer lobes are
+    the reason: two identically-oriented patches PROMOTE each other when the
+    offset is in-plane (+0.001 to +0.041 measured) and SHADOW each other when
+    it is off-plane (-0.023 one element away). The shadow subtends far more
+    solid angle than the promoting lobe, which is why a random arrangement is
+    net shadowing -- ``measure.promoting_share`` reads 0.42, i.e. 58 % of the
+    coupling weight suppresses rather than promotes. Displacing elements
+    perpendicular to their band moves them out of each other's promoting lobe
+    and into the shadow WITHOUT changing their orientations, their size, their
+    number or their density, which is what makes this a controlled test rather
+    than a comparison of two different networks.
+
+    ``tilt_deg`` adds orientation scatter about each element's own band normal,
+    for the complementary sweep: coplanar positions with mis-aligned faces.
+    """
+    rng = np.random.default_rng(seed)
+    eps = eps_over_h * h
+    per = max(1, int(round(n_elements / max(1, n_planes))))
+
+    # Band geometry. ``vertical`` makes every band a VERTICAL plane centred at
+    # mid-depth, which exists because the isotropic version has two defects at
+    # low band counts: a steeply inclined band of this extent pokes through the
+    # free surface and is clipped, biasing the geometry by orientation, and
+    # randomly placed bands INTERSECT. Measured on 20 isotropic bands in a
+    # 12 km box, 28 % of elements sat within one element width of a DIFFERENT
+    # band at a median |n.n'| of 0.526 -- the near-perpendicular close contact
+    # the face-clearance floor exists to prune, and dropping that floor to keep
+    # element counts comparable made sym(-P) indefinite at every scatter.
+    # A single vertical band has no cross-band contact at all.
+    half = 0.5 * box_xy
+    if vertical:
+        # NEARLY vertical, never EXACTLY. mhs.tdcs flips normals to the upper
+        # hemisphere, so at n_z = 0 the choice is decided by float noise: a
+        # band built with n_z exactly 0 came back with 183 of 580 mesh normals
+        # ANTI-ALIGNED with their own vertex order, and the self-interaction
+        # diagonal went positive on exactly those -- `refuse_if_sign_wrong`
+        # caught it. ``build_network`` escapes this only because its dip is
+        # uniform on [30, 90] and exactly 90 has measure zero. A few degrees
+        # off vertical is physically the same fault and numerically unambiguous.
+        az = rng.uniform(0.0, 2.0 * np.pi, n_planes)
+        t = math.radians(90.0 - band_dip_deg)
+        bn = np.column_stack([np.cos(az) * math.cos(t),
+                              np.sin(az) * math.cos(t),
+                              np.full(n_planes, math.sin(t))])
+        bc = np.column_stack([rng.uniform(-half, half, n_planes),
+                              rng.uniform(-half, half, n_planes),
+                              np.full(n_planes, 0.5 * (z_top + z_bottom))])
+    else:
+        bn = isotropic_normals(rng, n_planes)
+        bc = np.column_stack([rng.uniform(-half, half, n_planes),
+                              rng.uniform(-half, half, n_planes),
+                              rng.uniform(z_bottom, z_top, n_planes)])
+
+    cen, nrm, fid = [], [], []
+    s = spacing_over_h * h
+    side = math.sqrt(per) * s                 # in-plane extent of one band
+    for b in range(n_planes):
+        n_hat = bn[b]
+        # An orthonormal in-plane frame. The seed vector is chosen away from
+        # n_hat so the cross product is well conditioned.
+        seed_v = np.array([0.0, 0.0, 1.0])
+        if abs(float(n_hat @ seed_v)) > 0.9:
+            seed_v = np.array([1.0, 0.0, 0.0])
+        u = np.cross(n_hat, seed_v)
+        u /= np.linalg.norm(u)
+        v = np.cross(n_hat, u)
+
+        # A REGULAR IN-PLANE LATTICE, not a Poisson scatter. A fault's own
+        # discretization is a TILING: elements sit side by side and do not
+        # overlap. Poisson in-plane positions put some pairs 0.25 h apart --
+        # two 0.5 km triangles 0.125 km apart interpenetrate -- and that made
+        # sym(-P) indefinite at exactly the coplanar end this experiment is
+        # about, which would have been read as "coplanar arrangements are
+        # unstable" when it was only "my point process overlaps them".
+        side_n = int(math.ceil(math.sqrt(per)))
+        gi, gj = np.meshgrid(np.arange(side_n), np.arange(side_n),
+                             indexing="ij")
+        a = (gi.ravel()[:per] - 0.5 * (side_n - 1)) * s
+        c = (gj.ravel()[:per] - 0.5 * (side_n - 1)) * s
+        off = rng.normal(0.0, scatter_over_h * h, per)      # PERPENDICULAR
+        pts = bc[b] + a[:, None] * u + c[:, None] * v + off[:, None] * n_hat
+        cen.append(pts)
+
+        if tilt_deg > 0.0:
+            # Small random rotation of each face away from the band normal.
+            d = rng.normal(0.0, math.radians(tilt_deg), (per, 3))
+            nn = n_hat + d
+            nn /= np.linalg.norm(nn, axis=1, keepdims=True)
+        else:
+            nn = np.repeat(n_hat[None, :], per, axis=0)
+        nrm.append(nn)
+        fid.append(np.full(per, b))
+
+    cen = np.concatenate(cen)
+    nrm = np.concatenate(nrm)
+    fid = np.concatenate(fid)
+    nrm[nrm[:, 2] < 0.0] *= -1.0               # upper hemisphere, as elsewhere
+
+    keep = cen[:, 2] < z_top - h                # stay below the free surface
+    cen, nrm, fid = cen[keep], nrm[keep], fid[keep]
+
+    tris = oriented_triangle(cen, nrm, h)
+    # Centroids and normals, as the cloud builder does: the face-clearance
+    # floor needs the normals, and it targets NEARLY PERPENDICULAR contacts --
+    # coplanar side-by-side neighbours are exactly what a fault's own
+    # discretization is and are not pruned. Pruning is reported per
+    # configuration because it must not drift across the scatter sweep, or the
+    # comparison would be between different element counts rather than
+    # different arrangements.
+    # DISTANCE FLOOR ONLY, no face clearance -- the same choice
+    # ``build_network`` makes, and for the same reason. The face floor was
+    # diagnosed on a NEARLY PERPENDICULAR pair (|n.n'| = 0.0099) whose
+    # collocation point sat on the other's face; coplanar side-by-side
+    # neighbours are what a fault's own discretization IS and are not the
+    # pathology. Applying it here would prune 42.7 % of the perfectly coplanar
+    # configuration against 5.9 % of the scattered one, so the sweep would
+    # compare different element counts rather than different arrangements --
+    # measured, which is why this is not a judgement call. Positive
+    # definiteness is therefore verified per configuration instead of assumed.
+    hsh = _Hash(MIN_SEP_OVER_EPS * eps)
+    keep = hsh.keep_mask(cen)
+    pruned = 1.0 - keep.mean()
+    tris, fid = np.ascontiguousarray(tris[keep]), fid[keep]
+
+    n = tris.shape[0]
+    used = np.unique(fid)
+    remap = np.zeros(int(fid.max()) + 1, np.int64)
+    remap[used] = np.arange(used.size)
+    fid = remap[fid]
+    meta = {"kind": "aligned", "n_planes": int(used.size),
+            "vertical": bool(vertical),
+            "band_dip_deg": float(band_dip_deg),
+            "scatter_over_h": float(scatter_over_h),
+            "tilt_deg": float(tilt_deg), "box_xy_km": float(box_xy),
+            "spacing_over_h": float(spacing_over_h),
+            "pruned_fraction": float(pruned), "h_km": float(h),
+            "elements_per_plane": float(n / max(1, used.size)),
+            "cascade_cell_km": None, "d_geom_known": None}
+    return Network(tris=tris, fault_id=fid,
+                   length=np.full(used.size, side),
+                   width=np.full(used.size, side),
+                   azimuth=np.zeros(used.size), dip=np.zeros(used.size),
+                   center=bc[used], h=h, eps=eps, meta=meta)
+
+
 def build_cloud(*, seed: int, n_elements: int = 20000, h: float = 0.5,
                 spacing_over_h: float = 1.5, eps_over_h: float = 0.1,
                 centers: str = "uniform", cascade: tuple[int, int, int] = (3, 4, 3),

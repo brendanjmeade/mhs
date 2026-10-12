@@ -377,6 +377,62 @@ def c_kernel() -> None:
         check_true("tripwire: a reversed mesh normal is REFUSED", caught,
                    "wrong-handed vertex order flips the eigenstress sign")
 
+    # AN EXACTLY VERTICAL PLANE IS A DEGENERATE CASE for the upward-normal
+    # convention, and a generator that produces one gets normals decided by
+    # float noise. mhs.tdcs flips to the upper hemisphere, so at n_z = 0 the
+    # sign is arbitrary: a band built that way came back with 183 of 580 mesh
+    # normals ANTI-ALIGNED with their own vertex order, and the
+    # self-interaction diagonal went positive on exactly those.
+    # ``build_network`` escapes it only because its dip is uniform on [30, 90]
+    # and exactly 90 has measure zero -- which is luck, not design, so it is
+    # pinned here.
+    az = np.linspace(0.0, 2.0 * np.pi, 64, endpoint=False)
+    for label, nz in (("exactly vertical", 0.0), ("85 deg dip", 0.0872)):
+        hz = math.sqrt(max(0.0, 1.0 - nz * nz))
+        nn = np.column_stack([np.cos(az) * hz, np.sin(az) * hz,
+                              np.full(az.size, nz)])
+        cen = np.column_stack([np.arange(az.size) * 5.0,
+                               np.zeros(az.size),
+                               np.full(az.size, -10.0)])
+        tri = N.oriented_triangle(cen, nn, 1.0)
+        mesh = mhs.tdcs.unit_normals(tri)
+        cr = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        cr /= np.linalg.norm(cr, axis=1, keepdims=True)
+        agree = int((np.abs((cr * mesh).sum(axis=1) - 1.0) < 1e-6).sum())
+        if nz == 0.0:
+            check_true("an exactly vertical plane IS ambiguous (the trap)",
+                       agree < az.size,
+                       f"{agree} of {az.size} agree -- the rest are flipped")
+        else:
+            check_true("a few degrees off vertical is unambiguous",
+                       agree == az.size, f"{agree} of {az.size} agree")
+
+    # And the shipped generator must land on the safe side of it.
+    net = N.build_aligned(seed=1, n_elements=400, h=0.5, n_planes=1,
+                          scatter_over_h=0.0, box_xy=2.0, vertical=True,
+                          z_top=-2.0, z_bottom=-26.0)
+    mesh = mhs.tdcs.unit_normals(net.tris)
+    cr = np.cross(net.tris[:, 1] - net.tris[:, 0],
+                  net.tris[:, 2] - net.tris[:, 0])
+    cr /= np.linalg.norm(cr, axis=1, keepdims=True)
+    check_true("build_aligned's vertical bands are unambiguous",
+               int((np.abs((cr * mesh).sum(axis=1) - 1.0) < 1e-6).sum())
+               == net.n_elements,
+               f"all {net.n_elements} mesh normals match their vertex order")
+
+    # A REGULAR IN-PLANE LATTICE, not a Poisson scatter: Poisson puts pairs
+    # 0.25 h apart, whose triangles interpenetrate, and that made sym(-P)
+    # indefinite at exactly the coplanar end the experiment is about.
+    cen = net.tris.mean(axis=1)
+    dmin = np.inf
+    for i in range(0, net.n_elements, 7):
+        d = np.linalg.norm(cen - cen[i], axis=1)
+        d[i] = np.inf
+        dmin = min(dmin, float(d.min()))
+    check_true("coplanar elements do not interpenetrate",
+               dmin > 0.9 * net.h,
+               f"closest pair {dmin / net.h:.2f} h apart")
+
 
 def c_load() -> None:
     """The FULL stress tensor: the loading path, its ceiling, and the locked set.
