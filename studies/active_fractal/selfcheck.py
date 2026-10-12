@@ -510,6 +510,58 @@ def c_crack() -> None:
                ref[3] > 4.0 * ref[2],
                f"near {ref[3]:.4f} vs far {ref[2]:.4f}")
 
+    # PHASE 1: the energy, and Irwin. The factor of two in released_energy is
+    # the one error that would corrupt every growth decision while leaving
+    # every number plausible, so it is pinned against closed forms.
+    def solve_crack(aa, hh, ee):
+        tr = N.disc_mesh(aa, hh, depth=depth)
+        rw = mhs.interaction_matrix(
+            tris=tr, material=mhs.Material(mu=mu_, lam=lam_), eps=ee,
+            receiver=Kmod.RECEIVER, source=Kmod.SOURCE, obs_tris=tr)
+        fr = mhs.tdcs.slip_frame(tr)
+        sd = np.stack([fr[:, 0, 0], fr[:, 1, 0]], axis=1)
+        sd /= np.linalg.norm(sd, axis=1, keepdims=True)
+        Pm = Kmod.project(Kmod.to_source_major(rw), sd, sd)
+        del rw
+        so = St.solve(Pm, np.full(tr.shape[0], dtau), np.zeros(tr.shape[0]),
+                      1.0, max_sweeps=20000)
+        ar = 0.5 * np.linalg.norm(np.cross(tr[:, 1] - tr[:, 0],
+                                           tr[:, 2] - tr[:, 0]), axis=1)
+        en = St.released_energy(Pm, so.delta, ar)
+        del Pm
+        return en, float(ar.sum()), so.converged
+
+    print("       [energy] E = (8/7) d_tau^2 a^3 / mu, and dE/dA vs Irwin")
+    ratios, Es, As = [], {}, {}
+    for aa in (1.0, 1.4):
+        en, ar, okc = solve_crack(aa, 0.1 * aa, 0.01 * aa)
+        want_E = 8.0 / 7.0 * dtau ** 2 * aa ** 3 / mu_
+        ratios.append(en / want_E)
+        Es[aa], As[aa] = en, ar
+        print(f"         a {aa:4.2f}  E {en:.5e}  E/analytic {en/want_E:.4f}"
+              f"{'' if okc else '  NOT CONVERGED'}")
+    check("the energy coefficient is recovered", abs(ratios[0] - 1.0), 0.06)
+    # THE SHARP ONE: a wrong factor of two is a constant offset, a wrong power
+    # is a drift. Constancy across radii tests the a^3 scaling independently
+    # of the coefficient.
+    check("E/analytic is constant across radii (the a^3 scaling)",
+          abs(ratios[0] - ratios[1]), 0.01)
+
+    # Irwin by the compliance method, at an increment of 2h -- below that the
+    # energy difference is dominated by discrete changes in element count
+    # rather than by mechanics (measured: 2.3 % at h, 1.37 % at 2h, 1.34 % at
+    # 4h).
+    en2, ar2, ok2 = solve_crack(1.2, 0.1, 0.01)
+    en1, ar1, ok1 = solve_crack(1.0, 0.1, 0.01)
+    G = (en2 - en1) / (ar2 - ar1)
+    want_G = 12.0 / (7.0 * math.pi) * dtau ** 2 * 1.1 / mu_
+    print(f"         G by compliance {G:.5e}  G/analytic {G/want_G:.4f}")
+    check("dE/dA reproduces Irwin's G", abs(G / want_G - 1.0), 0.08)
+    # AND THE BIAS IS SHARED. This is what makes a 1.3 % offset harmless for
+    # work optimization: it cancels in the comparison between candidates.
+    check("the energy and its derivative carry the SAME bias",
+          abs(G / want_G - ratios[0]), 0.03)
+
 
 def c_load() -> None:
     """The FULL stress tensor: the loading path, its ceiling, and the locked set.

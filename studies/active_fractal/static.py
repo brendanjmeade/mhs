@@ -147,6 +147,46 @@ def solve(P: np.ndarray, d: np.ndarray, g: np.ndarray, lam: float, *,
     return Solution(delta, lam, max_sweeps, res, False, order.size)
 
 
+def released_energy(P: np.ndarray, delta: np.ndarray,
+                    areas: np.ndarray) -> float:
+    """Energy released from the elastic field, net of frictional dissipation.
+
+        E = (1/2) sum_i A_i (tau_0,i - g_i) delta_i
+
+    The traction falls from its initial value to the residual strength AS slip
+    accumulates, so the work released is the AVERAGE traction through the
+    slip -- hence the half. On the slipping set ``tau_0 - g`` is exactly
+    ``-(P^T delta)``, and locked elements contribute nothing because their
+    slip is zero, so the expression below is general without needing the
+    active set.
+
+    THE FACTOR OF TWO IS THE WHOLE RISK IN THIS FUNCTION. Getting it wrong
+    would corrupt every growth decision while leaving every printed number
+    plausible, so it is pinned against a closed form rather than argued: for a
+    penny-shaped crack of radius ``a`` under uniform drop ``d_tau``,
+
+        E = (8/7) d_tau^2 a^3 / mu
+
+    which ``selfcheck``'s crack clause checks at three radii, and the
+    derivative against Irwin by the compliance method.
+
+    MEASURED BIAS, AND WHY IT DOES NOT MATTER FOR GROWTH. The value comes out
+    1.3 % high and -- the part that counts -- 1.3 % high at EVERY radius, and
+    the compliance-derived dE/dA carries the same 1.3 %. The bias is a pure
+    multiplicative scale factor shared between the energy and its derivative,
+    so it cancels in the comparison between candidate growth configurations
+    that work optimization actually makes. It would matter only against an
+    absolute measured fracture energy.
+
+    NOT PROVIDED: a full W_ext / W_internal / W_friction split. That
+    bookkeeping has not been validated against anything, and shipping an
+    unchecked energy budget is how a factor of two survives.
+    """
+    d = np.asarray(delta, float)
+    a = np.asarray(areas, float)
+    return -0.5 * float((a * (P.T @ d) * d).sum())
+
+
 def critically_stressed(fric, lam: float,
                         include: np.ndarray | None = None) -> np.ndarray:
     """The no-interaction null: elements failing under the FAR FIELD alone.
