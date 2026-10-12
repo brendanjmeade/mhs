@@ -376,6 +376,101 @@ def c_kernel() -> None:
                    "wrong-handed vertex order flips the eigenstress sign")
 
 
+def c_load() -> None:
+    """The FULL stress tensor: the loading path, its ceiling, and the locked set.
+
+    The regional stress is ``sigma_c I + lambda (D + k I)``. Two things here are
+    physics rather than bookkeeping and both were found by asking what happens
+    as lambda grows without bound.
+
+    THE LOCKED SET. The load clamps as well as shears, so strength grows with
+    lambda too and an element with ``|tau| <= mu sigma_n`` per unit load never
+    fails AT ANY LOAD. That set is fixed by orientation and mu alone.
+
+    THE COMPRESSIVE CEILING. A deviatoric D is traceless, so at k = 0 the
+    tension-favoured planes lose normal stress as fast as they gain shear and
+    go into effective TENSION past ``lambda ~ sigma_c``, where Coulomb friction
+    does not apply and the negative strength that results is met by any shear
+    at all. ``k >= 1`` removes the ceiling entirely because the minimum
+    eigenvalue of ``D + k I`` is then non-negative.
+    """
+    print("\n[load] the full stress tensor and the loading path")
+    net = N.build_network(seed=1, n_elements_target=4000, l_min=2.0,
+                          l_max=20.0, h=1.0, box_xy=60.0, z_top=-2.0,
+                          z_bottom=-42.0, a=1.5, aspect=2.0, centers="uniform")
+
+    f0 = Fr.build_friction(net, mean_stress_ratio=0.0)
+    f1 = Fr.build_friction(net, mean_stress_ratio=1.0)
+
+    # An isotropic tensor resolves the same normal stress onto every plane and
+    # NO shear onto any, so k must move sigma_n by exactly k and leave the
+    # shear and the slip direction untouched. If this ever fails, k is leaking
+    # into the driving stress and every locked fraction below is wrong.
+    check("k adds no shear", float(np.abs(f1.tau_load_mag
+                                          - f0.tau_load_mag).max()), 1e-12)
+    check("k shifts sigma_n by exactly k",
+          float(np.abs((f1.sigma_n_load - f0.sigma_n_load) - 1.0).max()), 1e-12)
+    check("k leaves the slip direction alone",
+          float(np.abs(f1.slip_dir - f0.slip_dir).max()), 1e-12)
+
+    # k >= 1 can never unclamp a plane, so the ceiling is infinite and the
+    # minimum resolved normal is non-negative.
+    check_true("k >= 1 is compressive at every lambda",
+               not np.isfinite(f1.max_lambda_compressive())
+               and float(f1.sigma_n_load.min()) >= 0.0,
+               f"min sigma_n_load {f1.sigma_n_load.min():+.4f}, ceiling "
+               f"{f1.max_lambda_compressive()}")
+
+    # At k = 0 the ceiling is finite and is exactly where sigma_eff hits zero.
+    cap = f0.max_lambda_compressive()
+    sig_at_cap = f0.sigma_eff_0 + cap * f0.sigma_n_load
+    check_true("k = 0 has a finite ceiling", np.isfinite(cap),
+               f"lambda {cap:.5f} = "
+               f"{cap / float(np.nanmin(f0.first_failure_lambda())):.2f}x "
+               f"first failure")
+    check("the ceiling is exactly where sigma_eff reaches zero",
+          float(np.abs(sig_at_cap.min())), 1e-12)
+
+    # The locked fraction must RISE with both k and mu: both raise the normal
+    # stress term relative to the shear. A non-monotone answer means a sign
+    # error somewhere in the resolution.
+    byk = [Fr.build_friction(net, mean_stress_ratio=k).locked_fraction()
+           for k in (0.0, 1 / 3, 2 / 3, 1.0)]
+    bymu = [Fr.build_friction(net, mu_mean=m).locked_fraction()
+            for m in (0.2, 0.4, 0.6, 0.8)]
+    print(f"       locked vs k  {['%.3f' % v for v in byk]}")
+    print(f"       locked vs mu {['%.3f' % v for v in bymu]}")
+    check_true("the locked fraction rises with k",
+               all(b >= a - 1e-12 for a, b in zip(byk, byk[1:])), "monotone")
+    check_true("the locked fraction rises with mu",
+               all(b >= a - 1e-12 for a, b in zip(bymu, bymu[1:])), "monotone")
+
+    # A locked element must stay locked at ANY lambda, which is the whole
+    # claim. Checked directly against the yield function rather than against
+    # the formula it was derived from.
+    locked = f0.tau_load_mag - f0.mu * f0.sigma_n_load <= 0.0
+    worst = -np.inf
+    for lam in (1.0, 1e3, 1e8):
+        F = lam * f0.tau_load_mag[locked] - f0.mu[locked] * (
+            f0.sigma_eff_0[locked] + lam * f0.sigma_n_load[locked])
+        worst = max(worst, float(F.max()))
+    check_true("a locked element never yields, out to lambda = 1e8",
+               worst <= 0.0, f"worst F {worst:.3e} <= 0 over "
+                             f"{int(locked.sum())} locked elements")
+
+    # first_failure_lambda must agree with the yield function it encodes:
+    # at its own lambda an unlocked element is exactly at failure.
+    lf = f0.first_failure_lambda()
+    ok = np.isfinite(lf)
+    F0 = lf[ok] * f0.tau_load_mag[ok] - f0.mu[ok] * (
+        f0.sigma_eff_0[ok] + lf[ok] * f0.sigma_n_load[ok])
+    check("first_failure_lambda sits exactly on the yield surface",
+          float(np.abs(F0).max()), 1e-12)
+    check_true("every element is locked or has a finite failure lambda",
+               bool(np.all(locked ^ ok)),
+               f"{int(ok.sum())} fail, {int(locked.sum())} never")
+
+
 def c_slip() -> None:
     """The quasi-static cascade: equilibrium, finiteness, and rule robustness."""
     print("\n[slip] quasi-static Coulomb loading")
@@ -598,8 +693,8 @@ def c_cloud() -> None:
 
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,
-           "kernel": c_kernel, "slip": c_slip, "align": c_align,
-           "cloud": c_cloud}
+           "kernel": c_kernel, "load": c_load, "slip": c_slip,
+           "align": c_align, "cloud": c_cloud}
 
 
 def main() -> bool:

@@ -293,6 +293,22 @@ def run_history(net, fric, P, *, shear_modulus: float = 30.0,
                 f"failure is. With a strength drop this cannot happen: an "
                 f"element at static strength is above dynamic strength by "
                 f"(mu_s - mu_d) sigma_eff > 0.")
+    else:
+        # NO SILENT CAP. Falling off the end of the range means the budget ran
+        # out before lam_max, and a truncated history is indistinguishable
+        # from a completed one in everything downstream -- the active fraction,
+        # the asymptote, every statistic. This was found by noticing a run
+        # labelled "20x first failure" that had actually stopped at 5.18x,
+        # because the caller printed the REQUESTED factor. Raised rather than
+        # warned: the budget is a guard against runaway, so exhausting it
+        # legitimately is a decision for the caller to take deliberately.
+        raise RuntimeError(
+            f"max_events = {max_events} exhausted at lam {state.lam:.6g}, "
+            f"short of lam_max = "
+            f"{'unset' if lam_max is None else format(lam_max, '.6g')}. The "
+            f"history is TRUNCATED and every statistic from it would "
+            f"understate the active set. Raise max_events, or lower lam_max "
+            f"to {state.lam:.6g}.")
     return state, events
 
 
@@ -397,4 +413,11 @@ def run_history_coupled(net, fric, K, *, shear_modulus: float = 30.0,
                   f"because a tuned answer here would be a statement about the "
                   f"solver rather than about the rock.")
             break
+    else:
+        # The same no-silent-cap rule as run_history; see the note there.
+        raise RuntimeError(
+            f"max_events = {max_events} exhausted at lam {lam:.6g}, short of "
+            f"lam_max = "
+            f"{'unset' if lam_max is None else format(lam_max, '.6g')}. The "
+            f"history is TRUNCATED. Raise max_events, or lower lam_max.")
     return s_vec, events, failures

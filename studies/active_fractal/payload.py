@@ -378,6 +378,11 @@ def main() -> int:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--frames", type=int, default=N_FRAMES)
     ap.add_argument("--drop-ratio", type=float, default=Fr.DROP_RATIO)
+    ap.add_argument("--mean-stress-ratio", type=float, default=0.0,
+                    help="isotropic part of the loading path; see "
+                         "friction.py on why 0 bounds the usable load")
+    ap.add_argument("--lam-factor", type=float, default=LAM_MAX_FACTOR,
+                    help="load ceiling as a multiple of the first failure")
     ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--out", default=None)
     ap.add_argument("--cache", default=None,
@@ -400,12 +405,24 @@ def main() -> int:
     R.describe(net)
     mat, info = K.assemble(net, mu=R.MU, lam=R.LAM, workers=a.workers,
                            cache_dir=a.cache)
-    fric = Fr.build_friction(net, drop_ratio=a.drop_ratio)
+    fric = Fr.build_friction(net, drop_ratio=a.drop_ratio,
+                             mean_stress_ratio=a.mean_stress_ratio)
     P = K.project(mat, fric.slip_dir, fric.slip_dir)
     lam0 = float(np.nanmin(fric.first_failure_lambda()))
-    lam_max = LAM_MAX_FACTOR * lam0
-    print(f"  loading to lam {lam_max:.5f} = {LAM_MAX_FACTOR}x the first "
-          f"failure ({lam0:.5f})")
+    lam_max = a.lam_factor * lam0
+    R.report_load(fric, lam0, lam_max)
+    # REFUSED rather than warned, unlike the study runs. A published payload is
+    # seen by people who will not read a log, and a load past the compressive
+    # ceiling puts elements in effective tension where their strength is
+    # negative and any shear fails them -- they would appear in the animation
+    # as slipping faults for no mechanical reason.
+    cap = fric.max_lambda_compressive()
+    if lam_max > cap:
+        raise SystemExit(
+            f"refusing to publish: lam_max {lam_max:.5f} exceeds the "
+            f"compressive ceiling {cap:.5f} ({cap / lam0:.2f}x first "
+            f"failure). Pass --lam-factor {cap / lam0:.2f} or lower, or "
+            f"--mean-stress-ratio 1 for a load with no ceiling.")
 
     cum, inc, stats, grid = snapshots(net, fric, P, n_frames=a.frames,
                                       lam_max=lam_max)

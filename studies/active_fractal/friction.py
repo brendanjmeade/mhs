@@ -1,5 +1,59 @@
 """Regional load, frictional strength, and the Coulomb yield function.
 
+WHAT LAMBDA IS. The regional stress is a FULL tensor that grows along a fixed
+path:
+
+    sigma(lambda) = sigma_c I  +  lambda (D + k I)
+
+with ``sigma_c I`` the confining part and ``lambda (D + k I)`` the tectonic
+part. ``D`` is a fixed UNIT deviatoric tensor giving the SHAPE of the tectonic
+stress -- its orientation and its faulting style, one of ``LOAD_TENSORS``. Its
+eigenvalues are (+1, 0, -1), so its maximum shear stress is exactly 1, and
+therefore
+
+    LAMBDA IS THE MAXIMUM SHEAR STRESS OF THE TECTONIC FIELD, IN GPa,
+
+equivalently half the differential stress ``(sigma_1 - sigma_3)/2``. A run at
+``lambda = 0.077`` has a tectonic field whose maximum shear stress is 77 MPa.
+Only the MAGNITUDE grows during a run; the shape ``D`` never changes, which is
+what lets one scalar parameterise the whole loading history.
+
+LAMBDA IS NOT TIME. It has units of stress, there is no rate anywhere in this
+problem, and every state reached is a static equilibrium. The viewer's slider
+says "load" for exactly that reason.
+
+LAMBDA ONLY MEANS SOMETHING RELATIVE TO sigma_c. The problem is invariant under
+scaling ``lambda`` and ``sigma_c`` together: double both and the same elements
+fail, with doubled slip. The physical parameter is the RATIO
+``lambda / sigma_c``, so quoting lambda alone says nothing. At
+``sigma_c = 0.15`` GPa a run at ``lambda = 0.23`` GPa has tectonic shear
+exceeding the confining stress by half, which is far outside any crustal state
+and is what the compressive bound below exists to catch.
+
+``k = mean_stress_ratio`` IS THE LOADING PATH, and it is the whole difference
+between a purely deviatoric load and a full one. ``D`` alone is traceless, so
+it raises the mean stress not at all: the most tension-favoured planes shed
+normal stress at exactly the rate their shear grows, and past
+``lambda ~ sigma_c`` their EFFECTIVE NORMAL STRESS GOES NEGATIVE. Coulomb
+friction does not describe that -- the fault opens -- and worse, a negative
+``sigma_eff`` makes the strength ``mu sigma_eff`` negative, so such an element
+satisfies the yield criterion trivially however little shear it carries, and
+joins the active set for no mechanical reason at all.
+
+    k = 0      mean stress fixed; sigma_H up and sigma_h down equally. Purely
+               deviatoric, and tension appears at lambda ~ sigma_c.
+    k = 2/3    only sigma_H grows, with sigma_h and sigma_v held -- the ordinary
+               picture of tectonic loading at fixed depth. The mean stress then
+               rises at 2/3 the rate of the maximum shear, which is where the
+               value comes from rather than from fitting anything.
+    k >= 1     the minimum principal stress never decreases, so nothing ever
+               goes tensile and lambda may legitimately run to infinity.
+
+An isotropic tensor resolves the SAME normal stress onto every plane and no
+shear onto any, so ``k`` enters only through ``sigma_n_load``, which is stored
+already shifted by it. Every downstream formula -- the yield function, the
+cascade's ``d``, ``first_failure_lambda`` -- is then unchanged by construction.
+
 SIGN CONVENTIONS, stated once because every one of them can be wrong silently.
 
 * ``mhs`` returns traction components in each element's own
@@ -177,12 +231,50 @@ class Friction:
         The ``K = 0`` state, which is the no-interaction null's score: the set
         that would fail if elements did not talk to each other. Elements whose
         loading does not drive them to failure come back as ``inf``.
+
+        THAT ``inf`` IS A PHYSICAL STATEMENT, NOT A GUARD. The load clamps as
+        well as shears, so strength grows with ``lambda`` too, and an element
+        with ``|tau| <= mu sigma_n`` per unit load never fails AT ANY LOAD.
+        The locked set is therefore fixed by orientation and ``mu`` alone and
+        does not shrink as the experiment runs: see ``locked_fraction``.
         """
         denom = self.tau_load_mag - self.mu * self.sigma_n_load
         out = np.full(denom.shape, np.inf)
         ok = denom > 0.0
         out[ok] = self.strength()[ok] / denom[ok]
         return out
+
+    def locked_fraction(self) -> float:
+        """Share of elements that CANNOT fail at any ``lambda``.
+
+        The complement is the asymptotic active set of the no-interaction
+        problem. Measured at ``mu = 0.6`` on the published power-law network it
+        is 0.102, so 89.8 % is the ceiling rather than 100 %.
+        """
+        return float(np.mean(self.tau_load_mag
+                             - self.mu * self.sigma_n_load <= 0.0))
+
+    def lambda_tensile(self) -> np.ndarray:
+        """``lambda`` at which each element's EFFECTIVE NORMAL STRESS hits zero.
+
+        ``inf`` where the loading path never unclamps the plane. Beyond this
+        value Coulomb friction is the wrong constitutive law -- the fault
+        opens -- and the yield function actively misbehaves, because a negative
+        ``sigma_eff`` gives a negative strength that any shear exceeds.
+        """
+        out = np.full(self.sigma_n_load.shape, np.inf)
+        shed = self.sigma_n_load < 0.0
+        out[shed] = self.sigma_eff_0[shed] / -self.sigma_n_load[shed]
+        return out
+
+    def max_lambda_compressive(self) -> float:
+        """The largest ``lambda`` at which every element is still in
+        compression -- the hard upper bound on a defensible run.
+
+        ``inf`` when ``mean_stress_ratio >= 1``, because the loading path then
+        never reduces the minimum principal stress.
+        """
+        return float(self.lambda_tensile().min())
 
 
 def build_friction(net, *, regime: str = "strike_slip",
@@ -191,6 +283,7 @@ def build_friction(net, *, regime: str = "strike_slip",
                    sigma_n_mode: str = "uniform",
                    sigma_eff: float = SIGMA_EFF_UNIFORM,
                    pore_ratio: float = RHO_W_G / RHO_G,
+                   mean_stress_ratio: float = 0.0,
                    seed: int = 0) -> Friction:
     """Strength and resolved load for a network.
 
@@ -221,7 +314,16 @@ def build_friction(net, *, regime: str = "strike_slip",
     if regime not in LOAD_TENSORS:
         raise ValueError(f"regime must be one of {sorted(LOAD_TENSORS)}, "
                          f"got {regime!r}")
+    if mean_stress_ratio < 0.0:
+        raise ValueError(
+            f"mean_stress_ratio must be >= 0; got {mean_stress_ratio}. A "
+            f"negative value would make the loading path REDUCE the mean "
+            f"stress, driving every plane toward tension at once.")
     tau_load, sigma_n_load = resolve_tensor(tris, LOAD_TENSORS[regime])
+    # The isotropic part of the loading path. It resolves the same normal
+    # stress onto every plane and no shear onto any, so folding it in here
+    # leaves every downstream formula untouched. See the module docstring.
+    sigma_n_load = sigma_n_load + float(mean_stress_ratio)
 
     if mu_mode == "uniform":
         mu = np.full(n, float(mu_mean))
@@ -268,8 +370,14 @@ def build_friction(net, *, regime: str = "strike_slip",
             "sigma_eff_range_GPa": [float(sig0.min()), float(sig0.max())],
             "tau_load_mag_range": [float(mag.min()), float(mag.max())],
             "n_unloadable": int(flat.sum()),
+            "mean_stress_ratio": float(mean_stress_ratio),
             "units": "km, GPa"}
-    return Friction(mu=mu, mu_dynamic=mu * float(drop_ratio),
+    fric = Friction(mu=mu, mu_dynamic=mu * float(drop_ratio),
                     sigma_eff_0=sig0, tau_load=tau_load,
                     sigma_n_load=sigma_n_load, slip_dir=slip_dir,
                     tau_load_mag=mag, meta=meta)
+    # Recorded rather than enforced here: the bound belongs to a RUN, which is
+    # what chooses lambda_max, and build_friction does not know one.
+    meta["locked_fraction"] = fric.locked_fraction()
+    meta["max_lambda_compressive"] = fric.max_lambda_compressive()
+    return fric

@@ -21,7 +21,10 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
       100&nbsp;km box, 2 to 42&nbsp;km depth, 20,771&nbsp;elements of 1&nbsp;km
       edge, <i>&epsilon;</i>&nbsp;=&nbsp;100&nbsp;m. Strike-slip regime,
       &mu;<sub>s</sub>&nbsp;=&nbsp;0.6 with a 10&nbsp;% strength drop,
-      effective normal stress 150&nbsp;MPa.
+      confining stress 150&nbsp;MPa. The load is a <b>full stress tensor</b>
+      on the path <i>k</i>&nbsp;=&nbsp;2/3 &mdash; only
+      <i>&sigma;<sub>H</sub></i> grows &mdash; so every element stays in
+      compression at every frame.
     </p>
     <div class="note">
       <b>This is the experiment the on-fault interaction matrix exists for.</b>
@@ -57,13 +60,161 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     <p data-status class="status">loading…</p>
   </div>
 
+  <h2>What <i>&lambda;</i> is</h2>
+
+  <p>
+    The regional stress is a full tensor growing along a fixed path,
+    <i>&sigma;</i>(<i>&lambda;</i>)&nbsp;=&nbsp;<i>&sigma;<sub>c</sub></i>&thinsp;<b>I</b>&nbsp;+&nbsp;<i>&lambda;</i>(<b>D</b>&nbsp;+&nbsp;<i>k</i>&thinsp;<b>I</b>).
+    <b>D</b> is a fixed unit tensor giving the <i>shape</i> of the tectonic
+    stress &mdash; its orientation and its faulting style &mdash;
+    <i>&sigma;<sub>c</sub></i> is the confining pressure, here 150&nbsp;MPa,
+    and <i>k</i> is the loading path. Only the magnitude grows during a run;
+    the shape never changes, which is what lets a single number stand for the
+    whole history.
+  </p>
+
+  <p>
+    <b>D</b>'s eigenvalues are (+1,&nbsp;0,&nbsp;&minus;1), so its maximum shear
+    stress is exactly 1 and therefore <b><i>&lambda;</i> is the maximum shear
+    stress of the tectonic field, in GPa</b> &mdash; equivalently half the
+    differential stress, (<i>&sigma;</i><sub>1</sub>&nbsp;&minus;&nbsp;<i>&sigma;</i><sub>3</sub>)/2.
+    The run starts at <i>&lambda;</i>&nbsp;=&nbsp;0.1175, a tectonic field whose
+    maximum shear stress is 118&nbsp;MPa, which is where the first element in
+    this network reaches its failure criterion, and ends at 0.4525.
+  </p>
+
+  <p>
+    <b><i>&lambda;</i> is not time.</b> It carries units of stress, nothing in
+    the problem has a rate, and every frame is a static equilibrium. And
+    <i>&lambda;</i> alone means nothing: the problem is invariant under scaling
+    <i>&lambda;</i> and <i>&sigma;<sub>c</sub></i> together, so the physical
+    parameter is the <i>ratio</i> of the two, never either by itself.
+  </p>
+
+  <h2>Not every fault can ever slip</h2>
+
+  <p>
+    The load clamps as well as shears, so a plane's strength grows with
+    <i>&lambda;</i> too. Failure needs
+    <i>&lambda;</i>|<i>&tau;</i>|&nbsp;&ge;&nbsp;<i>&mu;</i>(<i>&sigma;<sub>c</sub></i>&nbsp;+&nbsp;<i>&lambda;&sigma;<sub>n</sub></i>),
+    so an element with
+    |<i>&tau;</i>|&nbsp;&le;&nbsp;<i>&mu;&sigma;<sub>n</sub></i> per unit load
+    <b>never fails at any load whatsoever</b>. On the path shipped here that is
+    <b>28.3&nbsp;%</b> of elements, so the active set has a ceiling of
+    71.7&nbsp;% rather than 100&nbsp;%. The gate checks this the blunt way: a
+    locked element's yield function is still negative at
+    <i>&lambda;</i>&nbsp;=&nbsp;10<sup>8</sup>. Elastic interaction is almost
+    powerless against it &mdash; on the purely deviatoric path it pushed
+    exactly <b>two</b> of 2,116 locked elements over.
+  </p>
+
+  <p>
+    <b>Measured rather than argued.</b> At <i>k</i>&nbsp;=&nbsp;1, where the
+    load has no ceiling and <i>&lambda;</i>&nbsp;&rarr;&nbsp;&infin; is a
+    legitimate question, a run of 1,021,035 events out to 20&times; the first
+    failure reaches 47.5&nbsp;% active against a predicted ceiling of
+    50.5&nbsp;% &mdash; 94&nbsp;% of the way there, with the remainder
+    arriving logarithmically. The active set overlaps the no-interaction
+    prediction by 99.3&nbsp;%. So the ceiling is real, interaction does not
+    lift it, and the answer to whether everything eventually slips is no by
+    roughly half.
+  </p>
+
+  <p>
+    The locked fraction is set by orientation, <i>&mu;</i> and the loading path
+    alone, and it is <i>lumpy</i>, because fault lengths are power-law. Going
+    from <i>&mu;</i>&nbsp;=&nbsp;0.1 to 0.2 moves it from 0.17&nbsp;% to
+    7.4&nbsp;%, and almost all of that jump is <b>one fault carrying 1,444
+    elements</b> crossing the threshold. Counted in faults the curve is smooth
+    (1, 3, 11, 32, 58, 142, 204, 257 of 538 as <i>&mu;</i> goes 0.05 to 1.0);
+    counted in elements it is a staircase. A barrier here is one big
+    badly-oriented fault, which is a consequence of the size distribution
+    rather than of the mechanics.
+  </p>
+
+  <h2>Why the load is a full tensor and not a deviatoric one</h2>
+
+  <div class="note">
+    <b>An earlier version of this page was loaded past the bound below, and
+    16.6&nbsp;% of its active set was failing for no mechanical reason.</b>
+    The run shown now is compressive at every element in every frame, and the
+    payload builder refuses to publish one that is not.
+  </div>
+
+  <p>
+    A deviatoric <b>D</b> is traceless, so it raises the mean stress not at all:
+    the tension-favoured planes shed normal stress exactly as fast as they gain
+    shear. Past
+    <i>&lambda;</i>&nbsp;&asymp;&nbsp;<i>&sigma;<sub>c</sub></i> their effective
+    normal stress goes <i>negative</i>. Coulomb friction does not describe that
+    &mdash; the fault opens &mdash; and worse, a negative
+    <i>&sigma;</i><sub>eff</sub> makes the strength
+    <i>&mu;&sigma;</i><sub>eff</sub> negative, so the element satisfies the
+    yield criterion however little shear it carries and joins the active set
+    for no mechanical reason.
+  </p>
+
+  <p>
+    Purely deviatoric, the first element here opens at only 1.95&times; the
+    first failure. Lowering <i>&sigma;<sub>c</sub></i> does not help, because
+    first failure and opening scale with it identically &mdash; a lithostatic
+    profile gives 2.15&times;. What helps is a loading path that also raises
+    the mean stress, through the <i>k</i>&thinsp;<b>I</b> term:
+  </p>
+
+  <table>
+    <thead><tr><th><i>k</i></th><th>the path</th><th>usable range</th>
+      <th>locked</th><th>ceiling on active</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td><i>&sigma;<sub>H</sub></i> up and
+        <i>&sigma;<sub>h</sub></i> down equally; mean fixed</td>
+        <td>1.95&times;</td><td>10.2&nbsp;%</td><td>89.8&nbsp;%</td></tr>
+      <tr><td><b>2/3</b></td><td><b>only <i>&sigma;<sub>H</sub></i> grows
+        &mdash; shipped here</b></td><td><b>3.89&times;</b></td>
+        <td><b>28.3&nbsp;%</b></td><td><b>71.7&nbsp;%</b></td></tr>
+      <tr><td>1</td><td>minimum principal stress never falls</td>
+        <td>unbounded</td><td>49.5&nbsp;%</td><td>50.5&nbsp;%</td></tr>
+    </tbody>
+  </table>
+
+  <p>
+    <i>k</i>&nbsp;=&nbsp;2/3 is not fitted to anything: holding
+    <i>&sigma;<sub>h</sub></i> and <i>&sigma;<sub>v</sub></i> while
+    <i>&sigma;<sub>H</sub></i> grows raises the mean stress at
+    &Delta;/3 while the maximum shear rises at &Delta;/2. An isotropic tensor
+    resolves the same normal stress onto every plane and no shear onto any, so
+    <i>k</i> enters the arithmetic in exactly one place and every downstream
+    formula is untouched &mdash; checked to machine precision rather than
+    assumed.
+  </p>
+
+  <p>
+    <b>The more realistic the loading path, the fewer faults can ever
+    slip.</b> That is the uncomfortable half of the table: going from a
+    deviatoric load to one that never opens a fault cuts the ceiling from
+    89.8&nbsp;% to 50.5&nbsp;%. The deviatoric case was flattering itself by
+    driving a tenth of the network toward tension.
+  </p>
+
+  <p>
+    None of the conclusions below depend on which of the three was used. At
+    <i>k</i>&nbsp;=&nbsp;0 to 1.9&times; (the last compressive load), at
+    <i>k</i>&nbsp;=&nbsp;2/3 to 3.85&times; (shipped) and at
+    <i>k</i>&nbsp;=&nbsp;1, the overlap with the no-interaction null is
+    97.1&nbsp;%, 97.9&nbsp;% and 99.0&nbsp;%; the participation ratio differs
+    from that null by &minus;0.0003, +0.0012 and +0.0035; and the mean event
+    size is 5.86, 5.83 and 5.90 against a largest of 845, 840 and 836. What
+    moves is the active fraction &mdash; 51.9&nbsp;%, 52.8&nbsp;%,
+    42.5&nbsp;% &mdash; and nothing else.
+  </p>
+
   <h2>What is and is not being claimed</h2>
 
   <p>
-    The machinery works and the numbers above are measured: 153,448 events over
-    the load range shown, 71.1&nbsp;% of elements eventually slipping, a
-    cumulative moment of 2.9&times;10<sup>21</sup>&nbsp;N&nbsp;m, and a largest
-    single cascade of 845 elements. Every event reached equilibrium; none ran
+    The machinery works and the numbers above are measured: 165,659 events over
+    the load range shown, 52.8&nbsp;% of elements eventually slipping, a
+    cumulative moment of 3.1&times;10<sup>21</sup>&nbsp;N&nbsp;m, and a largest
+    single cascade of 840 elements. Every event reached equilibrium; none ran
     away, which is not automatic &mdash; the branching ratio averages 0.786 and
     its 90th percentile is 0.969, so this network sits just below criticality
     rather than comfortably away from it.
@@ -74,10 +225,10 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     each one slips.</b> That is the result, and it is not what we expected to
     find. The active set overlaps the <i>no-interaction null</i> &mdash; the
     set that would fail if elements could not talk to each other, selected by
-    orientation and the regional load alone &mdash; by <b>98.7&nbsp;%</b>. Hold
+    orientation and the regional load alone &mdash; by <b>97.9&nbsp;%</b>. Hold
     the weighting fixed and every geometric statistic of the two sets agrees:
-    coherence differs by &minus;0.003, the participation ratio by
-    +0.004, the orientation fabric's leading eigenvalue by 0.003, cluster
+    coherence differs by +0.0005, the participation ratio by
+    +0.0012, the orientation fabric's leading eigenvalue by +0.0009, cluster
     planarity and linearity to three decimals. The faults that fail are the
     well-oriented ones, and elasticity barely moves that list.
   </p>
@@ -85,9 +236,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
   <p>
     What elasticity does move is the <i>distribution of slip across that
     list</i>. Weighted by moment rather than by membership, the active set's
-    participation ratio falls from 0.499 to 0.227 &mdash; moment is about 2.2
+    participation ratio falls from 0.378 to 0.172 &mdash; moment is about 2.2
     times more concentrated than the footprint carrying it &mdash; and its
-    coherence rises from 0.691 to 0.751. So slip piles onto a mutually
+    coherence rises from 0.731 to 0.780. So slip piles onto a mutually
     better-aligned subset of the elements that were always going to fail. The
     network manufactures asperities out of slip amplitude, not out of which
     patches participate.
@@ -138,7 +289,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     pushed past its static strength &mdash; a cascade through the network, not
     a dynamic rupture, and nothing in it propagates in time. Sizes are broad:
     58.5&nbsp;% involve more than one element, the 99th percentile is 71
-    elements and the largest is 845, against a median of 2.
+    elements and the largest is 840, against a median of 2.
   </p>
 
   <p>
@@ -149,7 +300,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     <i>P</i>(&ge;2)&nbsp;=&nbsp;58.5&nbsp;%,
     <i>P</i>(&ge;5)&nbsp;=&nbsp;23.9&nbsp;%,
     <i>P</i>(&ge;10)&nbsp;=&nbsp;12.3&nbsp;%,
-    <i>P</i>(&ge;50)&nbsp;=&nbsp;1.8&nbsp;%,
+    <i>P</i>(&ge;50)&nbsp;=&nbsp;1.9&nbsp;%,
     <i>P</i>(&ge;100)&nbsp;=&nbsp;0.5&nbsp;%. An earlier configuration with
     small faults made this point the hard way: its event size was invariant to
     a 16&times; density change and a 25&times; change in the strength drop,
@@ -261,7 +412,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     scale is global across frames &mdash; a per-frame scale would normalise away
     the growth being animated. The quantisation error is bounded by arithmetic
     rather than asserted, and the build measures what it wrote against that
-    bound: 1.178&nbsp;% against a bound of 1.178&nbsp;%, a ratio of 1.000. The
+    bound: 1.239&nbsp;% against a bound of 1.239&nbsp;%, a ratio of 1.000. The
     payload is 5.5&nbsp;MiB for 20,771 elements across 120 equilibria.
   </p>
 

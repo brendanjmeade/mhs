@@ -108,6 +108,45 @@ def build(config: str, seed: int = 1, **over):
                            z_bottom=Z_TOP - BOX_XY, aspect=2.0, **kw)
 
 
+def report_load(fric, lam0: float, lam_max: float) -> None:
+    """State the loading path, its ceiling, and whether this run respects it.
+
+    THE CEILING IS PHYSICS, NOT A TOLERANCE. A purely deviatoric load sheds
+    normal stress from the tension-favoured planes as fast as it shears them,
+    so past ``max_lambda_compressive`` their effective normal stress is
+    negative: the fault should open, Coulomb friction no longer applies, and
+    the negative strength that results is satisfied by any shear at all. Those
+    elements then join the active set for no mechanical reason. This is
+    printed rather than raised because a deliberate run past the bound is a
+    legitimate thing to look at -- but never a legitimate thing to publish
+    without saying so.
+    """
+    k = fric.meta["mean_stress_ratio"]
+    cap = fric.max_lambda_compressive()
+    sc = fric.sigma_eff_0
+    print(f"  load: sigma_c {sc.min():.3f}-{sc.max():.3f} GPa, "
+          f"mean stress ratio k = {k:g}, mu {fric.mu.mean():.2f}")
+    print(f"  lambda = max shear stress of the tectonic field, GPa. "
+          f"first failure {lam0:.5f}, this run to {lam_max:.5f} "
+          f"({lam_max / lam0:.2f}x)")
+    print(f"  locked at any lambda: {fric.locked_fraction():.2%} -- the "
+          f"active set can never exceed {1 - fric.locked_fraction():.2%}")
+    if not np.isfinite(cap):
+        print(f"  fully compressive at every lambda (k >= 1), so the load has "
+              f"no upper bound")
+        return
+    tens = int((fric.lambda_tensile() <= lam_max).sum())
+    verdict = "WITHIN" if lam_max <= cap else "PAST"
+    print(f"  compressive ceiling lambda {cap:.5f} = {cap / lam0:.2f}x first "
+          f"failure; this run is {verdict} it")
+    if lam_max > cap:
+        print(f"  WARNING: {tens} elements ({tens / fric.mu.size:.2%}) reach "
+              f"negative effective normal stress by the end of this run. They "
+              f"should OPEN, not slip, and their strength goes negative so "
+              f"they fail trivially. Raise mean_stress_ratio to k >= 1 for an "
+              f"unbounded load, or lower --lam-factor to {cap / lam0:.2f}.")
+
+
 def window_of(net) -> dict:
     """The dimension window for either geometry. One statement, two callers.
 
@@ -234,7 +273,8 @@ def cmd_localize(a) -> int:
     describe(net)
     mat, info = K.assemble(net, mu=MU, lam=LAM, workers=a.workers,
                            cache_dir=a.cache)
-    fric = Fr.build_friction(net, drop_ratio=a.drop_ratio)
+    fric = Fr.build_friction(net, drop_ratio=a.drop_ratio,
+                             mean_stress_ratio=a.mean_stress_ratio)
     P = K.project(mat, fric.slip_dir, fric.slip_dir)
     B = K.branching_ratio(P)
     ev_min = float(np.linalg.eigvalsh(-0.5 * (P + P.T)).min())
@@ -245,14 +285,18 @@ def cmd_localize(a) -> int:
              'uniqueness not guaranteed, relying on solver-independence'})")
 
     lam0 = float(np.nanmin(fric.first_failure_lambda()))
+    lam_max = a.lam_factor * lam0
+    report_load(fric, lam0, lam_max)
     st, ev = C.run_history(net, fric, P, shear_modulus=MU,
-                           lam_max=a.lam_factor * lam0)
+                           lam_max=lam_max, max_events=a.max_events)
     sz = np.array([e.n_slipped for e in ev]) if ev else np.array([0])
     act = st.s > 0.0
     n_act = int(act.sum())
+    # The ACHIEVED factor, never the requested one. Printing a.lam_factor here
+    # is what let a history truncated at 5.18x be reported as 20x.
     print(f"  {len(ev)} events to lam {st.lam:.5f} "
-          f"({a.lam_factor}x first failure), all converged "
-          f"{all(e.converged for e in ev)}")
+          f"({st.lam / lam0:.2f}x first failure, asked for {a.lam_factor}x), "
+          f"all converged {all(e.converged for e in ev)}")
     print(f"  active {n_act}/{net.n_elements} = {n_act / net.n_elements:.1%}; "
           f"event size mean {sz.mean():.2f} max {sz.max()}")
     if n_act < 50:
@@ -457,7 +501,14 @@ def main() -> int:
     lz.add_argument("--workers", type=int, default=12)
     lz.add_argument("--cache", default=None)
     lz.add_argument("--drop-ratio", type=float, default=0.9)
+    lz.add_argument("--mean-stress-ratio", type=float, default=0.0,
+                    help="isotropic part of the loading path; 0 is "
+                         "purely deviatoric, 2/3 is sigma_H alone, "
+                         ">=1 never goes tensile")
     lz.add_argument("--lam-factor", type=float, default=3.0)
+    lz.add_argument("--max-events", type=int, default=200_000,
+                    help="runaway guard; exhausting it now RAISES "
+                         "rather than truncating silently")
     lz.add_argument("--cell", type=float, default=2.0,
                     help="km, the cell for the participation ratio")
     lz.add_argument("--reach", type=float, default=1.5,
