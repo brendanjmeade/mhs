@@ -47,6 +47,7 @@ import friction as Fr                                        # noqa: E402
 import kernel as K                                          # noqa: E402
 import measure as M                                         # noqa: E402
 import network as N                                         # noqa: E402
+import static as St                                        # noqa: E402
 
 #: Material, in the project's units. nu = 0.25 at mu = lam, which is the value
 #: every mhs gate runs at -- and the free-surface residual is forty times worse
@@ -448,6 +449,160 @@ def cmd_localize(a) -> int:
     return 0
 
 
+def _setup(a):
+    """Network, matrix, friction and LCP coefficients. Shared by the static
+    verbs, which all need exactly this and nothing else."""
+    net = build(a.config, a.seed)
+    print(f"[{a.config}] seed {a.seed}")
+    describe(net)
+    mat, info = K.assemble(net, mu=MU, lam=LAM, workers=a.workers,
+                           cache_dir=a.cache)
+    fric = Fr.build_friction(net, drop_ratio=a.drop_ratio,
+                             mean_stress_ratio=a.mean_stress_ratio)
+    P = K.project(mat, fric.slip_dir, fric.slip_dir)
+    del mat
+    ev = float(np.linalg.eigvalsh(-0.5 * (P + P.T)).min())
+    print(f"  min eig sym(-P) {ev:.4g} -- uniqueness of the static solution "
+          f"{'HOLDS' if ev > 0 else 'IS NOT GUARANTEED'}")
+    if ev <= 0.0:
+        print(f"  the LCP may have several solutions or none; what follows "
+              f"is one fixed point, not THE answer.")
+    asym = float(np.abs(P - P.T).max() / np.abs(P).max())
+    print(f"  |P-P^T|max/|P|max {asym:.3f} (collocation, not Galerkin: "
+          f"a genuine LCP rather than a convex QP)")
+    d, g_s, g_d = C.coefficients(fric)
+    lam0 = float(np.nanmin(fric.first_failure_lambda()))
+    return net, P, fric, d, g_s, g_d, lam0
+
+
+def cmd_static(a) -> int:
+    """THE PRIMARY VERB. Solve the static LCP and measure what elastic
+    interaction adds over critically-stressed screening.
+
+    The screening -- resolve Coulomb on each fracture independently against
+    the regional stress -- is standard practice in reservoir geomechanics and
+    costs nothing. The static solve is the same question with the fractures
+    allowed to talk to each other. The difference between the two is this
+    study's central number, and it is reported for MEMBERSHIP and for MOMENT
+    separately because they do not agree.
+    """
+    net, P, fric, d, g_s, g_d, lam0 = _setup(a)
+    lam = a.lam_factor * lam0
+    report_load(fric, lam0, lam)
+
+    sol = St.solve(P, d, g_s, lam, verbose=a.verbose)
+    print(f"\n  static LCP: {sol.sweeps} sweeps, natural residual "
+          f"{sol.residual:.3e}, converged {sol.converged}")
+    if not sol.converged:
+        print("  NOT CONVERGED -- the numbers below are not the solution.")
+    F = lam * d + P.T @ sol.delta - g_s
+    print(f"  max yield violation {F.max():+.3e} (must be <= 0)")
+    print(f"  slipping {sol.n_active}/{net.n_elements} = "
+          f"{sol.n_active / net.n_elements:.1%}")
+
+    null = St.critically_stressed(fric, lam)
+    inter = int((sol.active & null).sum())
+    union = int((sol.active | null).sum())
+    print(f"\n  CRITICALLY-STRESSED SCREENING (the standard practice, free):")
+    print(f"    screened in {int(null.sum())}, static solve "
+          f"{sol.n_active}, shared {inter}, Jaccard {inter / union:.4f}")
+    print(f"    interaction ADDS {int((sol.active & ~null).sum())} elements "
+          f"and REMOVES {int((null & ~sol.active).sum())}")
+    print(f"    -> membership differs by "
+          f"{(union - inter) / union:.2%} of the union")
+
+    # MOMENT is where the two part company, and the screening cannot speak to
+    # it at all: it has no slip, only a yes/no. The comparison is therefore
+    # the static solve's own moment against a uniform-slip set of the same
+    # membership, which is the most the screening could claim.
+    w = net.areas() * sol.delta
+    cent = net.tris.mean(axis=1)
+    pr_m = M.participation_ratio(cent[sol.active], w[sol.active], a.cell,
+                                 available=cent)
+    pr_u = M.participation_ratio(cent[sol.active],
+                                 net.areas()[sol.active], a.cell,
+                                 available=cent)
+    print(f"    moment concentration: PR {pr_m:.4f} against its own "
+          f"uniform-slip {pr_u:.4f} -> {pr_m - pr_u:+.4f}")
+    print(f"    (the screening is a membership test and has no slip, so this "
+          f"is what it cannot see)")
+    return 0
+
+
+def cmd_grow(a) -> int:
+    """Add faults to a network and measure what each addition does.
+
+    THE QUESTION THIS VERB EXISTS FOR. A static solve is cheap enough that the
+    network can be grown fault by fault and re-solved, which a loading history
+    could not afford. Two sweeps:
+
+    GROWTH -- nested subsets of faults, so the matrix is assembled ONCE and
+    every subnetwork is a mask over it. ``include`` holds excluded elements at
+    zero slip, which is exactly what absence means.
+
+    LEAVE-ONE-OUT -- the full network minus one fault, warm started from the
+    full solution. This is the clean perturbation: what did THIS fault do to
+    the rest of the network? Reported with the sign kept, because a fault's
+    own slip relieves stress on planes in its shadow, so removing it can
+    ACTIVATE them -- and a single "number changed" would hide that.
+    """
+    net, P, fric, d, g_s, g_d, lam0 = _setup(a)
+    lam = a.lam_factor * lam0
+    report_load(fric, lam0, lam)
+    nf = net.n_faults
+    size = np.bincount(net.fault_id, minlength=nf)
+
+    print(f"\n  GROWTH: nested subsets of the same assembled matrix")
+    print(f"    {'faults':>7} {'elements':>9} {'active':>8} {'frac':>7} "
+          f"{'screened':>9} {'sweeps':>7}")
+    steps = np.unique(np.geomspace(max(2, nf // 64), nf,
+                                   a.steps).astype(int))
+    warm, prev = None, None
+    for k in steps:
+        inc = St.elements_of(net, np.arange(k))
+        sol = St.solve(P, d, g_s, lam, include=inc, warm=warm)
+        null = St.critically_stressed(fric, lam, include=inc)
+        print(f"    {k:7d} {int(inc.sum()):9d} {sol.n_active:8d} "
+              f"{sol.n_active / max(int(inc.sum()), 1):7.1%} "
+              f"{int(null.sum()):9d} {sol.sweeps:7d}"
+              f"{'' if sol.converged else '  NOT CONVERGED'}")
+        warm, prev = sol.delta.copy(), sol
+
+    print(f"\n  LEAVE-ONE-OUT on the full network, warm started")
+    full = St.solve(P, d, g_s, lam, warm=warm)
+    print(f"    full: {full.n_active} active, {full.sweeps} sweeps, "
+          f"residual {full.residual:.2e}")
+    rng = np.random.default_rng(a.seed)
+    big = np.argsort(-size)[:a.n_drop // 2]
+    rest = rng.choice(np.setdiff1d(np.arange(nf), big),
+                      a.n_drop - big.size, replace=False)
+    print(f"    {'fault':>6} {'elems':>6} {'swp':>4} {'on':>5} {'off':>5} "
+          f"{'up':>6} {'down':>6} {'maxdslip m':>11} {'M ratio':>8}")
+    for f in np.concatenate([big, rest]):
+        keep = ~St.elements_of(net, [f])
+        sol = St.solve(P, d, g_s, lam, include=keep, warm=full.delta)
+        inf = St.influence(full, sol, keep)
+        print(f"    {f:6d} {size[f]:6d} {sol.sweeps:4d} "
+              f"{inf['switched_on']:5d} {inf['switched_off']:5d} "
+              f"{inf['slip_up']:6d} {inf['slip_down']:6d} "
+              f"{inf['max_abs_dslip_km'] * 1e3:11.4f} "
+              f"{inf['moment_ratio']:8.4f}"
+              f"{'' if sol.converged else '  NOT CONVERGED'}")
+
+    # A WARM START CANNOT CHANGE THE ANSWER, only the sweep count -- the LCP
+    # has one solution. Checked on the hardest case rather than asserted,
+    # because the whole leave-one-out sweep rests on it.
+    f0 = int(big[0])
+    keep = ~St.elements_of(net, [f0])
+    w_ = St.solve(P, d, g_s, lam, include=keep, warm=full.delta)
+    c_ = St.solve(P, d, g_s, lam, include=keep)
+    print(f"\n    warm vs cold on fault {f0}: max|d(slip)| "
+          f"{np.abs(w_.delta - c_.delta).max():.3e} km, "
+          f"{w_.sweeps} sweeps vs {c_.sweeps}, "
+          f"active {w_.n_active} vs {c_.n_active}")
+    return 0
+
+
 def cmd_geometry(a) -> int:
     """Build a network and measure its geometry. No matrix, so it is cheap."""
     net = build(a.config, a.seed)
@@ -481,6 +636,23 @@ def cmd_assemble(a) -> int:
         d = mat[idx, b, K.RECEIVER.index(nm), idx]
         print(f"    {nm:6s} {d.min():.4e} .. {d.max():.4e}")
     return 0
+
+
+def _static_parser(sub, name, fn, help_):
+    """The static verbs share one argument set, stated once."""
+    q = sub.add_parser(name, help=help_)
+    q.add_argument("--config", default="faults_pl", choices=sorted(CONFIGS))
+    q.add_argument("--seed", type=int, default=1)
+    q.add_argument("--workers", type=int, default=None)
+    q.add_argument("--cache", default=None)
+    q.add_argument("--drop-ratio", type=float, default=0.9)
+    q.add_argument("--mean-stress-ratio", type=float, default=0.6667,
+                   help="isotropic part of the loading path; see friction.py")
+    q.add_argument("--lam-factor", type=float, default=3.85)
+    q.add_argument("--cell", type=float, default=2.0)
+    q.add_argument("--verbose", action="store_true")
+    q.set_defaults(fn=fn)
+    return q
 
 
 def main() -> int:
@@ -527,6 +699,17 @@ def main() -> int:
     c.add_argument("--face-clearance", type=float, default=None,
                    help="override the face-clearance floor, in units of eps")
     c.set_defaults(fn=cmd_calibrate)
+    _static_parser(sub, "static", cmd_static,
+                   "THE PRIMARY VERB: the unique static solution, against "
+                   "critically-stressed screening")
+    gr = _static_parser(sub, "grow", cmd_grow,
+                        "add faults to a network and measure what each "
+                        "addition does to the rest")
+    gr.add_argument("--steps", type=int, default=24,
+                    help="growth points, geometrically spaced in fault count")
+    gr.add_argument("--n-drop", type=int, default=20,
+                    help="faults to leave out one at a time; half the "
+                         "largest, half at random")
     a = ap.parse_args()
     return a.fn(a)
 

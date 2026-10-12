@@ -91,6 +91,106 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     parameter is the <i>ratio</i> of the two, never either by itself.
   </p>
 
+  <h2>The static solution, which is unique</h2>
+
+  <p>
+    At one load the quasi-static Coulomb problem is a <b>Linear
+    Complementarity Problem</b>. Every element is either locked and below
+    strength or slipping and exactly at strength, and nothing else is
+    admissible: with <i>w</i> the margin to failure,
+    <i>w</i>&nbsp;=&nbsp;<b>A</b><i>&delta;</i>&nbsp;+&nbsp;<i>q</i>,
+    <i>&delta;</i>&nbsp;&ge;&nbsp;0, <i>w</i>&nbsp;&ge;&nbsp;0,
+    <i>&delta;·w</i>&nbsp;=&nbsp;0, with
+    <b>A</b>&nbsp;=&nbsp;&minus;<b>P</b>. When <b>A</b> has positive definite
+    symmetric part it is a P-matrix, and an LCP with a P-matrix has
+    <b>exactly one solution</b> for every <i>q</i> (Cottle, Pang &amp; Stone,
+    Thm 3.3.7).
+  </p>
+
+  <p>
+    So <i>which faults slip under this stress field</i> has one answer, and it
+    depends on no loading path, no update rule and <b>no frictional weakening
+    whatsoever</b>. The strength drop above is needed for the separate
+    question of how slip arrives &mdash; in what sized jumps &mdash; because
+    the stiffness criterion forbids a finite jump without it. Measured here,
+    the two static solutions <b>bracket the entire loading history exactly</b>:
+  </p>
+
+  <p style="text-align:center">
+    <i>A</i>(&mu;<sub>s</sub>)&nbsp;10,822 &nbsp;&sube;&nbsp;
+    <i>A</i>(history)&nbsp;10,977 &nbsp;&sube;&nbsp;
+    <i>A</i>(&mu;<sub>d</sub>)&nbsp;11,299
+  </p>
+
+  <p>
+    with zero violations in either direction. The brackets are 477 elements
+    apart, 2.3&nbsp;% of the network, so the strength drop does not decide the
+    active set &mdash; it only chooses where inside that band the history
+    lands. A static solve is also two to three orders of magnitude cheaper:
+    ~141 projected Gauss-Seidel sweeps against 165,659 events.
+  </p>
+
+  <div class="note">
+    <b>Mollification is what makes this well posed, not merely convenient.</b>
+    The uniqueness theorem needs a finite, correctly signed
+    <i>P<sub>ii</sub></i>. For a classical dislocation element that number
+    does not exist &mdash; the traction kernel is hypersingular on its own
+    surface, giving a Hadamard finite part, a collocation-dependent value, or
+    a divergence. Mollification smears slip over a width <i>&epsilon;</i> and
+    the self-interaction becomes a convergent integral, with
+    <i>&epsilon;</i> physical rather than arbitrary: a fault is a gouge zone
+    of finite thickness, so <i>P<sub>ii</sub></i> is the self-stiffness of a
+    slip patch of that width. Without it the theorem has no matrix to act on.
+  </div>
+
+  <p>
+    Two things are <i>measured</i> rather than guaranteed. The continuum
+    hypersingular operator is coercive for a single crack, but a
+    <i>collocation</i> discretization on a network of arbitrary orientations
+    and near-contacts does not inherit that &mdash; ours did not, the first
+    time, with one negative eigenvalue out of 2,826 traceable to a single
+    nearly perpendicular pair. And <b>P</b> is strongly non-symmetric,
+    |<b>P</b>&nbsp;&minus;&nbsp;<b>P</b><sup>T</sup>|<sub>max</sub>/|<b>P</b>|<sub>max</sub>&nbsp;=&nbsp;0.72,
+    as collocation is where Galerkin would not be. Uniqueness survives, needing
+    definiteness and not symmetry, but this is a genuine LCP and not a convex
+    QP, so the solver's convergence is an empirical fact here and is reported
+    per run.
+  </p>
+
+  <h2>What interaction adds to screening everyone already does</h2>
+
+  <p>
+    Resolving Coulomb on each fracture independently against the regional
+    stress &mdash; <b>critically-stressed fracture analysis</b>, after Barton,
+    Zoback &amp; Moos (1995) &mdash; is routine in reservoir geomechanics and
+    costs nothing. It is also exactly this study's no-interaction null. So the
+    central measurement is the difference between that screening and the
+    static solve, and the two halves of it disagree:
+  </p>
+
+  <ul>
+    <li><b>Membership</b>: the screening is nearly right. Across
+      &mu;&nbsp;=&nbsp;0.40 to 0.80 the two sets differ by well under
+      3&nbsp;% of the network at every value.</li>
+    <li><b>Moment</b>: the screening cannot speak to it at all, being a
+      yes/no test with no slip. Interaction concentrates moment by a factor of
+      about 2.2 relative to the footprint carrying it.</li>
+  </ul>
+
+  <p>
+    Because the solve is cheap, the network can also be <b>grown fault by
+    fault</b> and re-solved, which a loading history could not afford. Leaving
+    one fault out of the full network and warm-starting from its solution
+    gives the clean perturbation, and <b>both signs occur</b>: removing one
+    780-element fault switched 224 elements <i>off</i> and 12 on &mdash; it
+    was mostly promoting its neighbours &mdash; while removing a 600-element
+    fault switched 64 <i>on</i> and 8 off, having mostly been shadowing them.
+    Removing an <i>inactive</i> fault, however large, changes nothing at all:
+    a fault that does not slip transfers nothing, so the 1,444-element fault
+    that dominates the locked set is mechanically invisible to the rest of the
+    network.
+  </p>
+
   <h2>Not every fault can ever slip</h2>
 
   <p>
@@ -118,6 +218,31 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     prediction by 99.3&nbsp;%. So the ceiling is real, interaction does not
     lift it, and the answer to whether everything eventually slips is no by
     roughly half.
+  </p>
+
+  <p>
+    <b>The active set is nested in <i>&mu;</i>, but nothing about it is
+    linear.</b> Raising friction can only shrink the screened set, by
+    construction. With interaction it need not: LCP monotonicity requires
+    <b>A</b> to be a <i>Z</i>-matrix &mdash; every off-diagonal coupling
+    promoting &mdash; and the dislocation kernel has shadowing lobes too, with
+    only 44&nbsp;% of pairs satisfying the condition here. So an element held
+    locked at low <i>&mu;</i> by a neighbour's stress shadow could in
+    principle be freed at high <i>&mu;</i> when that neighbour stops slipping.
+    Measured across <i>&mu;</i>&nbsp;=&nbsp;0.40 to 0.80, that escape is
+    <i>never taken</i>: zero violations of nesting, at every adjacent pair and
+    across the full range. The theorem does not apply and the conclusion holds
+    anyway.
+  </p>
+
+  <p>
+    What is emphatically not linear is how many slip. The active count falls
+    15,505&nbsp;&rarr;&nbsp;8,293 over that range in steps of
+    752, 2148, 789, 993, 1036, 803, 279, 412 &mdash; the largest step is
+    nearly eight times the smallest. The same power-law fault sizes that make
+    the locked fraction a staircase make its derivative in <i>&mu;</i> jump
+    around: faults switch off in lumps of their own size, not one element at a
+    time.
   </p>
 
   <p>

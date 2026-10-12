@@ -9,10 +9,21 @@ THE MODEL IS STICK-SLIP WITH RE-LOCKING, and the two alternatives were both
 tried and both fail for stated reasons.
 
 * ONE friction coefficient and no weakening gives slip CONTINUOUS in the load.
-  An element reaching ``F = 0`` starts slipping at zero rate, so no event has a
-  finite size and there are no avalanches to count. The first version of this
-  module did exactly that: it advanced the load to the first failure and then
-  relaxed zero slip, forever.
+  Friction that does not weaken cannot go unstable: a patch unloads itself at
+  stiffness ``k = |P_ii|`` and instability needs ``k < |dtau/ddelta|``, which
+  is 0 for Coulomb, so the inequality fails at every size and stress. Past
+  failure, equilibrium pins traction to strength and slip follows
+  ``delta = (lam d - g)/|P_ii|`` -- growing from ZERO SLIP at a FINITE rate
+  ``d/|P_ii|``. (An earlier version of this note said "at zero rate", which is
+  wrong: it is the slip AMOUNT at onset that vanishes, and hence the event
+  size, not the rate.) The first version of this module demonstrated it by
+  advancing the load to the first failure and then relaxing zero slip forever.
+
+  THAT IS NOT A DEFECT OF THE STATIC PROBLEM, only of asking it for events.
+  At one load the single-coefficient problem is an LCP with a UNIQUE solution,
+  which is what ``static.py`` solves and what this study's active-set claims
+  now rest on. The two static solutions bracket this module's whole loading
+  history exactly.
 * TWO coefficients but with failed elements left at yield means those elements
   must CREEP as the load rises to stay there. Slip is then not constant between
   events, so the load at which the next element fails is no longer available in
@@ -229,6 +240,10 @@ def equilibrium_residual(state: State, d: np.ndarray,
     return float((state.shear(d) - g_s).max())
 
 
+# THE STATIC SOLUTION LIVES IN ``static.py``, not here. At one load the
+# problem is an LCP with a unique solution and needs no strength drop at all;
+# this module is the loading HISTORY, which needs one because a finite jump
+# does. The two answer different questions and the static one is primary.
 
 
 def run_history(net, fric, P, *, shear_modulus: float = 30.0,

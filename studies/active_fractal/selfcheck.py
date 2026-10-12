@@ -38,6 +38,7 @@ import friction as Fr                                        # noqa: E402
 import kernel as Kmod                                        # noqa: E402
 import measure as M                                          # noqa: E402
 import network as N                                          # noqa: E402
+import static as St                                          # noqa: E402
 
 CHECKS: list[tuple[str, bool, str]] = []
 
@@ -471,6 +472,80 @@ def c_load() -> None:
                f"{int(ok.sum())} fail, {int(locked.sum())} never")
 
 
+def c_static() -> None:
+    """The static solve: unique by theorem, and checked against that.
+
+    "Which faults slip under this stress field" is a Linear Complementarity
+    Problem with a P-matrix, so it has exactly one solution and needs no
+    strength drop, no loading path and no update rule. These checks pin that
+    the implementation finds THE solution rather than A fixed point.
+    """
+    print("\n[static] the LCP solution at one load")
+    rng = np.random.default_rng(0)
+    n = 60
+    # A random P with negative diagonal and PD negative symmetric part: the
+    # structure kernel.project produces, without needing an assembly.
+    B = rng.normal(size=(n, n)) * 0.05
+    P = -(np.eye(n) * 1.0 + B @ B.T * 0.1)
+    ev = float(np.linalg.eigvalsh(-0.5 * (P + P.T)).min())
+    check("test operator has PD symmetric part", ev, 0.1, below=False)
+
+    d = np.abs(rng.normal(1.0, 0.3, n))
+    g = np.abs(rng.normal(1.0, 0.2, n))
+    lam_lo = 0.5 * float((g / d).min())
+    lam_hi = 3.0 * float((g / d).min())
+
+    # [a] Below the first failure NOTHING slips, and exactly zero rather than
+    # merely small.
+    lo = St.solve(P, d, g, lam_lo)
+    check_true("no slip below the first failure load",
+               lo.converged and float(np.abs(lo.delta).max()) == 0.0,
+               f"max slip {np.abs(lo.delta).max():.3e}")
+
+    # [b] Complementarity: locked and below strength, or slipping and AT it.
+    hi = St.solve(P, d, g, lam_hi)
+    F = lam_hi * d + P.T @ hi.delta - g
+    check_true("converged", hi.converged,
+               f"{hi.sweeps} sweeps, residual {hi.residual:.2e}")
+    check("no element exceeds its strength", float(F.max()), 1e-8)
+    check("slip is non-negative", float(-hi.delta.min()), 1e-12)
+    check("slipping elements sit exactly at strength",
+          float(np.abs(F[hi.active]).max()) if hi.active.any() else 0.0, 1e-8)
+
+    # [c] UNIQUENESS, which is the whole claim: permuting the problem must
+    # permute the solution and change nothing else.
+    pi = rng.permutation(n)
+    inv = np.argsort(pi)
+    pm = St.solve(P[np.ix_(pi, pi)], d[pi], g[pi], lam_hi)
+    check("a permuted problem gives the permuted solution",
+          float(np.abs(pm.delta[inv] - hi.delta).max()), 1e-7)
+
+    # [d] A WARM START cannot change the answer, only the sweep count. If it
+    # ever does, the solve is finding a fixed point rather than the solution.
+    warm = St.solve(P, d, g, lam_hi, warm=hi.delta * 0.5 + 0.01)
+    check("a warm start reaches the same solution",
+          float(np.abs(warm.delta - hi.delta).max()), 1e-7)
+    check_true("warm start is cheaper", warm.sweeps <= hi.sweeps,
+               f"{warm.sweeps} sweeps vs {hi.sweeps} cold")
+
+    # [e] `include` must mean ABSENT, not merely zero: a subnetwork's answer
+    # has to equal the answer for that submatrix solved on its own.
+    keep = np.zeros(n, bool)
+    keep[rng.choice(n, n // 2, replace=False)] = True
+    sub = St.solve(P, d, g, lam_hi, include=keep)
+    k = np.flatnonzero(keep)
+    alone = St.solve(P[np.ix_(k, k)], d[k], g[k], lam_hi)
+    check("a masked subnetwork equals the standalone submatrix",
+          float(np.abs(sub.delta[keep] - alone.delta).max()), 1e-7)
+    check_true("masked-out elements carry exactly zero slip",
+               float(np.abs(sub.delta[~keep]).max()) == 0.0, "exactly 0")
+
+    # [f] One element has a closed form: it slips exactly back to strength.
+    one = St.solve(np.array([[-2.0]]), np.array([1.0]), np.array([1.0]), 3.0)
+    check("one element matches the closed form",
+          abs(float(one.delta[0]) - (3.0 - 1.0) / 2.0), 1e-12)
+
+
 def c_slip() -> None:
     """The quasi-static cascade: equilibrium, finiteness, and rule robustness."""
     print("\n[slip] quasi-static Coulomb loading")
@@ -693,8 +768,8 @@ def c_cloud() -> None:
 
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,
-           "kernel": c_kernel, "load": c_load, "slip": c_slip,
-           "align": c_align, "cloud": c_cloud}
+           "kernel": c_kernel, "load": c_load, "static": c_static,
+           "slip": c_slip, "align": c_align, "cloud": c_cloud}
 
 
 def main() -> bool:
