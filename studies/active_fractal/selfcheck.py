@@ -914,6 +914,86 @@ def c_crack() -> None:
                float(dsep.min()) > 0.9,
                f"min separation {dsep.min():.3f} h, adjacency 0.577 h")
 
+    # (v) WHY A CRACK KINKS AT ALL, which is a SYMMETRY and its breaking. At
+    # sigma_n = 0 with no friction the kink gain is EVEN in theta, because
+    # sigma changes sign on reflection through the crack plane and E goes as
+    # sigma^2 -- that evenness is the whole content of 75334ee's planar front,
+    # and it makes theta* = 0 a consequence of the loading rather than of the
+    # elasticity. Coulomb breaks it: sigma_n(theta) = sigma_c - d_tau sin
+    # 2theta carries an ODD part, so mu_f sigma_n is odd and the gain is not
+    # symmetric. The growth path follows -- the crack turns once, to 17.26
+    # degrees against the Coulomb prediction of 16.60, and is planar after.
+    # The path costs 200 solves and is not gateable; this mechanism is four.
+    arc1 = Gr.coherent_arc(fr3, toward, width=1)
+    e_on = np.ones(trk.shape[0], bool)
+
+    def kink_gain(theta_deg, mu_f, sig_c):
+        sg = sig3 - sig_c * np.eye(3)
+        cand = Gr.kink_candidates(fr3, math.radians(theta_deg), which=arc1)
+
+        def coupled(t):
+            tq, sn = Fr.resolve_tensor(t, sg)
+            mg = np.linalg.norm(tq, axis=1)
+            sd = tq / np.maximum(mg, 1e-300)[:, None]
+            sm = Kmod.to_source_major(mhs.interaction_matrix(
+                tris=t, material=mhs.Material(mu=mu_, lam=lam_), eps=0.1 * hk,
+                receiver=Kmod.RECEIVER, source=Kmod.SOURCE, obs_tris=t))
+            return (Kmod.project(sm, sd, sd) + mu_f * Kmod.project_normal(
+                sm, sd), mg, mu_f * sn)
+
+        ar = 0.5 * np.linalg.norm(np.cross(trk[:, 1] - trk[:, 0],
+                                           trk[:, 2] - trk[:, 0]), axis=1)
+        P0, m0, g0_ = coupled(trk)
+        s0 = Gr._converged(P0, m0, g0_, e_on, None, St.MAX_SWEEPS)
+        E0 = St.released_energy(P0, s0.delta, ar)
+        big = np.concatenate([trk, cand])
+        P1, m1, g1 = coupled(big)
+        a1 = 0.5 * np.linalg.norm(np.cross(big[:, 1] - big[:, 0],
+                                           big[:, 2] - big[:, 0]), axis=1)
+        s1 = Gr._converged(P1, m1, g1, np.ones(big.shape[0], bool),
+                           np.concatenate([s0.delta,
+                                           np.zeros(cand.shape[0])]),
+                           St.MAX_SWEEPS)
+        return ((St.released_energy(P1, s1.delta, a1) - E0)
+                / a1[trk.shape[0]:].sum())
+
+    gp, gm = kink_gain(+10.0, 0.0, 0.0), kink_gain(-10.0, 0.0, 0.0)
+    # THE EVENNESS MUST NOT BE 0 == 0, which is how this clause could pass
+    # while measuring nothing at all: two locked candidates agree perfectly.
+    check_true("on frictionless gains that are actually there",
+               min(gp, gm) > 1e-10, f"gains {gp:.4e} and {gm:.4e}")
+    check("frictionless, the kink gain is EVEN in theta",
+          abs(gp - gm) / abs(gp), 1e-6)
+    # WITH COULOMB THE POSITIVE TILT TAKES NO SLIP HERE, so the asymmetry
+    # saturates at 1.0000. That is the symmetry breaking in its strongest form,
+    # and the part worth recording is that it CANNOT BE PREDICTED FROM THE
+    # REMOTE STRESS: against sigma alone both tilts are admissible, at a
+    # driving-force ratio of 3.05, and it is the PARENT's own slip -- through
+    # the coupled sigma_n -- that clamps the positive one to zero. A first
+    # version of this clause tried to force a graded comparison by lowering
+    # sigma_c, which instead drove the positive gain NEGATIVE (-3.1e-08 at
+    # 0.2 d_tau): growth there costs energy rather than releasing it, so the
+    # ratio test it was built on stopped meaning anything. Only the solve
+    # decides, which is why this clause solves rather than resolving a traction.
+    fp, fm = kink_gain(+10.0, 0.6, dtau), kink_gain(-10.0, 0.6, dtau)
+    check_true("Coulomb breaks that evenness",
+               abs(fp - fm) / max(abs(fp), abs(fm)) > 0.2,
+               f"asymmetry {abs(fp - fm) / max(abs(fp), abs(fm)):.4f} "
+               f"against {abs(gp - gm) / abs(gp):.2e} frictionless")
+    # AND IN THE DIRECTION THAT UNCLAMPS, not merely in some direction: the
+    # favoured tilt must be the one whose own sigma_n is lower, or the
+    # asymmetry would be a sign convention rather than friction.
+    sn_hi = Fr.resolve_tensor(
+        Gr.kink_candidates(fr3, math.radians(+10.0), which=arc1),
+        sig3 - dtau * np.eye(3))[1][0]
+    sn_lo = Fr.resolve_tensor(
+        Gr.kink_candidates(fr3, math.radians(-10.0), which=arc1),
+        sig3 - dtau * np.eye(3))[1][0]
+    check_true("and favours the tilt that unclamps",
+               (fp > fm) == (sn_hi < sn_lo),
+               f"gain {'+' if fp > fm else '-'}10 larger, sigma_n "
+               f"{float(sn_hi):+.5f} vs {float(sn_lo):+.5f}")
+
     # THE SIGN, which no discretization produces on its own: more energy is
     # released growing ALONG slip than across it, whenever nu > 0.
     check_true("dE/dA is larger along slip than across it (c < 1)",
