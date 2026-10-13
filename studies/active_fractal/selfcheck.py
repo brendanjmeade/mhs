@@ -1406,6 +1406,91 @@ def c_static() -> None:
                r_ext > r_con,
                f"{r_ext:.4f} extensional against {r_con:.4f} contractional")
 
+    # ---- the remote load relaxing as slip accumulates ---------------------
+    # EVERY RESULT BEFORE THIS ONE HELD THE REMOTE STRESS FIXED, so a crack's
+    # slip never reduced what drove it and G grew without bound with length:
+    # a disc's front beats the same patch in the far field by 4.67, 9.34 and
+    # 13.42 at radii 3, 6, 9 h, linear in L. `load_feedback` makes the
+    # reservoir finite. Its properties are closed form, so they are gated as
+    # identities and not as tolerances to be tuned.
+    print("       [load] the remote load relaxing as slip accumulates")
+    mu_l, dtau_l = 30.0, 0.01
+    trl = N.disc_mesh(0.30, 0.075, depth=-20.0)
+    sigl = dtau_l * (np.outer([1.0, 0, 0], [0, 0, 1.0])
+                     + np.outer([0, 0, 1.0], [1.0, 0, 0]))
+    taul, _ = Fr.resolve_tensor(trl, sigl)
+    sdl = taul / np.maximum(np.linalg.norm(taul, axis=1), 1e-300)[:, None]
+    sxyz = Fr.slip_cartesian(trl, sdl, np.ones(trl.shape[0]))
+    nrml = mhs.tdcs.unit_normals(trl)
+    arl = 0.5 * np.linalg.norm(np.cross(trl[:, 1] - trl[:, 0],
+                                        trl[:, 2] - trl[:, 0]), axis=1)
+    vol = 1.0
+    dP, dN = St.load_feedback(sxyz, nrml, arl, mu=mu_l, volume=vol)
+
+    # C : m = 2 mu m holds ONLY because slip is tangential and m traceless.
+    # A normal component would leave the lambda term alive and the operator
+    # silently wrong, so this is checked and not assumed.
+    check("slip is tangential, so m is traceless",
+          float(np.abs((sxyz * nrml).sum(axis=1)).max()), 1e-12)
+    # The self term has a closed form: m : m = 1/2 for a unit tangential slip.
+    check("the self term is exactly -mu A / V",
+          float(np.abs(np.diag(dP) / (-mu_l * arl / vol) - 1.0).max()),
+          1e-12)
+    # Tangential slip induces no normal stress on its own plane, so dN's
+    # diagonal must vanish identically -- the same fact that keeps the
+    # coplanar coupling term at 8e-24 above.
+    check("tangential slip clamps nothing on its own plane",
+          float(np.abs(np.diag(dN)).max()), 1e-18)
+    # dP/A symmetric is what makes the energy a quadratic form at all.
+    qa = dP / arl[:, None]
+    check("dP / A is symmetric", float(np.abs(qa - qa.T).max()), 1e-12)
+    # AND THE ENERGY IT ADDS IS THE ELASTIC ENERGY OF THE AVERAGE STRAIN,
+    # (mu/V) |sum_i A_i d_i m_i|^2, which is the derivation in one line.
+    rngl = np.random.default_rng(5)
+    dl = rngl.random(trl.shape[0])
+    mten = np.zeros((3, 3))
+    for i in range(trl.shape[0]):
+        mten += arl[i] * dl[i] * 0.5 * (np.outer(sxyz[i], nrml[i])
+                                        + np.outer(nrml[i], sxyz[i]))
+    check("the energy it adds is (mu/V) |sum A d m|^2",
+          abs(float(-0.5 * (arl * (dP.T @ dl) * dl).sum())
+              / (mu_l / vol * float((mten * mten).sum())) - 1.0), 1e-12)
+    # THE CORRECTION MUST NOT BREAK THE LCP: -dP/A positive semidefinite keeps
+    # `solve`'s uniqueness argument intact rather than merely probably intact.
+    check_true("it leaves -P more definite, not less",
+               float(np.linalg.eigvalsh(0.5 * (-qa - qa.T)).min()) > -1e-9,
+               f"min eig {np.linalg.eigvalsh(0.5 * (-qa - qa.T)).min():+.3e}")
+    # THE RANK IS AT MOST 5 -- the m span the traceless symmetrics -- and a
+    # PLANAR crack realises 1, since every element shares one m. Both ends are
+    # checked because the bound alone would pass on an operator that is
+    # accidentally zero. The mixed set below reaches 4 rather than 5: one
+    # theta through `kink_candidates` rotates each edge about its OWN signed
+    # axis and so yields several normals, not two, but not enough of them to
+    # span the whole traceless space. 60 isotropically oriented cells do reach
+    # 5, measured, which is what shows the bound is the real one.
+    rk = np.linalg.matrix_rank(dP, tol=1e-9 * float(np.abs(dP).max()))
+    check_true("a planar crack's feedback is rank 1", rk == 1, f"rank {rk}")
+    mix = np.concatenate([trl, Gr.kink_candidates(
+        Gr.front_edges(trl, np.ones(trl.shape[0], bool)), math.radians(35.0))])
+    tm, _ = Fr.resolve_tensor(mix, sigl)
+    sdm = tm / np.maximum(np.linalg.norm(tm, axis=1), 1e-300)[:, None]
+    am = 0.5 * np.linalg.norm(np.cross(mix[:, 1] - mix[:, 0],
+                                       mix[:, 2] - mix[:, 0]), axis=1)
+    dPm, _ = St.load_feedback(
+        Fr.slip_cartesian(mix, sdm, np.ones(mix.shape[0])),
+        mhs.tdcs.unit_normals(mix), am, mu=mu_l, volume=vol)
+    rkm = np.linalg.matrix_rank(dPm, tol=1e-9 * float(np.abs(dPm).max()))
+    check_true("mixed orientations raise the rank, within the bound",
+               1 < rkm <= 5,
+               f"rank {rkm} on {mix.shape[0]} elements, bound 5")
+    # AND IT VANISHES AS 1/V EXACTLY, which is the statement that the
+    # infinite reservoir of every earlier commit is this operator's own limit
+    # and not a separate code path. Gated as the identity rather than as "it
+    # gets small at some large V", which would pass on any decaying error.
+    ten, _ = St.load_feedback(sxyz, nrml, arl, mu=mu_l, volume=10.0 * vol)
+    check("the feedback scales exactly as 1 / V",
+          float(np.abs(ten * 10.0 / dP - 1.0).max()), 1e-15)
+
 
 def c_spectrum() -> None:
     """Soft modes: the limits are known, so they are checked rather than eyeballed.

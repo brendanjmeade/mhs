@@ -283,6 +283,65 @@ def coulomb_coupled(P: np.ndarray, Nrm: np.ndarray, fric):
             fric.strength())
 
 
+def load_feedback(slip_xyz: np.ndarray, normals: np.ndarray,
+                  areas: np.ndarray, *, mu: float,
+                  volume: float) -> tuple[np.ndarray, np.ndarray]:
+    """``(dP, dN)``: the remote load relaxing as slip accumulates.
+
+    EVERY RESULT OF THIS STUDY SO FAR ASSUMES AN INFINITE RESERVOIR. The
+    remote stress is a fixed tensor, so a crack's own slip never reduces what
+    drives it, and the energy release rate grows without bound with length:
+    measured, the gain at a disc's front beats the same patch in the far field
+    by 4.67, 9.34 and 13.42 at radii 3, 6 and 9 h -- linear in length, because
+    ``G ~ d_tau^2 L / mu`` while an isolated patch is fixed forever. The
+    largest crack therefore wins by a widening margin and NOTHING ELSE CAN
+    EVER START. That is a statement about the boundary condition, not about
+    rock, and this function is the boundary condition made finite.
+
+    Hold the far-field STRAIN fixed over a volume ``V`` instead of the stress.
+    The slip's average inelastic strain is ``eps_p = (1/V) sum_i A_i d_i m_i``
+    with ``m_i = sym(s_i (x) n_i)``, the stress falls by ``C : eps_p``, and
+    resolving that back onto each element gives a correction that is LINEAR in
+    slip -- so the problem stays an LCP and every caller is unchanged.
+
+    ``C : m = 2 mu m`` EXACTLY, with no stiffness tensor anywhere, because
+    slip is tangential and so ``tr(m) = s . n = 0``. The lambda term of an
+    isotropic ``C`` multiplies that trace and vanishes. The caller's slip
+    directions must therefore be tangential, which the gate checks rather than
+    trusts: a normal component would silently make the 2 mu wrong.
+
+        dP[i, j] = -(2 mu A_i / V) (m_i : m_j)
+        dN[i, j] = -(2 mu A_i / V) (m_i : n_j (x) n_j)
+
+    with ``m_i : m_j = ((s_i.s_j)(n_i.n_j) + (s_i.n_j)(n_i.s_j)) / 2`` and
+    ``m_i : n_j (x) n_j = (n_j.s_i)(n_j.n_i)``, so the whole thing is four
+    Gram matrices. ``dN`` is TENSION POSITIVE to match
+    :func:`kernel.project_normal`, so ``coulomb_coupled`` composes it with the
+    same plus sign and nothing about the convention changes.
+
+    THE RANK IS AT MOST 5, not 6: the ``m_i`` span the traceless symmetric
+    tensors. So this is a small correction to a dense operator however many
+    elements there are, and the single-element case has a closed form the gate
+    uses -- ``dP = -mu A / V``, since ``m : m = 1/2`` for a unit tangential
+    slip.
+
+    ``V -> inf`` RECOVERS THE INFINITE RESERVOIR EXACTLY, which is the free
+    gate: it is the model every earlier commit measured, so the correction
+    must vanish and not merely become small.
+    """
+    s = np.asarray(slip_xyz, float)
+    n = np.asarray(normals, float)
+    a = np.asarray(areas, float)
+    if not np.isfinite(volume) or volume <= 0.0:
+        raise ValueError(f"volume must be finite and positive, got {volume!r}")
+    ss, nn = s @ s.T, n @ n.T
+    sn = s @ n.T                       # sn[i, j] = s_i . n_j
+    gm = 0.5 * (ss * nn + sn * sn.T)   # m_i : m_j
+    hm = sn * nn                       # m_i : n_j (x) n_j = (n_j.s_i)(n_j.n_i)
+    k = -2.0 * mu / volume * a[:, None]
+    return k * gm, k * hm
+
+
 def critically_stressed(fric, lam: float,
                         include: np.ndarray | None = None) -> np.ndarray:
     """The no-interaction null: elements failing under the FAR FIELD alone.
