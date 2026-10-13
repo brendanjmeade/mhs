@@ -230,6 +230,66 @@ def resolve_tensor(tris: np.ndarray,
     return tau, -np.einsum("si,si->s", t, n_hat)
 
 
+def slip_cartesian(tris: np.ndarray, slip_dir: np.ndarray,
+                   slip: np.ndarray) -> np.ndarray:
+    """``(n, 3)`` slip as a Cartesian vector, from ``(strike, dip)`` parts.
+
+    The inverse of what :func:`resolve_tensor` does to a traction, and needed
+    wherever a solved slip has to leave the per-element frame -- evaluating
+    the field it radiates, for instance.
+    """
+    frame = tdcs.slip_frame(np.asarray(tris, float).reshape(-1, 3, 3))
+    d = np.asarray(slip, float)[:, None]
+    sd = np.asarray(slip_dir, float)
+    return d * (sd[:, 0:1] * frame[:, 0, :] + sd[:, 1:2] * frame[:, 1, :])
+
+
+def induced_normal_stress(tris: np.ndarray, slip_xyz: np.ndarray,
+                          points: np.ndarray, normal, material,
+                          eps: float) -> np.ndarray:
+    """Slip-induced ``sigma_n`` at ``points``, on planes of given ``normal``.
+
+    COMPRESSION POSITIVE, matching :func:`resolve_tensor` rather than the
+    kernel's tension-positive traction row, and built from
+    ``mhs.stress_matrix`` so it cannot inherit the convention of whatever is
+    being tested with it. ``slip_xyz`` is an explicit Cartesian slip vector
+    per element -- see :func:`slip_cartesian` -- so no frame convention
+    enters here either.
+
+    THIS EXISTS SO HANDEDNESS IS NEVER ENCODED. Left and right stepping are a
+    chirality, and mapping a rotated geometry onto the classical map view by
+    hand is the kind of sign bookkeeping that has gone wrong twice in this
+    work. EXTENSIONAL against CONTRACTIONAL is frame independent -- it is the
+    sign of this quantity in the step BETWEEN two cracks -- so a caller labels
+    a configuration by MEASURING it, and the label cannot drift.
+
+    WHAT IT SETTLED. Which stepping sense is extensional DEPENDS ON THE
+    OFFSET: the step's own sigma_n changes sign as the offset grows, crossing
+    zero near dz/a = 0.27 at a centre separation of 2.2 a. So the reversal in
+    the linkage asymmetry is largely a RELABELLING rather than a change of
+    physics, and Segall & Pollard's relation -- the extensional step unclamps
+    and facilitates -- holds on both sides of it wherever the effect is
+    appreciable, meaning every offset whose asymmetry exceeds 5 %.
+
+    IT IS NOT QUITE EXACT, which is recorded rather than smoothed over. The
+    two zero crossings do not coincide: the step's sigma_n turns over near
+    dz/a = 0.27 and the asymmetry near 0.34, leaving a narrow window where the
+    CONTRACTIONAL step is nominally favoured, by 0.2 to 2.6 %. Whether that
+    window is real is UNRESOLVED -- its width, 0.07 in dz/a, is comparable to
+    the uncertainty in the asymmetry's own crossing, which shifts by about
+    0.05 when the measuring arc is widened.
+    """
+    import mhs                                                # noqa: PLC0415
+    tri = np.asarray(tris, float).reshape(-1, 3, 3)
+    nh = np.asarray(normal, float)
+    nh = nh / np.linalg.norm(nh)
+    S = mhs.stress_matrix(np.asarray(points, float).reshape(-1, 3), tri,
+                          material, eps)
+    sig = np.einsum("omnsk,sk->omn", S, np.asarray(slip_xyz, float))
+    del S
+    return -np.einsum("om,m->o", np.einsum("omn,n->om", sig, nh), nh)
+
+
 @dataclasses.dataclass(frozen=True)
 class Friction:
     """Per-element strength and the resolved regional load.

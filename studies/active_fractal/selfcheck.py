@@ -1169,6 +1169,57 @@ def c_static() -> None:
                    em > 0.0 and float(Pe.diagonal().max()) < 0.0,
                    f"min eig {em:+.4f}, max diag {Pe.diagonal().max():+.3e}")
 
+    # WHICH STEP IS EXTENSIONAL IS MEASURED, NEVER NAMED. Left and right
+    # stepping are a chirality, so the labelling is read off the step's own
+    # induced sigma_n instead of mapped onto the classical map view by hand.
+    # Two facts have to hold or the labelling means nothing: the two senses
+    # must be OPPOSITE at a given offset (the mirror symmetry again), and the
+    # sign must FLIP with offset -- which is why the linkage asymmetry's
+    # reversal is largely a relabelling rather than a change of physics.
+    print("       [steps] which step is extensional, measured not named")
+    gap_s = 2.2 * ac_
+    matl_s = mhs.Material(mu=mu_c, lam=mu_c)
+
+    def step_sign(dz):
+        t = np.concatenate([base, base.copy()])
+        t[base.shape[0]:, :, 0] += gap_s
+        t[base.shape[0]:, :, 2] += dz
+        tq, sn_s = Fr.resolve_tensor(t, sg - 0.01 * np.eye(3))
+        mg = np.linalg.norm(tq, axis=1)
+        sdl = tq / np.maximum(mg, 1e-300)[:, None]
+        rw = mhs.interaction_matrix(
+            tris=t, material=matl_s, eps=0.1 * hc, receiver=Kmod.RECEIVER,
+            source=Kmod.SOURCE, obs_tris=t)
+        smj = Kmod.to_source_major(rw)
+        Pl = Kmod.project(smj, sdl, sdl) + 0.6 * Kmod.project_normal(smj, sdl)
+        del rw, smj
+        so = St.solve(Pl, mg, 0.6 * sn_s, 1.0, max_sweeps=20000)
+        del Pl
+        # a grid in the gap BETWEEN the facing tips
+        xs = np.linspace(ac_ + 0.15 * (gap_s - 2 * ac_),
+                         gap_s - ac_ - 0.15 * (gap_s - 2 * ac_), 4)
+        zs = (np.linspace(0.25 * dz, 0.75 * dz, 4) if abs(dz) > 1e-9
+              else np.zeros(1))
+        X, Y, Z = np.meshgrid(xs, np.linspace(-0.2 * ac_, 0.2 * ac_, 4),
+                              zs, indexing="ij")
+        pts = np.stack([X.ravel(), Y.ravel(), -20.0 + Z.ravel()], axis=1)
+        return float(Fr.induced_normal_stress(
+            t, Fr.slip_cartesian(t, sdl, so.delta), pts,
+            [0.0, 0.0, 1.0], matl_s, 0.1 * hc).mean())
+
+    near, far = 0.18 * ac_, 0.60 * ac_        # straddling the crossing
+    s_np, s_nm = step_sign(+near), step_sign(-near)
+    s_fp, s_fm = step_sign(+far), step_sign(-far)
+    print(f"         dz/a 0.18: {s_np:+.3e} / {s_nm:+.3e}   "
+          f"dz/a 0.60: {s_fp:+.3e} / {s_fm:+.3e}")
+    check("the two senses' step stress is equal and opposite (near)",
+          abs(s_np + s_nm) / max(abs(s_np), 1e-300), 0.05)
+    check("the two senses' step stress is equal and opposite (far)",
+          abs(s_fp + s_fm) / max(abs(s_fp), 1e-300), 0.05)
+    check_true("the step's own sigma_n FLIPS sign with offset",
+               s_np * s_fp < 0.0,
+               f"{s_np:+.3e} at dz/a 0.18 against {s_fp:+.3e} at 0.60")
+
 
 def c_spectrum() -> None:
     """Soft modes: the limits are known, so they are checked rather than eyeballed.
