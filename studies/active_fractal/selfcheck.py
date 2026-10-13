@@ -858,6 +858,62 @@ def c_crack() -> None:
         check_true(f"kinked cells at {th:.0f} deg relieve their own shear",
                    float(dg.max()) < 0.0, f"worst diagonal {dg.max():+.4e}")
 
+    # (iv) AN ARC MUST TURN AS ONE PIECE, and the quantity that says so is the
+    # KINKED NORMAL, not the tangent. `coherent_arc` groups by the SIGNED edge
+    # axis because |t_i . t_j| = 1 admits antiparallel partners that tilt the
+    # opposite way under one theta. Both halves are gated: the selection is
+    # exact, and the naive alternative is MEASURABLY worse, so dropping the
+    # sign cannot pass quietly.
+    toward = np.array([-1.0, 0.0, 0.0])
+    arc = Gr.coherent_arc(fr3, toward, width=7)
+    axk = fr3.edge[:, 1] - fr3.edge[:, 0]
+    axk = axk / np.linalg.norm(axk, axis=1, keepdims=True)
+    mk = 0.5 * (fr3.edge[:, 0] + fr3.edge[:, 1])
+
+    def normals(idx, th):
+        return mhs.tdcs.unit_normals(
+            Gr.kink_candidates(fr3, math.radians(th), which=idx))
+
+    # The normals are compared as VECTORS, not as an angle: they agree to
+    # 1.4e-16 componentwise, and `arccos` near 1 turns that into 1.2e-6
+    # degrees, which would make a float-precision check look like a tolerance
+    # to be loosened.
+    worst = max(float(np.abs(normals(arc, th) - normals(arc, th)[0]).max())
+                for th in (10.0, 30.0, 45.0))
+    check("a coherent arc's kinked normals agree", worst, 1e-14)
+    # AND THE FAILURE MODE HAS A CLOSED FORM, so the signed criterion is gated
+    # by an identity rather than by a threshold: an ANTIPARALLEL partner
+    # rotates about the reversed axis, so one theta tilts the two cells
+    # opposite ways and their normals differ by exactly 2 theta. That is the
+    # 60 degrees an unsigned tangent family shows at theta = 30, and the whole
+    # reason `coherent_arc` groups by the signed axis.
+    anti = np.flatnonzero(axk @ axk[arc[0]] < -1.0 + 1e-9)
+    check_true("the front has an antiparallel partner to separate",
+               anti.size > 0, f"{anti.size} of {fr3.cell.size} edges")
+    worst_anti = 0.0
+    for th in (10.0, 30.0):
+        nk = normals(np.array([arc[0], anti[0]]), th)
+        got = math.degrees(math.acos(float(np.clip(nk[0] @ nk[1], -1.0, 1.0))))
+        worst_anti = max(worst_anti, abs(got - 2.0 * th))
+    check("an antiparallel partner's normals differ by exactly 2 theta",
+          worst_anti, 1e-9)
+    # Every selected edge must actually advance toward the target, or "the
+    # facing tip" is a position with no direction attached.
+    outk = fr3.edge[:, 0] + fr3.edge[:, 1] - fr3.apex - mk
+    outk = outk / np.linalg.norm(outk, axis=1, keepdims=True)
+    check_true("every arc edge advances toward the target",
+               float((outk[arc] @ toward).min()) > 0.0,
+               f"worst {float((outk[arc] @ toward).min()):+.4f}")
+    # AND THE PRICE IS RECORDED: coherence excludes adjacency on this tiling,
+    # so the arc is co-oriented flakes and not a flap. An experiment wanting a
+    # turning front has to say so rather than inherit the word from "arc".
+    ck = Gr.kink_candidates(fr3, 0.0, which=arc).mean(axis=1)
+    dsep = np.linalg.norm(ck[:, None, :] - ck[None, :, :], axis=2) / hk
+    np.fill_diagonal(dsep, np.inf)
+    check_true("a coherent arc is NOT edge-adjacent",
+               float(dsep.min()) > 0.9,
+               f"min separation {dsep.min():.3f} h, adjacency 0.577 h")
+
     # THE SIGN, which no discretization produces on its own: more energy is
     # released growing ALONG slip than across it, whenever nu > 0.
     check_true("dE/dA is larger along slip than across it (c < 1)",

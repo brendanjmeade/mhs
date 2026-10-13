@@ -531,6 +531,58 @@ def kink_candidates(front: Front, theta: float,
     return np.stack([v1, v0, m + rot], axis=1)
 
 
+def coherent_arc(front: Front, toward: np.ndarray, *, width: int,
+                 tol: float = 1e-9) -> np.ndarray:
+    """Front edges that advance along ``toward`` AND kink as one piece.
+
+    THE CRITERION IS THE KINKED NORMAL, NOT THE TANGENT, and the difference is
+    the whole function. Selecting edges whose tangents are near parallel looks
+    right and is not: ``|t_i . t_j| = 1`` admits ANTIPARALLEL partners, the
+    rotation axis in :func:`kink_candidates` is the SIGNED edge ``v0 -> v1``,
+    and an antiparallel partner therefore tilts the opposite way under the
+    same ``theta``. Measured on a disc front: an unsigned family has 0.0
+    degrees of tangent spread and 60.0 degrees of kinked-normal spread, which
+    is WORSE than the 29.0 degrees of a naive nearest-first selection whose
+    two families partly cancel. Grouping by the signed axis gives 0.0 at every
+    ``theta``, so one ``theta`` is one coherent turn.
+
+    COHERENCE COSTS ADJACENCY ON THIS TILING, a property of the formulation
+    and not a defect to tune away. Adjacent cells traverse their shared edge
+    in OPPOSITE directions -- the same fact that fixes the ``(v1, v0, q)``
+    winding above -- so a contiguous arc necessarily mixes two signed families
+    and cannot turn as one. A coherent family's candidates sit 1.000 h apart
+    where edge adjacency is 0.577 h: co-oriented flakes, not a flap. An
+    experiment needing a coherent turn therefore reports ``width = 1`` beside
+    a wider disjoint arc rather than claiming a turning front, and the
+    one-cell bias of 7430beb has to be cancelled by a control rather than by
+    the arc width.
+
+    IT DOES NOT REPLACE :func:`arc_patch`, which stays right for what it does.
+    In-plane ranking needs a CONTIGUOUS row, because its "width" is an
+    along-front extent and nothing is tilted, so coherence does not arise.
+    Kinking needs a coherent set and cannot have contiguity. Two arc notions
+    because there are two questions, not one convention written twice.
+
+    Two criteria and no weight between them: an edge must advance toward
+    ``toward`` at all (its planar continuation's outward direction has a
+    positive component along it, which excludes the perpendicular families
+    exactly), and among those the nearest to the target come first.
+    """
+    ax = front.edge[:, 1] - front.edge[:, 0]
+    ax = ax / np.linalg.norm(ax, axis=1, keepdims=True)
+    m = 0.5 * (front.edge[:, 0] + front.edge[:, 1])
+    out = front.edge[:, 0] + front.edge[:, 1] - front.apex - m
+    out = out / np.linalg.norm(out, axis=1, keepdims=True)
+    t = np.asarray(toward, float)
+    t = t / np.linalg.norm(t)
+    forward = np.flatnonzero(out @ t > tol)
+    if forward.size == 0:
+        raise ValueError("no front edge advances toward the given direction")
+    rank = forward[np.argsort(-(m[forward] @ t), kind="stable")]
+    same = np.flatnonzero(ax[rank] @ ax[rank[0]] > 1.0 - tol)
+    return rank[same[:width]]
+
+
 def step(P, d, g, areas, centers, on, *, pitch, batch=1, warm=None,
          max_sweeps=St.MAX_SWEEPS, arc=1):
     """One growth increment: add the ``batch`` cells with the best ``dE/dA``.
