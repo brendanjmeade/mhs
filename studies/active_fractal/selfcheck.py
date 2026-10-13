@@ -1220,6 +1220,56 @@ def c_static() -> None:
                s_np * s_fp < 0.0,
                f"{s_np:+.3e} at dz/a 0.18 against {s_fp:+.3e} at 0.60")
 
+    # AND THE EXTENSIONAL STEP MAKES THE FACING FRONT MORE COMPETITIVE, which
+    # is the quantity that decides whether two cracks link. The growth path
+    # itself is far too expensive to gate -- twenty increments on two cracks
+    # -- but the mechanism is one `front_gains` call: the gain on the front
+    # FACING the neighbour, against the gain on the front pointing away. The
+    # extensional sense must raise that ratio. Gated as an ORDERING because
+    # the ratio's own value is threshold-sensitive, which is exactly what
+    # made a four-increment run read the path as insensitive.
+    print("       [link] does the extensional step favour the facing front?")
+    amax_l = 0.40
+    latt = N.disc_mesh(amax_l, hc, depth=-20.0)
+    gap_l = 2.2 * ac_
+
+    def facing_ratio(dz):
+        t = np.concatenate([latt, latt.copy()])
+        t[latt.shape[0]:, :, 0] += gap_l
+        t[latt.shape[0]:, :, 2] += dz
+        nl = latt.shape[0]
+        cn = t.mean(axis=1)
+        tq, sn_l = Fr.resolve_tensor(t, sg - 0.01 * np.eye(3))
+        mg = np.linalg.norm(tq, axis=1)
+        sdl = tq / np.maximum(mg, 1e-300)[:, None]
+        rw = mhs.interaction_matrix(
+            tris=t, material=matl_s, eps=0.1 * hc, receiver=Kmod.RECEIVER,
+            source=Kmod.SOURCE, obs_tris=t)
+        smj = Kmod.to_source_major(rw)
+        Pl = Kmod.project(smj, sdl, sdl) + 0.6 * Kmod.project_normal(smj, sdl)
+        del rw, smj
+        arl = 0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0],
+                                            t[:, 2] - t[:, 0]), axis=1)
+        onl = np.concatenate([
+            np.hypot(cn[:nl, 0], cn[:nl, 1]) <= ac_,
+            np.hypot(cn[nl:, 0] - gap_l, cn[nl:, 1]) <= ac_])
+        cd, gn, _, _ = Gr.front_gains(Pl, mg, 0.6 * sn_l, arl, cn, onl,
+                                      pitch=hc, max_sweeps=20000, arc=5)
+        del Pl
+        isa = cd < nl
+        ph = np.degrees(np.arctan2(cn[cd[isa], 1], cn[cd[isa], 0]))
+        ga = gn[isa]
+        fc = np.abs(ph) < 35.0                       # front facing the other
+        aw = np.abs(np.abs(ph) - 180.0) < 35.0       # front pointing away
+        return float(ga[fc].mean() / ga[aw].mean())
+
+    r_con, r_ext = facing_ratio(+0.60 * ac_), facing_ratio(-0.60 * ac_)
+    print(f"         facing/away gain: {r_con:.4f} at +dz against "
+          f"{r_ext:.4f} at -dz")
+    check_true("the extensional step favours the facing front",
+               r_ext > r_con,
+               f"{r_ext:.4f} extensional against {r_con:.4f} contractional")
+
 
 def c_spectrum() -> None:
     """Soft modes: the limits are known, so they are checked rather than eyeballed.

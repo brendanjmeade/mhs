@@ -93,6 +93,41 @@ and the comparison would be of sizes. The nu = 0.40 approach is non-monotone
 (1.90 falls to 1.6025 by step 12, then returns to 1.7046), so that bracket is
 loose; nu = 0.25 is the clean one.
 
+TWO CRACKS LINK ACROSS AN EXTENSIONAL STEP AND NOT A CONTRACTIONAL ONE, which
+is Segall & Pollard's asymmetry and needs ``static.coulomb_coupled`` to exist
+at all -- a frictionless criterion is exactly blind to the stepping sense.
+Letting both cracks grow at once, twenty increments, no per-crack quota, at a
+centre separation of 2.2 a:
+
+    offset dz/a       0.67              1.00
+    sense          +dz     -dz       +dz     -dz
+    facing share  0.046   0.071     0.025   0.375
+    tip gap closed 0.000   0.000     0.000   0.263
+
+At dz/a = 1.00 across the EXTENSIONAL step the front grew toward its
+neighbour and PAST it -- tip gap 0.165 -> -0.098 km, an overlapping echelon
+pair -- with 216 of 240 cells going to the growing crack. Across the
+contractional step at the same offset the gap did not move at all.
+
+IT IS A THRESHOLD, NOT A PROPORTIONALITY, and that is why it took twenty
+increments to see. The quantity that decides is the facing front's gain
+relative to the OUTWARD front's, and the extensional sense raises it:
+
+    facing/away ratio    dz/a 0.67: 0.797 -> 0.914    1.00: 0.820 -> 0.958
+
+Below one, growth goes outward and the path is insensitive to a stepping
+asymmetry that is nonetheless present in the energy; close enough to one, the
+facing front wins once, the gap closes, the interaction strengthens and it
+runs away. A four-increment run shows none of this and reads as "the
+asymmetry does not reach the path", which is the wrong conclusion from too
+short a run.
+
+LINKAGE HERE IS OVERLAP, NOT CONNECTION. Both cracks grow in their own
+parallel planes, so the fronts pass each other rather than meeting; a real
+junction needs :func:`kink_candidates` at the facing tips, which is where
+phase 3's measured 38 % elastic penalty for leaving the plane meets phase 4's
+neighbour, and is not yet run.
+
 MESH DEPENDENCE IS THE RISK THIS MODULE EXISTS TO TEST, because sharp-crack
 growth is notoriously sensitive to the discretization -- a main reason
 phase-field methods exist. The ENERGY passes: growing the same crack on a
