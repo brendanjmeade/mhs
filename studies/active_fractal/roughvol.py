@@ -237,6 +237,39 @@ def rim_outline(tris: np.ndarray, tol_over_h: float = 1e-9) -> list[list[float]]
     return [[round(float(c), 4) for c in pos[k]] for k in loop]
 
 
+def surface(tris: np.ndarray, tol_over_h: float = 1e-9) -> dict:
+    """The whole crack as a welded vertex table plus triangle indices.
+
+    The rim alone says where the crack is and nothing about its shape, and the
+    lines this page is about are its INTERIOR edges, which a rim cannot show.
+    Welded rather than 1044 loose triangles so that the drawn wireframe is the
+    mesh's own edge set rather than three overlapping copies of it.
+
+    WELDED FROM ``tris``, not taken from ``RoughDisc.verts``: that table is the
+    one the roughness was applied to, which is BEFORE the rotation to the dip,
+    so indexing it reproduces a horizontal crack 3.06 km away from the one the
+    field was computed on. Welding the rotated triangles cannot drift, and the
+    check below is then worth making.
+
+    Refused unless the indexed mesh reproduces ``tris`` to the welding
+    tolerance and every edge is shared by one or two triangles: a surface drawn
+    from a table that is not the one the field was computed on would be a
+    picture of a different crack.
+    """
+    verts, idx = network.weld_vertices(tris, tol_over_h * H_KM)
+    err = float(np.abs(verts[idx] - tris).max())
+    if err > 1e-6 * H_KM:
+        raise SystemExit(f"the welded table does not reproduce the mesh: "
+                         f"max|diff| = {err:.3e} km")
+    share = network.edge_sharing(idx)
+    if share.size != 3:
+        raise SystemExit(f"the mesh is not manifold: edge sharing {share}")
+    return {"vertices": [[round(float(c), 4) for c in v] for v in verts],
+            "triangles": [[int(i) for i in t] for t in idx],
+            "n_vertices": int(verts.shape[0]),
+            "boundary_edges": int(share[1]), "interior_edges": int(share[2])}
+
+
 def roundtrip(v, buf, meta) -> tuple[float, float]:
     """(measured, arithmetic bound) worst relative error of the quantisation."""
     back = decode_log_u8(buf, meta)
@@ -365,7 +398,8 @@ def cmd_volume(a) -> int:
         "box": {"origin": grid["origin"], "spacing": grid["spacing"],
                 "dims": grid["dims"]},
         "fault": {"outline": rim_outline(tris),
-                  "n_triangles": int(tris.shape[0])}}) + "\n")
+                  "n_triangles": int(tris.shape[0]),
+                  **surface(tris)}}) + "\n")
     man["geometry"] = "rough_geometry.json"
 
     print("  round-trip, measured against the encoder's arithmetic bound:")
