@@ -19,9 +19,9 @@
 import {
   BufferGeometry, Color, Data3DTexture, DataTexture, DoubleSide,
   Float32BufferAttribute, Group, LineBasicMaterial, LineSegments, Mesh,
-  NearestFilter, LinearFilter, PerspectiveCamera, PlaneGeometry, RedFormat,
-  RGBAFormat, Scene, ShaderMaterial, UnsignedByteType, Vector3, WebGLRenderer,
-  ClampToEdgeWrapping, GLSL3,
+  MeshBasicMaterial, NearestFilter, LinearFilter, PerspectiveCamera,
+  PlaneGeometry, RedFormat, RGBAFormat, Scene, ShaderMaterial, SRGBColorSpace,
+  UnsignedByteType, Vector2, Vector3, WebGLRenderer, ClampToEdgeWrapping, GLSL3,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { lut, type MapName } from "./colormaps";
@@ -51,6 +51,7 @@ varying vec3 vBox;
 uniform sampler3D uField, uRegion;
 uniform sampler2D uLut;
 uniform vec3  uDims;           // (nx, ny, nz), for the texel-centre mapping
+uniform vec2  uWin;            // the displayed window, in normalized levels
 uniform bool  uShowOutside;
 void main() {
   if (any(lessThan(vBox, vec3(0.0))) || any(greaterThan(vBox, vec3(1.0)))) discard;
@@ -68,7 +69,12 @@ void main() {
   // near-boundary exclusion to make here, because the free surface is carried
   // analytically by the image terms rather than by a discretized boundary --
   // which is the whole claim this picture exists to show.
-  vec3 c = texture(uLut, vec2(f, 0.5)).rgb;
+  // The byte is linear in log10 of the value, so the colour axis is log10 and
+  // this is only WHERE THE RAMP ENDS: uWin selects a window of it and the
+  // ends saturate. Clipped here rather than by re-encoding, so moving the
+  // window is a uniform rather than a 94 kB download.
+  float t = clamp((f - uWin.x) / max(uWin.y - uWin.x, 1e-6), 0.0, 1.0);
+  vec3 c = texture(uLut, vec2(t, 0.5)).rgb;
   fragColor = vec4(c, 1.0);
 }`;
 
@@ -123,6 +129,7 @@ export class VolumeScene {
   private mat: ShaderMaterial;
   private planes: Mesh[] = [];
   private overlays = new Group();
+  private crack = new Group();
   private p: Payload;
   private el: HTMLElement;
   private raf = 0;
@@ -169,6 +176,7 @@ export class VolumeScene {
         uDims: { value: new Vector3(p.dims[0], p.dims[1], p.dims[2]) },
         uField: { value: null }, uRegion: { value: null },
         uLut: { value: lutTex }, uShowOutside: { value: false },
+        uWin: { value: new Vector2(1 / 255, 254 / 255) },
       },
     });
 
@@ -179,6 +187,7 @@ export class VolumeScene {
       this.scene.add(m);
     }
     this.scene.add(this.overlays);
+    this.overlays.add(this.crack);
     this.buildOverlays();
     this.setSlices({ x: 0.5, y: 0.5, z: 0.72 });
     this.resize();
@@ -203,9 +212,12 @@ export class VolumeScene {
       this.overlays.add(planeGrid(o[0], o[1], ex, ey, g.free_surface.z ?? 0));
     }
 
+    if (g.fault?.vertices && g.fault?.triangles) this.buildCrack(g);
+
     // The fault as its four CORNERS, closed into a loop. A dipping plane's
     // bounding box is a solid volume; drawing that would put a wireframe box
     // in the half space and read as a second body rather than as the source.
+    // Outside `crack`, so hiding the surface still leaves the reader the rim.
     if (g.fault?.outline) {
       const q = g.fault.outline as number[][];
       const pos: number[] = [];
@@ -219,6 +231,113 @@ export class VolumeScene {
         geo, new LineBasicMaterial({ color: 0xb5367a })));
     }
   }
+
+  /** The crack surface itself: flat-shaded facets and the mesh's own edges.
+   *
+   * FLAT shading, which means NON-INDEXED: a shared vertex normal is the
+   * average of the facets meeting there, and the roughness IS the facet-to-
+   * facet difference, so smooth shading would average away the thing the
+   * surface is drawn to show. Shaded on the CPU, so the scene needs no lights.
+   *
+   * RELIEF, NOT PHOTOMETRY, and both halves of that are measured. The light
+   * sits 50 deg off the surface's own mean normal rather than along it, because
+   * along it the cosine is quadratic in the tilt and a bump shades like a
+   * hollow; and the shade is stretched over the REALIZED range of facet
+   * normals, because this crack's 13.9 deg rms tilt against a fixed light
+   * spans only 0.79 to 0.99 and renders as a flat grey sheet. At 50 deg the
+   * dot product never changes sign here (0.39 to 0.89), so the signed value
+   * can be used and the two sides of a bump differ.
+   *
+   * The wireframe is the mesh's own edge set, each edge drawn once, which is
+   * what the welded vertex table is for. Those interior edges are the subject
+   * of this page: a classical kernel leaves a residual dislocation on every one
+   * of them that the slip varies across.
+   *
+   * Translucent with depthWrite OFF, so the surface never hides a slice and the
+   * wireframe cannot z-fight with the facets it lies on.
+   */
+  private buildCrack(g: any) {
+    const V = g.fault.vertices as number[][];
+    const T = g.fault.triangles as number[][];
+    const pos = new Float32Array(T.length * 9);
+    const col = new Float32Array(T.length * 9);
+    const nrm: Vector3[] = [];
+    const mean = new Vector3();
+    const v = [new Vector3(), new Vector3(), new Vector3()];
+    const e1 = new Vector3(), e2 = new Vector3();
+    for (let i = 0; i < T.length; i++) {
+      for (let k = 0; k < 3; k++) {
+        v[k].fromArray(V[T[i][k]]);
+        pos[i * 9 + k * 3] = v[k].x;
+        pos[i * 9 + k * 3 + 1] = v[k].y;
+        pos[i * 9 + k * 3 + 2] = v[k].z;
+      }
+      e1.subVectors(v[1], v[0]);
+      e2.subVectors(v[2], v[0]);
+      const n = new Vector3().crossVectors(e1, e2);
+      mean.add(n);                 // the raw cross IS 2 * area: area-weighted
+      nrm.push(n.normalize());
+    }
+    mean.normalize();
+    // Any direction in the mean plane. The cross with z degenerates on a
+    // horizontal crack, which is the one orientation `rough_disc` refuses but
+    // `geometry.json` does not, so fall back rather than divide by zero.
+    let u = new Vector3().crossVectors(mean, new Vector3(0, 0, 1));
+    if (u.length() < 0.3) u = new Vector3().crossVectors(mean, new Vector3(1, 0, 0));
+    const dir = mean.clone().add(u.normalize().multiplyScalar(1.2)).normalize();
+    const dot = nrm.map((n) => n.dot(dir));
+    const lo = Math.min(...dot), hi = Math.max(...dot);
+    const c = new Color();
+    for (let i = 0; i < T.length; i++) {
+      const sh = 0.38 + 0.62 * (hi > lo ? (dot[i] - lo) / (hi - lo) : 0.5);
+      // Authored as sRGB and converted, like every hex colour in this scene:
+      // a vertex-colour attribute is taken to be LINEAR, so writing the
+      // intended value straight in lightens the whole sheet by about a third.
+      c.setRGB(sh * 0.74, sh * 0.72, sh * 0.70, SRGBColorSpace);
+      for (let k = 0; k < 3; k++) {
+        col[i * 9 + k * 3] = c.r;
+        col[i * 9 + k * 3 + 1] = c.g;
+        col[i * 9 + k * 3 + 2] = c.b;
+      }
+    }
+    const geo = new BufferGeometry();
+    geo.setAttribute("position", new Float32BufferAttribute(pos, 3));
+    geo.setAttribute("color", new Float32BufferAttribute(col, 3));
+    this.crack.add(new Mesh(geo, new MeshBasicMaterial({
+      vertexColors: true, side: DoubleSide, transparent: true,
+      opacity: 0.72, depthWrite: false })));
+
+    const seen = new Set<number>();
+    const lp: number[] = [];
+    for (const t of T) {
+      for (const [p, q] of [[t[0], t[1]], [t[1], t[2]], [t[2], t[0]]]) {
+        const key = Math.min(p, q) * V.length + Math.max(p, q);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        lp.push(...V[p], ...V[q]);
+      }
+    }
+    const wire = new BufferGeometry();
+    wire.setAttribute("position", new Float32BufferAttribute(lp, 3));
+    const lines = new LineSegments(wire, new LineBasicMaterial({
+      color: 0x3c4046, transparent: true, opacity: 0.42, depthWrite: false }));
+    lines.renderOrder = 1;        // after the facets, which write no depth
+    this.crack.add(lines);
+  }
+
+  /** Show only the top `w.lo`..`w.hi` of the colour ramp. */
+  setWindow(w: { lo: number; hi: number }) {
+    (this.mat.uniforms.uWin.value as Vector2).set(w.lo, w.hi);
+    this.render();
+  }
+
+  setCrack(on: boolean) {
+    this.crack.visible = on;
+    this.render();
+  }
+
+  /** Whether this payload carries a crack surface at all. */
+  get hasCrack(): boolean { return this.crack.children.length > 0; }
 
   setTextures(field: Uint8Array, region: Uint8Array) {
     const d = this.p.dims;

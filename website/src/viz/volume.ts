@@ -89,6 +89,41 @@ export class Payload {
     return [this.decode(key, 1), this.decode(key, this.manifest.levels)];
   }
 
+  /** How many decades an array covers. 0 if it is not on a log ramp. */
+  decades(key: string): number {
+    const m = this.manifest.arrays[key];
+    if (!m || m.encoding !== "log10_u8") return 0;
+    return Math.max(0, (m.log_max ?? 0) - (m.log_min ?? 0));
+  }
+
+  /** The displayed window as the TOP `d` decades: the physical ends, and the
+   *  sampler bounds that select them.
+   *
+   *  THE ARRAYS ARE ALREADY log10 -- the byte is linear in log10 of the value,
+   *  so the colour axis is log10 whatever this returns, and a window is not a
+   *  second transform. All it moves is where the ramp ENDS, which is a real
+   *  choice on a 1/r^3 field: most of a box this size is far field, so the full
+   *  span spends colour on distance from the crack rather than on structure
+   *  near it, while clipping saturates it. Both ways are visible as the ends
+   *  saturating, which is why the default is the array's own span and the
+   *  narrowing is the reader's -- on this payload a 2.5-decade window already
+   *  flattens 28 % of the voxels onto one colour and a 2-decade one 70 %.
+   *
+   *  The bounds come back in the shader's own units -- the normalized uint8
+   *  level, `level / 255` -- so the fragment shader stays one subtract and one
+   *  divide and knows nothing about the encoding. */
+  window(key: string, d: number): { lo: number; hi: number;
+                                    loValue: number; hiValue: number } {
+    const m = this.manifest.arrays[key];
+    const L = this.manifest.levels;
+    const hiLog = m?.log_max ?? 0, span = this.decades(key);
+    const clipped = span > 0 && d > 0 && d < span;
+    const t = clipped ? 1 - d / span : 0;        // fraction of the ramp cut off
+    return { lo: (1 + t * (L - 1)) / 255, hi: L / 255,
+             loValue: clipped ? 10 ** (hiLog - d) : this.decode(key, 1),
+             hiValue: this.decode(key, L) };
+  }
+
   get dims() { return this.manifest.grid.dims; }
 
   /** Physical size of the sampled box, km. */
@@ -107,6 +142,24 @@ export const FIELDS: Record<string, { label: string; unit: string; scale: number
   von_mises: { label: "von Mises", unit: "MPa", scale: 1e3 },
   max_shear: { label: "max shear", unit: "MPa", scale: 1e3 },
 };
+
+/** Integer decades inside a displayed window, as fractions along the bar.
+ *
+ *  `lo` and `hi` are the window's ends in the units the bar LABELS -- MPa, mm
+ *  -- not the solve's, so the ticks land on round numbers a reader can check
+ *  the picture against. A tick within `pad` of either end is dropped rather
+ *  than drawn on top of the numeric ends. */
+export function decadeTicks(lo: number, hi: number, pad = 0.07,
+                            ): { t: number; exp: number }[] {
+  if (!(lo > 0) || !(hi > lo)) return [];
+  const a = Math.log10(lo), b = Math.log10(hi);
+  const out: { t: number; exp: number }[] = [];
+  for (let e = Math.ceil(a); e <= Math.floor(b); e++) {
+    const t = (e - a) / (b - a);
+    if (t > pad && t < 1 - pad) out.push({ t, exp: e });
+  }
+  return out;
+}
 
 /** Human labels for the payload's state keys. */
 export function stateLabel(key: string): string {
