@@ -792,6 +792,41 @@ const M = (src: string, display = true) =>
     expensive.
   </p>
 
+  <h2>Does any of this need a mollified kernel?</h2>
+
+  <p>
+    It is worth asking directly, because on this cloud the answer is no.
+    Elastic interaction supplies between <b>1.6 and 8.3&nbsp;%</b> of an
+    element&rsquo;s strength here, which is the product of two small numbers: the
+    stress drop as a fraction of strength, about 0.10, and the geometric
+    transfer between elements, about 0.17. Driving the network from zero
+    background stress makes the size of that budget explicit &mdash; a seeded
+    patch recruits <b>zero</b> neighbours at any stress drop, the peak transfer
+    is exactly 0.830&times; the drop (linear to four figures over a ninefold
+    sweep), and reaching the failure threshold on interaction alone would need
+    about 630 elements, 31&nbsp;% of the network, to slip at once. Weakening
+    cannot rescue it either: the 0.830 ceiling holds even at total strength
+    loss. So a critically-stressed screening with no kernel at all reproduces
+    most of this answer, and that is a fact about the geometry &mdash; scattered,
+    separated faults &mdash; not about the kernel.
+  </p>
+
+  <p>
+    A <a href={`${base}roughness/`}>rough contiguous crack</a> is the opposite
+    geometry, and the honest result there has two halves. For <b>assembling the
+    interaction matrix</b>, a classical triangular dislocation element does as
+    well as the mollified kernel at every roughness tested, and recovers the
+    Eshelby solution marginally better: collocation only asks for traction at an
+    element&rsquo;s own centroid, where the classical finite part exists. For
+    reading back a stress <b>field</b>, it does not, because a field asks for
+    stress off the collocation points too &mdash; and where two adjacent
+    elements slip by different amounts, the classical kernel leaves a residual
+    dislocation on their shared edge whose stress goes as a clean 1/<i>d</i>.
+    This mesh has 770&nbsp;km of such spurious singular line against
+    49&nbsp;km of physical rim. That is the case for a declared regularisation
+    length, and it is narrower than &ldquo;mollification is necessary&rdquo;.
+  </p>
+
   <h2>One simplification worth naming</h2>
 
   <p>

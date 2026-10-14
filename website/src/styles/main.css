@@ -180,3 +180,34 @@ button:disabled { opacity: .5; cursor: default; }
   .columns { flex-direction: column; gap: 0; }
   .sidebar { position: static; width: 100%; max-height: none; overflow: visible; }
 }
+
+/* ---- the volume viewer: controls, canvas, colour bar -----------------------
+ Here rather than in one page's `is:global` block because TWO pages mount the
+ viewer -- /examples/ and /roughness/ -- and a second copy of these rules is
+ a second place for them to drift. */
+#viewer { margin-bottom: 18px; }
+#viewer .canvas { width: 100%; min-height: 440px; cursor: grab; background: #fff; }
+#viewer .canvas:active { cursor: grabbing; }
+#viewer .canvas canvas { display: block; }
+#viewer .panel {
+  display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+  margin-bottom: 10px; font-size: 13px;
+}
+#viewer .panel label { display: flex; align-items: center; gap: 6px; }
+#viewer .panel label > span:first-child { color: var(--fg-dim); }
+#viewer .panel .lbl { color: var(--fg-dim); }
+#viewer .panel select { font: inherit; font-size: 13px; padding: 2px 4px; }
+#viewer .panel .rng { display: flex; align-items: center; gap: 6px; }
+#viewer .panel input[type="range"] { width: 120px; }
+#viewer .panel .val { color: var(--fg-dim); min-width: 84px; font-variant-numeric: tabular-nums; }
+#viewer .slices { margin-top: 10px; }
+#viewer .bar { margin-top: 8px; }
+#viewer .bar .strip { height: 10px; border: 1px solid var(--rule); }
+#viewer .bar .ends {
+  display: flex; justify-content: space-between; font-size: 12px;
+  color: var(--fg-dim); margin-top: 3px; font-variant-numeric: tabular-nums;
+}
+#viewer .bar .ends .mid { color: var(--fg-faint); }
+#viewer .status { font-size: 13px; color: var(--fg-dim); margin-top: 8px; }
+.cap { font-size: 13px; color: var(--fg-dim); }
+.cap b { color: var(--fg); font-weight: 600; }

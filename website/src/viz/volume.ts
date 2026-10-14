@@ -28,6 +28,11 @@ export interface Manifest {
     bytes: number; sha256: string; values?: number[]; filter?: string;
   }>;
   geometry?: string;
+  /** Optional opening view. A payload whose body is not the half space has no
+   *  reason to open on the half-space state or on a slice chosen for a free
+   *  surface, so it says what it wants instead of the page hardcoding it. */
+  defaults?: { state?: string; field?: string;
+               slices?: { x?: number; y?: number; z?: number } };
 }
 
 export class Payload {
@@ -36,14 +41,14 @@ export class Payload {
   geometry: any = null;
   private cache = new Map<string, Uint8Array>();
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, readonly manifestName = "manifest.json") {
     // BASE_URL, never a leading "/data": a hardcoded absolute path works in
     // dev and 404s under the /mhs base in production.
     this.base = baseUrl.replace(/\/?$/, "/") + "data/";
   }
 
   async load(): Promise<Manifest> {
-    this.manifest = await (await fetch(this.base + "manifest.json")).json();
+    this.manifest = await (await fetch(this.base + this.manifestName)).json();
     if (this.manifest.geometry) {
       this.geometry = await (await fetch(this.base + this.manifest.geometry)).json();
     }
@@ -78,7 +83,10 @@ export class Payload {
   }
 
   range(key: string): [number, number] {
-    return [this.decode(key, 1), this.decode(key, 255)];
+    // The TOP level is `levels`, not 255: the encoder writes 1..levels, so
+    // asking for 255 decodes past log_max and overstates the bar's top end by
+    // 10**(span/(levels-1)) -- 3.7 % on a four-decade array.
+    return [this.decode(key, 1), this.decode(key, this.manifest.levels)];
   }
 
   get dims() { return this.manifest.grid.dims; }
@@ -110,5 +118,7 @@ export function stateLabel(key: string): string {
 }
 
 function pretty(k: string): string {
-  return { half: "half space", full: "full space" }[k] ?? k;
+  return { half: "half space", full: "full space",
+           mollified: "mollified (mhs)",
+           classical: "classical TDE (cutde)" }[k] ?? k;
 }

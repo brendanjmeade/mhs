@@ -1,0 +1,144 @@
+{
+ "arrays": {
+  "classical.von_mises": {
+   "bytes": 93636,
+   "encoding": "log10_u8",
+   "log_max": -1.5785862681977303,
+   "log_min": -5.1087691412470635,
+   "max": 0.026388440906639853,
+   "min": 7.784502433693537e-06,
+   "n_nonzero": 93636,
+   "sha256": "89d610a535e64079"
+  },
+  "diff_classical_minus_mollified.von_mises": {
+   "bytes": 93636,
+   "encoding": "log10_u8",
+   "log_max": -1.6764482827189684,
+   "log_min": -5.676139520206758,
+   "max": 0.02106452727693932,
+   "min": 2.10795084686717e-06,
+   "n_nonzero": 1510,
+   "sha256": "f09bc563b8c72e4f"
+  },
+  "mollified.von_mises": {
+   "bytes": 93636,
+   "encoding": "log10_u8",
+   "log_max": -2.0713794135671915,
+   "log_min": -5.108703079249705,
+   "max": 0.008484389277461507,
+   "min": 7.785686650660416e-06,
+   "n_nonzero": 93636,
+   "sha256": "7647f9c430206bb4"
+  },
+  "region.62e49bd2d84eee8b": {
+   "bytes": 93636,
+   "encoding": "codes_u8",
+   "filter": "nearest",
+   "sha256": "62e49bd2d84eee8b",
+   "values": [
+    1
+   ]
+  }
+ },
+ "defaults": {
+  "field": "von_mises",
+  "slices": {
+   "x": 0.5,
+   "y": 0.5,
+   "z": 0.5
+  },
+  "state": "mollified"
+ },
+ "geometry": "rough_geometry.json",
+ "grid": {
+  "dims": [
+   51,
+   51,
+   36
+  ],
+  "n_points": 93636,
+  "origin": [
+   -10.0,
+   -10.0,
+   -27.0
+  ],
+  "spacing": [
+   0.4,
+   0.4,
+   0.4
+  ]
+ },
+ "levels": 254,
+ "meta": {
+  "a_km": 6.0,
+  "active_fraction": 0.4731800766283525,
+  "branching_ratio": 0.8976989921098989,
+  "corr_over_h": 8.0,
+  "diff_drawn_fraction": 0.01612627621854842,
+  "diff_floor_fraction": 0.0001,
+  "dip_deg": 30.0,
+  "eps_km": 0.05,
+  "eps_over_h": 0.1,
+  "grid_spacing_over_eps": 8.0,
+  "h_km": 0.5,
+  "height_rms_km": 0.4012428358033832,
+  "lam_GPa": 30.0,
+  "lam_over_lam0": 1.05,
+  "max_slip_m": 0.26939015597254107,
+  "min_eig_sym": 5.778266350214572,
+  "mu_GPa": 30.0,
+  "n_triangles": 1044,
+  "nu": 0.25,
+  "ratio_max": 6.289812952958243,
+  "ratio_median": 1.0000700221551213,
+  "ratio_p99": 1.0033922060497589,
+  "rms_slope": 0.25,
+  "seed": 1,
+  "tilt_rms_deg": 13.876533642458334,
+  "units": "km, GPa"
+ },
+ "nodata": 0,
+ "quantisation": {
+  "classical.von_mises": {
+   "bound_rel_err": 0.016194045987599548,
+   "measured_rel_err": 0.016193935540364166
+  },
+  "diff_classical_minus_mollified.von_mises": {
+   "bound_rel_err": 0.01836749359317147,
+   "measured_rel_err": 0.018314068671960764
+  },
+  "mollified.von_mises": {
+   "bound_rel_err": 0.013917492973897883,
+   "measured_rel_err": 0.013917002146379089
+  }
+ },
+ "schema": 1,
+ "source": {
+  "git": "a2ddd49",
+  "sampled_from": null,
+  "volume_run": "roughvol.py"
+ },
+ "states": {
+  "classical": {
+   "fields": {
+    "von_mises": "classical.von_mises"
+   },
+   "kind": "state",
+   "region": "region.62e49bd2d84eee8b"
+  },
+  "diff_classical_minus_mollified": {
+   "fields": {
+    "von_mises": "diff_classical_minus_mollified.von_mises"
+   },
+   "kind": "difference",
+   "region": "region.62e49bd2d84eee8b"
+  },
+  "mollified": {
+   "fields": {
+    "von_mises": "mollified.von_mises"
+   },
+   "kind": "state",
+   "region": "region.62e49bd2d84eee8b"
+  }
+ }
+}

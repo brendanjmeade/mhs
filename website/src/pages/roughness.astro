@@ -1,0 +1,145 @@
+---
+import Base from "../layouts/Base.astro";
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+---
+<Base
+  title="mhs — Rough crack"
+  description="A rough contiguous crack, meshed two ways: the mollified kernel and a classical triangular dislocation element. Where the two von Mises fields agree, and where the classical one has a singular line that the crack does not."
+  current="roughness"
+>
+  <Fragment slot="sidebar">
+    <h1>Rough crack<span class="sub">where mollification earns its keep</span></h1>
+    <p>
+      A self-affine rough disc, radius 6&nbsp;km, 1044 elements of 0.5&nbsp;km,
+      dipping 30&deg; at 20&nbsp;km depth, RMS slope 0.25 (13.9&deg; RMS facet
+      tilt). Loaded in a thrust regime to 1.05&times; the first failure, which
+      leaves <b>47.3&nbsp;%</b> of it slipping with a peak of 0.27&nbsp;m.
+    </p>
+    <p>
+      The same slip, read back as von Mises stress on one grid, two ways.
+      <b>Mollified</b> is this kernel at <i>eps</i>&nbsp;=&nbsp;0.1&nbsp;<i>h</i>.
+      <b>Classical TDE</b> is cutde on the same triangles with no
+      regularisation. The difference state draws only where they part company
+      &mdash; <b>1.6&nbsp;%</b> of the volume.
+    </p>
+    <div class="note">
+      Away from the crack the two agree to a median <b>1.0001</b>, and to
+      1.003 at the 99th percentile. This is not a page about a kernel being
+      wrong. It is a page about <i>where</i> a classical element has no value
+      to give.
+    </div>
+    <p class="contact">
+      The box is tight on the crack and entirely below the free surface, so
+      every point is inside the body and nothing is masked.
+    </p>
+  </Fragment>
+
+  <div id="viewer">
+    <div class="panel">
+      <label data-ctl="state"><span>state</span></label>
+      <label data-ctl="field"><span>field</span></label>
+      <label data-ctl="map"><span>colours</span></label>
+    </div>
+    <div data-canvas class="canvas" aria-label="Three movable orthogonal slices through the von Mises stress around a rough dipping crack, computed with a mollified kernel and with a classical triangular dislocation element"></div>
+    <div data-bar class="bar"></div>
+    <div class="panel slices">
+      <span class="lbl">slices</span>
+      <div class="rng" data-ctl="slice-x"><span>x</span></div>
+      <div class="rng" data-ctl="slice-y"><span>y</span></div>
+      <div class="rng" data-ctl="slice-z"><span>z</span></div>
+    </div>
+    <p data-status class="status">loading…</p>
+  </div>
+
+  <h2>What the difference is</h2>
+  <p>
+    A collocation scheme only ever asks a kernel for traction at an element&rsquo;s
+    own centroid, and that is the one place where the classical finite part
+    exists. Approached along its normal, a classical element&rsquo;s own centroid
+    is perfectly well behaved: stepping in from 30&nbsp;<i>eps</i> to
+    0.003&nbsp;<i>eps</i> the von Mises stress changes by less than a per cent,
+    with a log-log slope of <b>+0.002</b> &mdash; flat, and matching the
+    mollified kernel to 1&ndash;3&nbsp;%. That is why a classical triangular
+    dislocation element assembles a perfectly good interaction matrix on this
+    mesh, and on a separate head-to-head over four roughness levels it recovers
+    the Eshelby solution marginally <i>better</i> than the mollified kernel does.
+  </p>
+  <p>
+    A stress <b>field</b> is a different question, because it asks for stress
+    everywhere rather than at centroids. Two adjacent elements that slip by
+    different amounts leave a residual dislocation on the edge they share, and
+    its stress diverges. Approaching the midpoint of one interior shared edge of
+    this mesh &mdash; two faces 4.6&deg; apart, slipping 0.256 and 0.233&nbsp;m,
+    so a 9.9&nbsp;% mismatch:
+  </p>
+  <div class="wide">
+    <table>
+      <thead>
+        <tr><th><i>d</i>/<i>eps</i></th><th>mollified (GPa)</th>
+            <th>classical (GPa)</th><th>ratio</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>0.001</td><td>6.01e-3</td><td>3.95e+0</td><td><b>658</b></td></tr>
+        <tr><td>0.01</td><td>6.01e-3</td><td>3.95e-1</td><td>65.8</td></tr>
+        <tr><td>0.1</td><td>6.10e-3</td><td>4.02e-2</td><td>6.59</td></tr>
+        <tr><td>1</td><td>6.87e-3</td><td>7.43e-3</td><td>1.08</td></tr>
+        <tr><td>3</td><td>5.47e-3</td><td>5.50e-3</td><td>1.004</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    The classical log-log slope over the inner two decades is
+    <b>&minus;0.9963</b>: a clean 1/<i>d</i>. The mollified slope is
+    <b>+0.0032</b>. At 0.05&nbsp;m from the edge the classical von Mises stress
+    has reached 3.95&nbsp;GPa &mdash; 13&nbsp;% of the shear modulus, from a
+    quarter-metre of slip.
+  </p>
+  <p>
+    <b>The cause is the slip mismatch, not the geometry</b>, and that is settled
+    by a control rather than argued: set those two elements&rsquo; slip equal and
+    change nothing else, and the singularity disappears outright &mdash; slope
+    +0.0003, ratio 1.017. Make the slip uniform over the whole crack and the two
+    kernels agree to 1.000 at every distance. The divergent line is not physics.
+    It is the discretisation&rsquo;s own residue, and there is one on every
+    interior edge where the slip varies: <b>1518 interior edges, 770&nbsp;km of
+    spurious singular line against 49&nbsp;km of physical rim</b>, a factor of
+    15.7, or 6.8&nbsp;km of singular line per km&sup2; of crack.
+  </p>
+  <p>
+    Mollification removes all of it, because <i>eps</i> is a declared physical
+    length rather than a property of the mesh: the jump is smeared over a
+    width <i>eps</i>, so a shared edge carries a smooth profile instead of a
+    line. The physical crack front &mdash; the rim, where the stress really is
+    singular &mdash; is the only one left, and it is regularised to the same
+    declared width.
+  </p>
+
+  <h2>What this volume does and does not show</h2>
+  <p>
+    The grid is 0.4&nbsp;km, which is <b>8&nbsp;<i>eps</i></b>. It therefore
+    undersamples the singular lines by design, and the ratios it reports are a
+    <i>lower bound</i>: the largest classical/mollified ratio anywhere on this
+    grid is 6.29, against the 658 above, because no grid point lands closer than
+    about half an <i>eps</i> to an edge. Resolving a 1/<i>d</i> line in a volume
+    needs spacing well under <i>eps</i> in all three directions, which is a
+    million times this cost. What the volume is for is the <i>extent</i> of the
+    disagreement, and that it reads honestly: a thin shell on the crack, and
+    agreement to one part in ten thousand everywhere else.
+  </p>
+  <p class="cap">
+    Colour is on a log scale. The difference state is the magnitude of a signed
+    difference, floored four decades below its own maximum &mdash; the state
+    arrays quantise at about 1.6&nbsp;% relative, so anything below that floor is
+    under the payload&rsquo;s own resolution rather than a measurement, and it is
+    drawn as no-data rather than as a colour. See
+    <a href={`${base}examples/`}>Examples</a> for the quantisation bound this
+    payload is checked against, and <a href={`${base}concepts/`}>Concepts</a>
+    for what <i>eps</i> is.
+  </p>
+
+  <script>
+    import { startViewer } from "../viz/controls";
+    startViewer(document.getElementById("viewer")!, import.meta.env.BASE_URL,
+                "rough_manifest.json");
+  </script>
+</Base>

@@ -10,11 +10,12 @@ import { cssGradient, type MapName } from "./colormaps";
 import { VolumeScene } from "./scene";
 import { FIELDS, Payload, stateLabel } from "./volume";
 
-export async function startViewer(root: HTMLElement, baseUrl: string) {
+export async function startViewer(root: HTMLElement, baseUrl: string,
+                                  manifestName = "manifest.json") {
   const canvasEl = root.querySelector<HTMLElement>("[data-canvas]")!;
   const status = root.querySelector<HTMLElement>("[data-status]")!;
 
-  const p = new Payload(baseUrl);
+  const p = new Payload(baseUrl, manifestName);
   try {
     await p.load();
   } catch (e) {
@@ -27,9 +28,12 @@ export async function startViewer(root: HTMLElement, baseUrl: string) {
 
   const states = Object.keys(p.manifest.states);
   const fields = Object.keys(p.manifest.states[states[0]].fields);
-  let state = states.includes("half") ? "half"
+  const want = p.manifest.defaults ?? {};
+  let state = want.state && states.includes(want.state) ? want.state
+    : states.includes("half") ? "half"
     : (states.find((s) => !s.startsWith("diff_")) ?? states[0]);
-  let field = fields.includes("von_mises") ? "von_mises" : fields[0];
+  let field = want.field && fields.includes(want.field) ? want.field
+    : fields.includes("von_mises") ? "von_mises" : fields[0];
   let map: MapName = "viridis";
 
   // --- controls -----------------------------------------------------------
@@ -58,7 +62,7 @@ export async function startViewer(root: HTMLElement, baseUrl: string) {
     map = v as MapName; scene.setColormap(map); paintBar();
   });
 
-  const slices = { x: 0.5, y: 0.5, z: 0.72 };
+  const slices = { x: 0.5, y: 0.5, z: 0.72, ...(want.slices ?? {}) };
   for (const axis of ["x", "y", "z"] as const) {
     const wrap = root.querySelector<HTMLElement>(`[data-ctl="slice-${axis}"]`);
     if (!wrap) continue;
