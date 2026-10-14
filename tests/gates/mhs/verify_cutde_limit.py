@@ -48,6 +48,23 @@ convention was established rather than guessed from documentation.)
       restriction is a measured boundary rather than a convenient one, and so
       nobody extends it inward believing it will hold.
 
+  [e] WHAT THAT DIVERGENCE COSTS A FIELD, and that it is the DISCRETISATION's
+      and not the crack's. Two COPLANAR triangles sharing an edge -- dihedral
+      angle exactly zero, so no geometry can explain anything -- carrying slip
+      that differs by 10 % across that edge leave a residual dislocation on it,
+      and cutde's stress there goes as a clean 1/d: a decade closer is a decade
+      larger, measured 9.91x per decade against the exact 10, reaching 80.9x
+      the mollified value. The mollified stress moves by 5.5e-05 over that same
+      decade. Make the two slips EQUAL and the divergence vanishes outright --
+      cutde moves by 5.4e-05 -- which is the control that makes this the slip
+      jump's doing rather than the shared edge's.
+
+      This is why [c] restricts itself to collocation-like distances and a
+      stress FIELD cannot. A collocation scheme only ever asks for traction at
+      an element's own centroid, where the classical finite part exists; a
+      field asks everywhere, and on a contiguous mesh every interior edge with
+      varying slip carries one of these lines.
+
 Needs the ``[tde]`` extra. It FAILS rather than skips without cutde: a skipped
 external anchor is indistinguishable from a passing one in a summary line, and
 this is the only external check there is.
@@ -76,6 +93,20 @@ TOL_STRESS = 2e-3         # measured 2.1e-4 at 1.5 L, finest eps
 TOL_FRAME = 1e-3          # geometric frame vs the published convention
 TRIP_CLOSE_ORDER = 1.85   # close in, the order must FALL below this
 TRIP_EIGEN_SHARE = 0.5    # and the eigenstress must be a large fraction there
+
+#: [e] Two COPLANAR triangles sharing the edge A-C: D is B reflected through
+#: that edge, so the pair is a conforming two-element patch with zero dihedral
+#: angle. Built from TRI's own vertices, so the pair inherits its dip and its
+#: distance from every symmetry plane.
+_A, _B, _C = TRI[0]
+PAIR = np.array([[_A, _B, _C], [_A, _C, _A + (_C - _A) + (_A - _B)]])
+EDGE_MID = 0.5 * (_A + _C)
+PAIR_SLIP_KM = 1e-3       # 1 m, strike slip, in cutde's local triad
+PAIR_MISMATCH = 0.9       # the second element slips 10 % less
+PAIR_DS_OVER_EPS = (1e-3, 1e-2)   # a decade apart, both far inside eps
+TOL_FLAT = 0.02           # "does not diverge": < 2 % over that decade
+TOL_PER_DECADE = 0.05     # "diverges as 1/d": within 5 % of 10x per decade
+TRIP_EDGE_RATIO = 50.0    # and cutde must exceed mhs by at least this
 
 
 def slip_frame(tri):
@@ -235,6 +266,82 @@ def main() -> bool:
                    f"difference of two terms that barely resemble each other. "
                    f"The near field is anchored by the adaptive-quadrature "
                    f"reference and the oracle instead, both at 1e-15.")
+
+    # ------------------------------------------------------------------ [e] ---
+    print("\n[e] AN INTERIOR SHARED EDGE: what the divergence costs a FIELD,")
+    print("    and a control proving it is the slip jump and not the edge")
+    from mhs import tdcs
+    pn = tdcs.unit_normals(PAIR)
+    coplanar = float(np.abs(pn[0] - pn[1]).max())
+    eps_e = EPSS[1] * 2.0                     # 0.2, comfortably inside L
+    ds = np.array([d * eps_e for d in PAIR_DS_OVER_EPS])
+    obs = np.vstack([EDGE_MID + d * pn[0] for d in ds])
+
+    def _vm(sig):
+        t = np.trace(sig, axis1=-2, axis2=-1) / 3.0
+        d = sig - t[..., None, None] * np.eye(3)
+        return np.sqrt(1.5 * np.einsum("...ij,...ij->...", d, d))
+
+    def _pair_fields(local):
+        slip = tdcs.to_cartesian(PAIR, local)
+        m = _vm(np.einsum("omnsk,sk->omn",
+                          stress_matrix(obs, PAIR, mat, eps_e), slip))
+        E = np.asarray(hs.strain_matrix(obs.copy(), PAIR.copy(), NU))
+        Es = np.einsum("ovsk,sk->ov", E, tdcs.from_cartesian(PAIR, slip))
+        e = np.zeros((obs.shape[0], 3, 3))
+        for v, (a, b) in enumerate([(0, 0), (1, 1), (2, 2),
+                                    (0, 1), (0, 2), (1, 2)]):
+            e[:, a, b] = Es[:, v]
+            e[:, b, a] = Es[:, v]
+        tr = e[:, 0, 0] + e[:, 1, 1] + e[:, 2, 2]
+        sg = 2.0 * MU * e
+        for a in range(3):
+            sg[:, a, a] += LAM * tr
+        return m, _vm(sg)
+
+    rep.check("e the test pair is exactly coplanar", coplanar, 1e-12,
+              "a dihedral angle would give the divergence below a geometric "
+              "explanation, and there must not be one")
+
+    s_uni = PAIR_SLIP_KM * np.array([[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    s_mis = PAIR_SLIP_KM * np.array([[1.0, 0.0, 0.0],
+                                     [PAIR_MISMATCH, 0.0, 0.0]])
+    print(f"    {'slip across the edge':>22} {'d/eps':>8} {'mhs':>12} "
+          f"{'cutde':>12} {'ratio':>9}")
+    out = {}
+    for name, loc in (("equal (the control)", s_uni),
+                      (f"{100 * (1 - PAIR_MISMATCH):.0f} % mismatch", s_mis)):
+        m, c = _pair_fields(loc)
+        out[name] = (m, c)
+        for k, d in enumerate(PAIR_DS_OVER_EPS):
+            print(f"    {name if k == 0 else '':>22} {d:8.3f} {m[k]:12.4e} "
+                  f"{c[k]:12.4e} {c[k] / m[k]:9.3f}")
+
+    m, c = out["equal (the control)"]
+    rep.check("e CONTROL: with equal slip cutde does not diverge",
+              abs(c[0] / c[1] - 1.0), TOL_FLAT,
+              "a decade closer to the shared edge, and nothing happens -- so "
+              "the edge ALONE is not a singularity")
+    rep.check("e CONTROL: nor does mhs", abs(m[0] / m[1] - 1.0), TOL_FLAT)
+
+    m, c = out[f"{100 * (1 - PAIR_MISMATCH):.0f} % mismatch"]
+    per_decade = float(c[0] / c[1])
+    rep.check_bool(f"e with mismatched slip cutde diverges as 1/d "
+                   f"({per_decade:.2f}x per decade)",
+                   abs(per_decade / 10.0 - 1.0) < TOL_PER_DECADE,
+                   "the residual dislocation left on the shared edge is a "
+                   "DISCRETISATION artefact: the physical crack is smooth "
+                   "there, and the control above says so")
+    rep.check("e while mhs stays flat over the same decade",
+              abs(m[0] / m[1] - 1.0), TOL_FLAT,
+              "eps is a declared length, so the smeared jump has no line left "
+              "to diverge on")
+    rep.check_bool(f"e and cutde exceeds mhs by > {TRIP_EDGE_RATIO:g}x there",
+                   c[0] / m[0] > TRIP_EDGE_RATIO,
+                   f"({c[0] / m[0]:.1f}x) -- this is the one quantity for "
+                   f"which the mollified kernel is not merely equivalent to a "
+                   f"classical element, and it is a FIELD quantity, never a "
+                   f"collocation one")
     return rep.finish()
 
 
