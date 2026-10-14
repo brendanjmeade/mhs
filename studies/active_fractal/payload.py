@@ -86,6 +86,14 @@ LAM_MAX_FACTOR = 3.0
 #: over millions of values.
 ROUNDTRIP_MARGIN = 1.15
 
+#: Cluster adjacency radius for the published planarity array, in units of the
+#: element size. MATCHES ``run.py localize --reach`` so the page and the
+#: measurement describe the same clusters. 1.5 h percolates on a dense cloud --
+#: every active element lands in one component of ~10000 and the statistic
+#: stops discriminating, reading "1 cluster" for the active set AND for every
+#: null -- so the measurement runs at 0.7 and so does this.
+REACH_OVER_H = 0.7
+
 
 def encode_log_u8(v: np.ndarray) -> tuple[bytes, dict]:
     """Positive values -> uint8 on a log10 ramp; zeros -> ``NODATA``."""
@@ -118,8 +126,81 @@ def decode_log_u8(buf: bytes, meta: dict) -> np.ndarray:
     return out
 
 
+def encode_linear_u8(v: np.ndarray, lo: float, hi: float) -> tuple[bytes,
+                                                                   dict]:
+    """Values on ``[lo, hi]`` -> uint8 on a LINEAR ramp, with no NODATA.
+
+    THE LOG RAMP IS WRONG FOR TWO OF THE ARRAYS THIS PAYLOAD CARRIES, and
+    forcing them through it would make the page lie twice over. Slip spans
+    decades and is positive, so a log ramp with ``0 = never slipped`` is right
+    for it. Cluster planarity lives on ``[0, 1]`` and its zero is a MEASURED
+    zero -- a cluster with no planar character -- not an absence; and the
+    active-against-null comparison is three CATEGORIES, where the arithmetic
+    between codes has no meaning at all. Sent down the log path, both would
+    render with a colour bar reading decades and with a legitimate zero drawn
+    in the grey the viewer reserves for "this element never slipped".
+
+    So the range is explicit rather than inferred from the data: a categorical
+    array must land on exactly the codes the viewer switches on, and letting
+    ``lo``/``hi`` float with the realized values would move them.
+    """
+    if not (hi > lo):
+        raise ValueError(f"need hi > lo, got lo={lo!r} hi={hi!r}")
+    t = (np.clip(np.asarray(v, float), lo, hi) - lo) / (hi - lo)
+    q = np.clip(np.round(t * (LEVELS - 1)), 0, LEVELS - 1).astype(np.uint8)
+    return q.tobytes(), {"encoding": "linear_u8", "lin_min": float(lo),
+                         "lin_max": float(hi),
+                         "min": float(np.nanmin(v)) if v.size else 0.0,
+                         "max": float(np.nanmax(v)) if v.size else 0.0,
+                         "n_nonzero": int(np.count_nonzero(v))}
+
+
+def decode_linear_u8(buf: bytes, meta: dict) -> np.ndarray:
+    q = np.frombuffer(buf, np.uint8).astype(np.float64)
+    return meta["lin_min"] + (q / (LEVELS - 1)) * (meta["lin_max"]
+                                                   - meta["lin_min"])
+
+
+def encode_category_u8(v: np.ndarray, names: list[str]) -> tuple[bytes, dict]:
+    """Small integer labels -> the SAME uint8, with the names carried along.
+
+    A RAMP IS THE WRONG SHAPE FOR A LABEL, and the measurement says so rather
+    than taste: three categories pushed through :func:`encode_linear_u8` on
+    ``[0, 2]`` land on bytes 0, 126 and 253 and decode to 0, 0.996 and 2.0, so
+    the viewer would have to recover a label by nearest match and the error
+    would scale with ``LEVELS``. Identity is exact, needs no bound, and makes
+    the manifest say what each code MEANS instead of leaving the page to
+    hard-code three magic numbers.
+    """
+    q = np.asarray(v)
+    if q.min() < 0 or q.max() >= len(names):
+        raise ValueError(f"labels must index {names}, got "
+                         f"{q.min()}..{q.max()}")
+    return (q.astype(np.uint8).tobytes(),
+            {"encoding": "category_u8", "categories": list(names),
+             "min": int(q.min()), "max": int(q.max()),
+             "counts": [int((q == i).sum()) for i in range(len(names))],
+             "n_nonzero": int(np.count_nonzero(q))})
+
+
 def roundtrip(v: np.ndarray, buf: bytes, meta: dict) -> tuple[float, float]:
-    """``(worst measured relative error, arithmetic bound)``."""
+    """``(worst measured relative error, arithmetic bound)``.
+
+    Dispatches on the encoding, so a new ramp cannot be shipped without being
+    held to the same check the log one is: the caller compares the measured
+    error against ``ROUNDTRIP_MARGIN`` times the bound and refuses to write
+    otherwise.
+    """
+    if meta.get("encoding") == "category_u8":
+        got = np.frombuffer(buf, np.uint8).astype(np.int64)
+        return float(np.abs(got - np.asarray(v, np.int64)).max()), 0.0
+    if meta.get("encoding") == "linear_u8":
+        got = decode_linear_u8(buf, meta)
+        span = meta["lin_max"] - meta["lin_min"]
+        err = float(np.abs(got - np.clip(np.asarray(v, float),
+                                         meta["lin_min"],
+                                         meta["lin_max"])).max() / span)
+        return err, float(0.5 / (LEVELS - 1))
     got = decode_log_u8(buf, meta)
     good = np.isfinite(v) & (v > 0.0)
     if not np.any(good):
@@ -698,6 +779,71 @@ def main() -> int:
                      "sha256": hashlib.sha256(buf).hexdigest()[:16],
                      "measured_rel_err": got, "bound_rel_err": bound})
         arrays[name] = meta
+
+    # TWO ARRAYS THAT DESCRIBE THE FINAL STATE, not its history, so each is a
+    # SINGLE frame of n bytes against slip's frames * n. The viewer reads each
+    # array's own ``frames`` rather than the manifest's global one.
+    #
+    # They are here because the page's headline is a comparison, not a picture:
+    # the active set is 97.4 % identical to the set that would fail with K = 0,
+    # so showing slip alone shows mostly what the LOADING chose and lets a
+    # reader credit it to interaction.
+    final = cum[-1]
+    act = final > 0.0
+    cent = net.tris.mean(axis=1)
+    if int(act.sum()) >= 3:
+        # The no-interaction null, matched in cardinality: the elements the far
+        # field alone would fail, scored exactly as `run.cmd_localize` does.
+        score = -fric.first_failure_lambda()
+        order = np.argsort(-np.where(np.isfinite(score), score, -np.inf))
+        nul = np.zeros(n, bool)
+        nul[order[:int(act.sum())]] = True
+        code = np.where(act & nul, 0, np.where(act, 1, np.where(nul, 2, 0)))
+        code = np.where(act | nul, code, 0).astype(np.uint8)
+        NAMES = ["both or neither", "interaction added", "interaction removed"]
+        buf, meta = encode_category_u8(code, NAMES)
+        got, _ = roundtrip(code, buf, meta)
+        if got != 0.0:
+            raise SystemExit(f"category encoding is not exact: {got}")
+        (out / "fractal.nulldiff.bin").write_bytes(buf)
+        meta.update({"bytes": len(buf), "frames": 1, "n": n,
+                     "order": "single frame: buf[i] is element i",
+                     "sha256": hashlib.sha256(buf).hexdigest()[:16],
+                     "measured_rel_err": 0.0, "bound_rel_err": 0.0,
+                     "shared_fraction": float((act & nul).sum()
+                                              / max(int(act.sum()), 1))})
+        arrays["nulldiff"] = meta
+        print(f"  nulldiff: {meta['counts']} for {NAMES}, "
+              f"shared {meta['shared_fraction']:.1%}")
+
+        # Planarity of the cluster each active element belongs to. Inactive
+        # elements get 0, which here is a MEASURED zero and not a NODATA --
+        # exactly why this cannot go down the log ramp.
+        lab = M.connected_clusters(cent[act], REACH_OVER_H * net.h)
+        pla = np.zeros(n)
+        sub = np.zeros(int(act.sum()))
+        for c_ in np.unique(lab):
+            sel = lab == c_
+            p_, _l = M.shape_indices(cent[act][sel])
+            sub[sel] = 0.0 if not np.isfinite(p_) else p_
+        pla[act] = sub
+        buf, meta = encode_linear_u8(pla, 0.0, 1.0)
+        got, bound = roundtrip(pla, buf, meta)
+        print(f"  planarity round trip: measured {got:.4%}  bound "
+              f"{bound:.4%}")
+        if bound > 0.0 and got > ROUNDTRIP_MARGIN * bound:
+            raise SystemExit(
+                f"planarity quantisation error {got:.4%} exceeds the bound "
+                f"{bound:.4%} by more than {ROUNDTRIP_MARGIN}x. Do not "
+                f"publish this payload.")
+        (out / "fractal.planarity.bin").write_bytes(buf)
+        meta.update({"bytes": len(buf), "frames": 1, "n": n,
+                     "order": "single frame: buf[i] is element i",
+                     "sha256": hashlib.sha256(buf).hexdigest()[:16],
+                     "measured_rel_err": got, "bound_rel_err": bound,
+                     "reach_over_h": REACH_OVER_H,
+                     "n_clusters": int(np.unique(lab).size)})
+        arrays["planarity"] = meta
 
     geom = np.ascontiguousarray(net.tris, dtype=np.float32).tobytes()
     (out / "fractal.geom.bin").write_bytes(geom)

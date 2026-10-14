@@ -258,6 +258,48 @@ def isotropic_normals(rng, n: int) -> np.ndarray:
     return np.where(g[:, 2:3] < 0.0, -g, g)
 
 
+def subparallel_normals(rng, n: int, mean_normal, spread_deg: float
+                        ) -> np.ndarray:
+    """``(n, 3)`` unit normals scattered about ``mean_normal``.
+
+    THE ISOTROPIC CLOUD CANNOT CASCADE, AND THIS IS WHY IT MATTERS. The
+    triggering budget counts only the positive part of the transfer, so
+    neighbours at differing orientations relax each other about as often as
+    they trigger, and the budget cancels against itself: the fault network
+    measured ``B_intra = 0.526`` among CO-ORIENTED elements of one fault
+    against ``B_inter = 0.0005-0.011`` between faults, and an isotropic cloud
+    is all "inter". Packing harder does not fix that -- it is a property of the
+    orientations, not of the distance -- so the remaining lever is the spread.
+
+    This is also the configuration the question is actually about. A real rock
+    holds far more fractures than participate, and the ones that matter are the
+    kinematically coherent subset. Drawing every element near one orientation
+    removes the loading's ability to do the selecting -- they are all similarly
+    favoured -- so what is left to distinguish them is POSITION and the elastic
+    interaction, which is the thing being measured.
+
+    ``spread_deg`` is the standard deviation of the polar angle away from
+    ``mean_normal``, with azimuth uniform about it: 0 is a perfectly parallel
+    set, and large values approach :func:`isotropic_normals` without ever
+    being it, because a half-normal has no cut-off. Orientation stays
+    INDEPENDENT OF POSITION, so the no-interaction null is still spatially
+    unstructured by construction and the study's central comparison survives
+    unchanged.
+    """
+    m = np.asarray(mean_normal, float)
+    m = m / np.linalg.norm(m)
+    a = np.cross(m, [0.0, 0.0, 1.0] if abs(m[2]) < 0.9 else [1.0, 0.0, 0.0])
+    a /= np.linalg.norm(a)
+    b = np.cross(m, a)
+    th = np.abs(rng.normal(0.0, math.radians(spread_deg), int(n)))
+    ph = rng.uniform(0.0, 2.0 * math.pi, int(n))
+    v = (np.cos(th)[:, None] * m
+         + np.sin(th)[:, None] * (np.cos(ph)[:, None] * a
+                                  + np.sin(ph)[:, None] * b))
+    v /= np.linalg.norm(v, axis=1, keepdims=True)
+    return np.where(v[:, 2:3] < 0.0, -v, v)
+
+
 def fabric(normals: np.ndarray) -> np.ndarray:
     """Eigenvalues ``S1 >= S2 >= S3`` of the orientation tensor ``<n (x) n>``.
 
@@ -460,17 +502,42 @@ class _Hash:
         c = self._g
         return (int(p[0] // c), int(p[1] // c), int(p[2] // c))
 
-    def _on_face(self, c, q, nq) -> bool:
-        """Is point ``c`` inside the eps-band of the element at ``q``/``nq``?"""
+    def _on_face(self, c, q, nq, tq=None) -> bool:
+        """Is point ``c`` inside the eps-band of the element at ``q``/``nq``?
+
+        ``reach`` is the CIRCUMSCRIBED disc, so it is a cheap conservative
+        bound and nothing more: its area is ``pi (h/sqrt 3)^2 = 1.047 h^2``
+        against the triangle's own ``0.433 h^2``, 2.42 times too much. Given
+        ``tq`` the disc only pre-filters and the triangle itself decides.
+        Measured on a production cloud, that recovered 45.7 % and 44.3 % of the
+        pruning at 3000 and 8000 elements -- 28.5 % falling to 15.5 % -- so
+        nearly half of what was being discarded was the approximation rather
+        than a real interpenetration.
+
+        The containment test asks that ``c`` fall on the same side of all three
+        edges, which is winding independent: a triangle wound against ``nq``
+        flips all three signs together, and this study has already paid once
+        for assuming a winding (``growth.kink_candidates``).
+        """
         dv = c - q
         perp = abs(float(np.dot(dv, nq)))
         if perp >= self.face_clear:
             return False
         inplane = math.sqrt(max(float(np.dot(dv, dv)) - perp * perp, 0.0))
-        return inplane < self.reach
+        if inplane >= self.reach:
+            return False                 # outside the disc is outside both
+        if tq is None:
+            return True
+        p = c - float(np.dot(c - tq[0], nq)) * nq
+        s0 = float(np.dot(np.cross(tq[1] - tq[0], p - tq[0]), nq))
+        s1 = float(np.dot(np.cross(tq[2] - tq[1], p - tq[1]), nq))
+        s2 = float(np.dot(np.cross(tq[0] - tq[2], p - tq[2]), nq))
+        return (s0 >= 0.0 and s1 >= 0.0 and s2 >= 0.0) or \
+               (s0 <= 0.0 and s1 <= 0.0 and s2 <= 0.0)
 
     def keep_mask(self, pts: np.ndarray,
-                  normals: np.ndarray | None = None) -> np.ndarray:
+                  normals: np.ndarray | None = None,
+                  tris: np.ndarray | None = None) -> np.ndarray:
         """Which of ``pts`` clear everything already held AND each other.
 
         Greedy in the given order and it ADDS as it goes, so the result is
@@ -478,7 +545,18 @@ class _Hash:
         ``normals`` enables the face-clearance floor; without it only the
         distance floor applies, which is what the fault-network generator wants
         -- its elements are coplanar neighbours by construction and that is the
-        configuration the face rule deliberately permits.
+        configuration the face rule deliberately permits. ``tris`` narrows that
+        floor from each element's circumscribed disc to the element, which is
+        worth about half the pruning; see :meth:`_on_face`.
+
+        THE ORDER BIASES WHICH ELEMENT OF A CLOSE PAIR SURVIVES, which matters
+        for what this generator is used to measure. The exclusion region is
+        orientation dependent, so greedy admission by index leaves survivors
+        whose mutual orientations are tilted toward large inter-normal angles
+        -- face-on stacked pairs, the most strongly coupled ones, are the ones
+        preferentially dropped. Any interaction effect measured on a pruned
+        cloud is therefore an UNDERESTIMATE, and the remedy is to prune less
+        rather than to reweight afterwards.
         """
         c2 = self.cell * self.cell
         use_f = (normals is not None and self.face_clear > 0.0
@@ -486,18 +564,19 @@ class _Hash:
         ok = np.ones(len(pts), bool)
         for i, p in enumerate(pts):
             ni = normals[i] if normals is not None else None
+            ti = tris[i] if tris is not None else None
             i0, j0, k0 = self._key(p)
             clash = False
             for di in (-1, 0, 1):
                 for dj in (-1, 0, 1):
                     for dk in (-1, 0, 1):
-                        for q, nq in self.grid.get((i0 + di, j0 + dj,
-                                                    k0 + dk), ()):
+                        for q, nq, tq in self.grid.get((i0 + di, j0 + dj,
+                                                        k0 + dk), ()):
                             if float(np.sum((p - q) ** 2)) < c2:
                                 clash = True
                                 break
-                            if use_f and (self._on_face(p, q, nq)
-                                          or self._on_face(q, p, ni)):
+                            if use_f and (self._on_face(p, q, nq, tq)
+                                          or self._on_face(q, p, ni, ti)):
                                 clash = True
                                 break
                         if clash:
@@ -509,7 +588,7 @@ class _Hash:
             if clash:
                 ok[i] = False
             else:
-                self.grid.setdefault((i0, j0, k0), []).append((p, ni))
+                self.grid.setdefault((i0, j0, k0), []).append((p, ni, ti))
         return ok
 
 
@@ -741,7 +820,8 @@ def build_aligned(*, seed: int, n_elements: int = 5000, h: float = 0.5,
 def build_cloud(*, seed: int, n_elements: int = 20000, h: float = 0.5,
                 spacing_over_h: float = 1.5, eps_over_h: float = 0.1,
                 centers: str = "uniform", cascade: tuple[int, int, int] = (3, 4, 3),
-                z_top: float = -2.0) -> Network:
+                z_top: float = -2.0, spread_deg: float | None = None,
+                mean_normal=(0.0, 0.0, 1.0)) -> Network:
     """A DENSE CLOUD of independently-oriented single-triangle slip patches.
 
     The element IS the fracture here: one equilateral triangle of edge ``h``,
@@ -824,7 +904,8 @@ def build_cloud(*, seed: int, n_elements: int = 20000, h: float = 0.5,
     # Keep every vertex strictly below the free surface and inside the band.
     cen[:, 2] = np.clip(cen[:, 2], z_bottom + reach, z_top - reach)
 
-    nrm = isotropic_normals(rng, cen.shape[0])
+    nrm = (isotropic_normals(rng, cen.shape[0]) if spread_deg is None else
+           subparallel_normals(rng, cen.shape[0], mean_normal, spread_deg))
     tris = oriented_triangle(cen, nrm, h)
 
     # The separation floor still applies, and at s = 1.5 h with eps = 0.1 h it
@@ -832,7 +913,7 @@ def build_cloud(*, seed: int, n_elements: int = 20000, h: float = 0.5,
     # It is measured rather than assumed.
     hsh = _Hash(MIN_SEP_OVER_EPS * eps,
                 face_clear=MIN_FACE_CLEARANCE_OVER_EPS * eps, reach=reach)
-    keep_mask = hsh.keep_mask(tris.mean(axis=1), nrm)
+    keep_mask = hsh.keep_mask(tris.mean(axis=1), nrm, tris)
     n_pruned = int((~keep_mask).sum())
     tris = np.ascontiguousarray(tris[keep_mask])
     nrm = nrm[keep_mask]

@@ -103,6 +103,53 @@ CONFIGS = {
     # amplifies, ignores or overrides pre-existing geometric clustering.
     "cloud_fractal": dict(kind="cloud", centers="cascade", cascade=(3, 4, 3),
                           h=0.5, spacing_over_h=0.7),
+    # THE DENSEST SAFE CLOUD, and every term in that is measured. Coupling goes
+    # as 1/r^3, so only pairs at r ~ h matter and the whole question is how many
+    # of those a cloud can hold. The limit is hard-particle packing, not the
+    # pruning floors (2.5 eps = 0.25 h against a circumradius of 0.577 h) and
+    # not eps, whose effect on |P_ij|/|P_ii| is nil -- 0.0424 to 0.0410 across
+    # a 16x sweep -- because that ratio is set by r/h.
+    #
+    # s/h = 0.65 is the knee. B scales with system size by a MEASURED 1.402
+    # from 3000 to 30000 elements, which the 0.6 (h/s)^3 ln(L/s) estimate
+    # understates by 9 %, so from the calibration:
+    #
+    #     s/h 0.70 -> B 0.73    s/h 0.65 -> B 0.87    s/h 0.60 -> B 1.00
+    #
+    # and B > 1 is runaway. 39000 asked keeps ~30000 at ~23 % pruning; the
+    # matrix is then 43 GB and its transpose the same again, 68 % of a 128 GB
+    # machine, so 40000 kept would not fit. `payload.snapshots` refuses a
+    # runaway cascade rather than shipping one, which is the guard on 0.87.
+    "cloud_dense": dict(kind="cloud", centers="uniform", n_elements=39000,
+                        h=0.5, spacing_over_h=0.65),
+    # SUBPARALLEL, AND SMALL ON PURPOSE. A rock holds far more fractures than
+    # take part; the ones that matter are the kinematically coherent subset.
+    # Drawing every element near ONE orientation removes the loading's power to
+    # select -- they are all similarly favoured -- so position and the elastic
+    # interaction are the only things left to tell them apart, which is the
+    # thing being measured.
+    #
+    # It also buys the coupling density could not. B counts only the positive
+    # transfer, so differently-oriented neighbours cancel; measured at 2000
+    # elements, s/h = 0.65, against the orientation spread:
+    #
+    #     spread    0    5   10   20   30   45  isotropic
+    #     B      0.762 0.734 0.681 0.630 0.605 0.588  0.581
+    #     mineig  6.2  5.1  15.6 22.8 23.8 25.4   21.8
+    #
+    # So aligning lifts B by 31 %, reaching the band at 2000 elements where the
+    # density route needed 30000 -- but it is NOT the 0.526-against-0.001 split
+    # the fault network showed between its own faults, because THAT contrast is
+    # coplanar AND contiguous, one continuous crack, and these planes are
+    # parallel but scattered. Coherence without contiguity buys half the story.
+    #
+    # 20 degrees, not 0: the margin collapses to 6.2 for a perfectly parallel
+    # set, where close neighbours are nearly degenerate, against the ~10 the
+    # face-clearance constant's own table calls the danger zone.
+    "cloud_subparallel": dict(kind="cloud", centers="uniform",
+                              n_elements=2600, h=0.5, spacing_over_h=0.65,
+                              spread_deg=20.0,
+                              mean_normal=(0.2669, 0.0, 0.9637)),
 }
 
 

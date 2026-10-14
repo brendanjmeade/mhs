@@ -1823,6 +1823,59 @@ def c_cloud() -> None:
           f"(Poisson predicts 0.554)")
     check("nearest-neighbour spacing matches Poisson", abs(ratio - 0.554), 0.06)
 
+    # ---- orientation spread, and the published payload's encodings --------
+    # SUBPARALLEL IS WHAT BUYS THE COUPLING DENSITY COULD NOT. B counts only
+    # the positive transfer, so differently-oriented neighbours cancel; at 2000
+    # elements and s/h = 0.65 the budget runs 0.581 isotropic to 0.762 parallel
+    # while the eigenvalue margin falls 21.8 to 6.2, which is why the shipped
+    # config sits at 20 degrees and not at 0.
+    mn = np.array([0.2669, 0.0, 0.9637])
+    s_tight = N.fabric(N.subparallel_normals(rng, 40000, mn, 5.0))
+    s_wide = N.fabric(N.subparallel_normals(rng, 40000, mn, 45.0))
+    s_iso = N.fabric(N.isotropic_normals(rng, 40000))
+    print(f"       S1 at spread 5 / 45 / isotropic: {s_tight[0]:.4f} "
+          f"{s_wide[0]:.4f} {s_iso[0]:.4f}")
+    check_true("a tight spread is nearly parallel", s_tight[0] > 0.98,
+               f"S1 {s_tight[0]:.4f}")
+    check_true("the spread orders the fabric", s_tight[0] > s_wide[0] > s_iso[0],
+               f"{s_tight[0]:.4f} > {s_wide[0]:.4f} > {s_iso[0]:.4f}")
+    # Spread 0 must be EXACTLY the mean direction, or "subparallel" is a
+    # distribution whose own limit it does not reach.
+    # Against the NORMALISED mean, since the function normalises and the
+    # literal above has norm 0.99998 -- comparing to the raw vector measures
+    # that rounding and nothing else.
+    check("spread 0 is exactly the mean normal",
+          float(np.abs(N.subparallel_normals(rng, 100, mn, 0.0)
+                       - mn / np.linalg.norm(mn)).max()), 1e-12)
+
+    # THE PUBLISHED PAYLOAD'S THREE RAMPS, each held to its own bound. The log
+    # ramp is for slip, which spans decades and reserves 0 for "never
+    # slipped"; planarity is linear on [0, 1] where 0 is MEASURED; and the
+    # active-against-null comparison is labels, where arithmetic between codes
+    # is meaningless. Pushing the labels down the linear ramp lands them on
+    # bytes 0, 126 and 253 and decodes them to 0, 0.996 and 2.0 -- distinct but
+    # inexact -- which is why they get identity instead.
+    import payload as Pl                                      # noqa: PLC0415
+    lin = rng.random(5000)
+    bl, ml = Pl.encode_linear_u8(lin, 0.0, 1.0)
+    gl, bd = Pl.roundtrip(lin, bl, ml)
+    check_true("the linear ramp round trips inside its bound",
+               gl <= Pl.ROUNDTRIP_MARGIN * bd,
+               f"{gl:.3e} against {bd:.3e}")
+    cats = np.array([0, 1, 2] * 300)
+    bc, mc = Pl.encode_category_u8(cats, ["a", "b", "c"])
+    gc, _ = Pl.roundtrip(cats, bc, mc)
+    check_true("labels survive the category encoding exactly", gc == 0.0,
+               f"worst departure {gc}")
+    check_true("and keep their own code values",
+               sorted(set(np.frombuffer(bc, np.uint8).tolist())) == [0, 1, 2],
+               f"{sorted(set(np.frombuffer(bc, np.uint8).tolist()))}")
+    # The failure this replaced, kept as a tripwire: a ramp would NOT be exact.
+    bw, mw = Pl.encode_linear_u8(cats.astype(float), 0.0, 2.0)
+    check_true("a ramp would have been inexact for labels",
+               float(np.abs(Pl.decode_linear_u8(bw, mw) - cats).max()) > 1e-6,
+               f"{float(np.abs(Pl.decode_linear_u8(bw, mw) - cats).max()):.3e}")
+
 
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,

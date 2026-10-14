@@ -12,52 +12,62 @@ const M = (src: string, display = true) =>
 ---
 <Base
   title="mhs — Active fractal"
-  description="The unique static frictional solution on a synthetic 3-D fault network: 538 power-law faults, 20771 mollified elements, and which of them slip as the friction coefficient varies."
+  description="The unique static frictional solution on a dense cloud of 2056 subparallel slip patches, where the element IS the fracture: which of them slip as the load grows, and what the elastic interaction adds to the loading's own choice."
   current="fractal"
 >
   <Fragment slot="sidebar">
-    <h1>Active fractal<span class="sub">which faults actually slip</span></h1>
+    <h1>Active fractal<span class="sub">which fractures actually slip</span></h1>
     <p>
-      A synthetic fault network with no slip prescribed anywhere. Each element
-      carries a frictional strength, and slip is permitted only where the
-      resolved stress reaches it. Faults that slip change the stress on every
-      other fault, so the set that slips is the solution of a coupled problem
-      rather than a per-fault test &mdash; and at a fixed load that solution
-      is <b>unique</b>.
+      A dense cloud of small slip patches with nothing prescribed anywhere.
+      Each element carries a frictional strength, and slip is permitted only
+      where the resolved stress reaches it. Patches that slip change the stress
+      on every other patch, so the set that slips is the solution of a coupled
+      problem rather than a per-patch test &mdash; and at a fixed load that
+      solution is <b>unique</b>.
     </p>
     <p>
-      538 faults with <b>power-law lengths</b> from 2.0 to 37.9&nbsp;km in a
-      100&nbsp;km box, 2 to 42&nbsp;km depth, 20,771&nbsp;elements of 1&nbsp;km
-      edge, <i>&epsilon;</i>&nbsp;=&nbsp;100&nbsp;m. Strike-slip regime,
-      &mu;<sub>s</sub>&nbsp;=&nbsp;0.6 with a 10&nbsp;% strength drop,
-      confining stress 150&nbsp;MPa. The load is a <b>full stress tensor</b>
-      on the path <i>k</i>&nbsp;=&nbsp;2/3 &mdash; only
-      <i>&sigma;<sub>H</sub></i> grows &mdash; so every element stays in
-      compression at every frame.
+      <b>The element IS the fracture here.</b> There is no fault hierarchy and
+      so no inherited coherence: 2,056&nbsp;single triangles of 500&nbsp;m
+      edge, <i>&epsilon;</i>&nbsp;=&nbsp;50&nbsp;m, each with its own
+      orientation, packed at 0.65 of an element width. A rock holds far more
+      fractures than take part, and the question is which subset does.
+    </p>
+    <p>
+      The orientations are <b>subparallel</b> &mdash; scattered 20&deg; about
+      the Coulomb-optimal plane &mdash; and that is the point. Drawn
+      isotropically, neighbours relax each other about as often as they trigger
+      and the coupling cancels against itself; aligning them raises the
+      triggering budget from 0.58 to 0.76. It also removes the loading's power
+      to choose, since every patch is then similarly favoured, which leaves
+      <i>position</i> and the elastic interaction as the only things that can
+      tell them apart. &mu;<sub>s</sub>&nbsp;=&nbsp;0.6 with a 10&nbsp;%
+      strength drop, confining stress 150&nbsp;MPa.
     </p>
     <div class="note">
       <b>This is the experiment the on-fault interaction matrix exists for.</b>
       A stress-driven network needs <i>K<sub>ii</sub></i> &mdash; how much an
       element's own slip relieves its own shear &mdash; and for a classical
       dislocation element that number is undefined on the fault. Mollification
-      makes it finite and, measured here, negative on every one of the 20,771
+      makes it finite and, measured here, negative on every one of the 2,056
       elements.
     </div>
     <p class="contact">
-      The sliders are <b>friction</b> and <b>stress orientation</b>, not time.
-      Each of the 300 cells is a separate <i>static solution</i> &mdash; the
-      unique answer at that (&mu;, orientation) &mdash; and none depends on
-      any other. Nothing here propagates and nothing accumulates.
+      The slider is <b>load</b>, not time. Each of the 120 frames is a
+      separate <i>static solution</i> &mdash; the unique answer at that
+      <i>&lambda;</i> &mdash; but unlike a friction sweep these DO build on one
+      another: the load only grows, slip is irreversible, and a frame shows the
+      cumulative slip at that load. The events between two frames are what the
+      increment colouring shows. Nothing propagates in time; the sequence is a
+      path through equilibria, not a rupture.
     </p>
     <p class="contact">
-      Arrows at the free surface are the <b>regional stress</b> and turn with
-      the orientation slider: <span style="color:#c2410c"><b>warm</b></span>
-      inward along the maximum compression
-      (<i>&sigma;</i><sub>1</sub>&nbsp;=&nbsp;904&nbsp;MPa),
-      <span style="color:#1f6feb"><b>cool</b></span> outward along the minimum
-      (<i>&sigma;</i><sub>3</sub>&nbsp;&asymp;&nbsp;0). The load magnitude is
-      held fixed at <i>&lambda;</i>&nbsp;=&nbsp;0.4525 throughout; only its
-      direction and the friction change.
+      Arrows at the free surface are the <b>regional stress</b>:
+      <span style="color:#c2410c"><b>warm</b></span> inward along the maximum
+      compression, <span style="color:#1f6feb"><b>cool</b></span> outward along
+      the minimum. Their direction is fixed here and only the magnitude grows,
+      to 2.3&nbsp;times the load at which the first patch fails &mdash; which
+      is within the point where any patch would go into tension, so every one
+      stays in compression at every frame.
     </p>
     <div class="links">
       <div><a href={`${base}concepts/`}>How the kernel works</a></div>
@@ -78,7 +88,7 @@ const M = (src: string, display = true) =>
       <span data-ctl="iso"></span>
       <div class="rng" data-ctl="thresh"><span>threshold</span></div>
     </div>
-    <div data-canvas class="canvas" aria-label="A synthetic three-dimensional fault network of 538 power-law faults, coloured by which elements slip as the friction coefficient increases, with arrows showing the regional stress axes"></div>
+    <div data-canvas class="canvas" aria-label="A three-dimensional cloud of 2056 subparallel slip patches, coloured by cumulative slip as the load increases, with arrows showing the regional stress axes"></div>
     <div data-bar class="bar"></div>
     <p data-status class="status">loading…</p>
   </div>
@@ -220,7 +230,7 @@ const M = (src: string, display = true) =>
     max<sub><i>i</i></sub>&nbsp;|min(<i>&delta;<sub>i</sub></i>,&nbsp;<i>w<sub>i</sub></i>)|,
     which is zero at the solution and nowhere else &mdash; a step-size test
     would report success on a solver that had merely slowed down. ~141 sweeps
-    cold on 20,771 elements; a handful warm.
+    cold on 2,056 elements; a handful warm.
   </p>
 
   <h3>The screening, in the same notation</h3>
@@ -374,6 +384,16 @@ const M = (src: string, display = true) =>
 
   <h2>Not every fault can ever slip</h2>
 
+  <div class="note">
+    <b>The measurements in this section come from a different configuration
+    than the one displayed above</b> &mdash; 538 power-law faults swept in
+    FRICTION rather than a subparallel cloud swept in LOAD. They are kept
+    because the mechanics they describe is the same and the numbers were
+    earned, but they are not statements about the cloud in the viewer, whose
+    own event statistics are reported further up: median one patch, largest
+    five, 7.9&nbsp;% multi-element.
+  </div>
+
   <p>
     The load clamps as well as shears, so a plane's strength grows with
     <i>&lambda;</i> too. Failure needs
@@ -432,25 +452,37 @@ const M = (src: string, display = true) =>
   </p>
 
   <p>
-    What is emphatically not linear is how many slip. The active count falls
-    15,505&nbsp;&rarr;&nbsp;8,293 over that range in steps of
-    752, 2148, 789, 993, 1036, 803, 279, 412 &mdash; the largest step is
-    nearly eight times the smallest. The same power-law fault sizes that make
-    the locked fraction a staircase make its derivative in <i>&mu;</i> jump
-    around: faults switch off in lumps of their own size, not one element at a
-    time.
+    <b>19.1&nbsp;% of the cloud slips</b> &mdash; 392 patches of 2,056 &mdash;
+    by 2.3&nbsp;times the load at which the first one fails. Almost nothing is
+    permanently locked (0.05&nbsp;%), so that fraction is not a ceiling; it is
+    how far the load was taken. Events are small: the median is a single patch,
+    the largest is five, and 7.9&nbsp;% involve more than one. The triggering
+    budget is 0.63 &mdash; what one patch sheds onto others, as a fraction of
+    what it sheds in total &mdash; so cascades die out, which is what
+    subcritical means and why no event runs away.
   </p>
 
   <p>
-    The locked fraction is set by orientation, <i>&mu;</i> and the loading path
-    alone, and it is <i>lumpy</i>, because fault lengths are power-law. Going
-    from <i>&mu;</i>&nbsp;=&nbsp;0.1 to 0.2 moves it from 0.17&nbsp;% to
-    7.4&nbsp;%, and almost all of that jump is <b>one fault carrying 1,444
-    elements</b> crossing the threshold. Counted in faults the curve is smooth
-    (1, 3, 11, 32, 58, 142, 204, 257 of 538 as <i>&mu;</i> goes 0.05 to 1.0);
-    counted in elements it is a staircase. A barrier here is one big
-    badly-oriented fault, which is a consequence of the size distribution
-    rather than of the mechanics.
+    <b>What the interaction adds is small, and the page shows exactly how
+    small.</b> The honest comparison is not against nothing; it is against the
+    set that would fail with the elastic coupling switched off, chosen by
+    orientation and load alone. That null gets 98&nbsp;% of the same patches.
+    Colour by <i>what interaction changed</i> and almost the whole cloud is
+    grey: the loading does nearly all of the choosing, and the handful of
+    patches interaction adds or removes is the entire mechanical contribution.
+    Coherence &mdash; how nearly the slipping patches deform as one &mdash;
+    moves from 0.785 to 0.800, about two per cent.
+  </p>
+
+  <p>
+    What the active set does have is <b>shape</b>. Its clusters are strongly
+    linear (0.91) and barely planar (0.03), against 0.87 and 0.07 for the
+    no-interaction null. Subparallel planes scattered through a volume pick out
+    <i>lineaments</i> rather than sheets when they slip together &mdash; which
+    is the kinematically connected subset this configuration was built to look
+    for, in a form that was not the one anticipated. Colour by
+    <i>cluster planarity</i> to see it, and note how few patches are in a
+    cluster larger than a handful: the largest holds eight.
   </p>
 
   <h2>Why the load is a full tensor and not a deviatoric one</h2>
@@ -605,6 +637,16 @@ const M = (src: string, display = true) =>
 
   <h2>Avalanches</h2>
 
+  <div class="note">
+    <b>The measurements in this section come from a different configuration
+    than the one displayed above</b> &mdash; 538 power-law faults swept in
+    FRICTION rather than a subparallel cloud swept in LOAD. They are kept
+    because the mechanics they describe is the same and the numbers were
+    earned, but they are not statements about the cloud in the viewer, whose
+    own event statistics are reported further up: median one patch, largest
+    five, 7.9&nbsp;% multi-element.
+  </div>
+
   <p>
     An event here is one relaxation to equilibrium after a single element is
     pushed past its static strength &mdash; a cascade through the network, not
@@ -629,7 +671,7 @@ const M = (src: string, display = true) =>
     network &mdash; which is Rice's discreteness critique arriving uninvited.
   </p>
 
-  <h2>The stress isosurface, and why this network has none yet</h2>
+  <h2>The stress isosurface, and why this cloud has none yet</h2>
 
   <p>
     The viewer can raymarch a translucent isosurface of the elastic maximum
@@ -649,7 +691,7 @@ const M = (src: string, display = true) =>
     it is the <i>assembly</i> of an interaction matrix that parallelises at
     8.5&times;, a distinction worth keeping straight, because reading the wrong
     row is what produced the original estimate. Measured end to end at 54.1
-    &micro;s/pair, a 24<sup>3</sup> grid against all 20,771 elements is about
+    &micro;s/pair, a 24<sup>3</sup> grid against all 2,056 elements is about
     4.3 hours. The previous configuration's volume took two.
   </p>
 
@@ -746,7 +788,7 @@ const M = (src: string, display = true) =>
     the set every claim above is made on carries no solver dependence, while an
     avalanche exponent would carry that 7&nbsp;% as part of its uncertainty
     &mdash; one of several reasons none is quoted. The same sweep has not been
-    repeated at 20,771 elements, where each relaxation is a hundred times more
+    repeated at 2,056 elements, where each relaxation is a hundred times more
     expensive.
   </p>
 
@@ -771,12 +813,12 @@ const M = (src: string, display = true) =>
     frame, 254 levels, zero reserved for &ldquo;has never slipped&rdquo; and
     drawn grey rather than at the bottom of the ramp, because a locked element
     is categorically different from one that slipped a little. The whole
-    120&nbsp;&times;&nbsp;20,771 array is encoded in one pass, so the colour
+    120&nbsp;&times;&nbsp;2,056 array is encoded in one pass, so the colour
     scale is global across frames &mdash; a per-frame scale would normalise away
     the growth being animated. The quantisation error is bounded by arithmetic
     rather than asserted, and the build measures what it wrote against that
     bound: 1.239&nbsp;% against a bound of 1.239&nbsp;%, a ratio of 1.000. The
-    payload is 5.5&nbsp;MiB for 20,771 elements across 120 equilibria.
+    payload is 0.55&nbsp;MiB for 2,056 elements across 120 equilibria, plus two single-frame arrays that describe the final state rather than its history.
   </p>
 
   <style is:global>

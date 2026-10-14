@@ -290,6 +290,26 @@ def branching_ratio(P: np.ndarray) -> np.ndarray:
     emergent, the budget split as ``B_intra = 0.526`` (constant to four
     decimals across a 16x density change) against ``B_inter = 0.0005-0.011``,
     which is why nothing there could organize across faults.
+
+    ORIENTATION COHERENCE MAKES THE BUDGET, NOT PROXIMITY, and the ``max(P, 0)``
+    above is where that enters. Only the triggering part counts, so with
+    ISOTROPIC orientations a transfer relaxes a neighbour about as often as it
+    pushes one and most of the coupling cancels against itself. Measured on a
+    dense cloud of independently oriented single triangles:
+
+        s/h      0.60    0.70    1.00    1.50    3.00
+        B mean   0.539   0.423   0.209   0.080   0.013
+        pruned   39 %    30 %    13 %    4.1 %   0.6 %
+
+    against a magnitude estimate ``0.6 (h/s)^3 ln(L/s)`` that puts s/h = 1.5
+    near 0.5 -- seven times the measured value. The gap is the sign
+    cancellation, not an error in the scaling. Note where those sit relative to
+    the fault network's split: a cloud is all "inter", every neighbour
+    differently oriented, so it lands between 0.001 and 0.53 and reaches the
+    latter only by packing elements until a third of them prune -- and pruning
+    removes the most strongly coupled pairs, which is a selection against the
+    very quantity being measured. A fault cascades because its elements share
+    an orientation, and no affordable density buys that back.
     """
     n = P.shape[0]
     idx = np.arange(n)

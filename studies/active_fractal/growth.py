@@ -516,6 +516,25 @@ def kink_candidates(front: Front, theta: float,
     sign keeps one geometric meaning despite that swap. Beyond about 60
     degrees the candidate normal approaches horizontal, where ``tdcs``'s
     hemisphere flip is float noise, so callers cap it.
+
+    IT CANNOT BUILD A SURFACE, WHICH BOUNDS WHAT THIS FUNCTION IS FOR. Two
+    adjacent front edges share a vertex but lie along different lines, so each
+    candidate hinges about a different axis and they separate everywhere except
+    at that shared vertex. Measured on a disc front: at ``theta = 0`` all 12
+    adjacent candidate pairs share an edge; at ANY nonzero ``theta``, 0 of 12
+    do, with gaps reaching 0.116 h by 30 degrees. That is not a sign convention
+    to repair -- choosing the rotation sense by a target direction rather than
+    the edge's winding leaves the gaps exactly where they were.
+
+    So repeated increments do not join into a sheet: fifteen of them at arc
+    width 3 built THREE DISCONNECTED RIBBONS, which no projection of the
+    centroids revealed and only drawing the triangles did. Width 1 is the
+    honest setting here, since each cell is adjacent to its own predecessor and
+    the result is a connected ribbon -- and the physics survives it, the
+    Coulomb turn reading 15.165 degrees against width 3's 17.261 and a
+    prediction of 16.595. A genuine front advance needs the shared VERTICES
+    moved and the strip between old and new meshed, which is a different
+    operation on a different mesh representation.
     """
     e = front.edge if which is None else front.edge[which]
     p = front.apex if which is None else front.apex[which]

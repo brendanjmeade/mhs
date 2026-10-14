@@ -118,7 +118,8 @@ void main() {
   fragColor = vec4(acc.rgb, acc.a);
 }`;
 
-export type Mode = "slip" | "incr" | "activation";
+export type Mode = "slip" | "incr" | "activation" | "nulldiff"
+                 | "planarity";
 
 export interface StressMeta {
   file: string; bytes: number;
@@ -133,6 +134,16 @@ interface ArrayMeta {
   file: string; bytes: number; frames: number; n: number;
   log_min: number; log_max: number; min: number; max: number;
   measured_rel_err: number; bound_rel_err: number;
+  // Slip is a log ramp over decades with 0 reserved for "never slipped".
+  // Two of the cloud's arrays are neither: planarity is linear on [0, 1] and
+  // its zero is MEASURED, and the active-against-null comparison is labels,
+  // where arithmetic between codes means nothing. `encoding` says which, and
+  // the grey-for-zero rule below applies to the log ramp ALONE.
+  encoding?: "log10_u8" | "linear_u8" | "category_u8";
+  lin_min?: number; lin_max?: number;
+  categories?: string[];
+  counts?: number[];
+  shared_fraction?: number;
 }
 
 export interface FractalPayload {
@@ -251,6 +262,8 @@ export class FractalScene {
   private n: number;
   private frames: number;
   private data: Record<string, Uint8Array> = {};
+  /** Kept so `paint` can read each array's own encoding and frame count. */
+  private payload: FractalPayload;
   private activation: Uint8Array;        // first frame with slip, 255 = never
   //: For a mu sweep: the LAST frame in which an element slips. The active set
   //: is nested in mu, so this is single valued -- the payload verifies that
@@ -274,6 +287,7 @@ export class FractalScene {
   constructor(el: HTMLElement, p: FractalPayload, pos: Float32Array,
               stress?: FractalPayload["regional_stress"]) {
     this.el = el;
+    this.payload = p;
     this.n = p.n_elements;
     this.frames = p.frames;
     this.activation = new Uint8Array(this.n).fill(255);
@@ -542,11 +556,34 @@ export class FractalScene {
     } else {
       const arr = this.data[this.mode];
       if (!arr) return;
-      const off = this.frame * n;          // (frames, elements), NOT source-major
-      for (let i = 0; i < n; i++) {
-        const q = arr[off + i];
-        if (q === 0) { put(i, LOCKED[0], LOCKED[1], LOCKED[2]); continue; }
-        put(i, t[q * 4] / 255, t[q * 4 + 1] / 255, t[q * 4 + 2] / 255);
+      const meta = this.payload.arrays[this.mode];
+      const enc = meta?.encoding ?? "log10_u8";
+      // A STATIC array has one frame and must not be indexed by the slider.
+      const nf = meta?.frames ?? this.frames;
+      const off = nf > 1 ? this.frame * n : 0;
+      if (enc === "category_u8") {
+        // Labels, so each gets its own flat colour and none is interpolated.
+        // Grey is "interaction changed nothing here", which is what 97 % of
+        // the cloud is -- the point of the mode is the 3 % that is not.
+        for (let i = 0; i < n; i++) {
+          const c = arr[off + i];
+          if (c === 0) { put(i, LOCKED[0], LOCKED[1], LOCKED[2]); continue; }
+          if (c === 1) put(i, 0.85, 0.20, 0.13);        // interaction added
+          else put(i, 0.10, 0.35, 0.80);                // interaction removed
+        }
+      } else if (enc === "linear_u8") {
+        // Byte 0 is a MEASURED zero here, not "never slipped", so it takes
+        // the bottom of the ramp rather than the locked grey.
+        for (let i = 0; i < n; i++) {
+          const q = arr[off + i];
+          put(i, t[q * 4] / 255, t[q * 4 + 1] / 255, t[q * 4 + 2] / 255);
+        }
+      } else {
+        for (let i = 0; i < n; i++) {
+          const q = arr[off + i];
+          if (q === 0) { put(i, LOCKED[0], LOCKED[1], LOCKED[2]); continue; }
+          put(i, t[q * 4] / 255, t[q * 4 + 1] / 255, t[q * 4 + 2] / 255);
+        }
       }
     }
     this.colours.needsUpdate = true;
@@ -607,12 +644,16 @@ const MODE_LABEL: Record<Mode, string> = {
   incr: "slip in this increment",
   slip: "cumulative slip",
   activation: "load at first slip",
+  nulldiff: "what interaction changed",
+  planarity: "cluster planarity",
 };
 
 const MODE_LABEL_MU: Record<Mode, string> = {
   incr: "change from the previous μ",
   slip: "slip at this μ",
   activation: "critical friction",
+  nulldiff: "what interaction changed",
+  planarity: "cluster planarity",
 };
 
 export async function startFractal(root: HTMLElement, baseUrl: string) {
@@ -640,14 +681,19 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
   }
 
   const scene = new FractalScene(host, p, pos, p.regional_stress);
-  for (const name of ["incr", "slip"]) {
+  // EVERY array the manifest declares, not a hard-coded pair: the cloud ships
+  // two that describe the final state rather than the history, so each is
+  // validated against its OWN `frames` and not the global one. A single-frame
+  // array checked against `p.frames` would be rejected as malformed.
+  for (const name of Object.keys(p.arrays)) {
     const meta = p.arrays[name];
     if (!meta) continue;
+    const want = (meta.frames ?? p.frames) * p.n_elements;
     const buf = await (await fetch(base + meta.file)).arrayBuffer();
     const bytes = new Uint8Array(buf);
-    if (bytes.length !== p.frames * p.n_elements) {
+    if (bytes.length !== want) {
       status.textContent = `${name} is ${bytes.length} bytes for `
-        + `${p.frames} x ${p.n_elements}.`;
+        + `${meta.frames ?? p.frames} x ${p.n_elements}.`;
       return;
     }
     scene.setArray(name, bytes);
@@ -661,8 +707,15 @@ export async function startFractal(root: HTMLElement, baseUrl: string) {
   const grid = p.sweep?.grid ?? null;
   const isMu = p.sweep?.kind === "mu" || p.sweep?.kind === "theta_mu";
   const LABEL = isMu ? MODE_LABEL_MU : MODE_LABEL;
-  for (const m of (isMu ? ["slip", "activation", "incr"]
-                        : ["incr", "slip", "activation"]) as Mode[]) {
+  const order = (isMu ? ["slip", "activation", "incr"]
+                      : ["incr", "slip", "activation"]) as Mode[];
+  // The static cloud modes are offered only when the payload carries them, so
+  // the fault-network payload keeps exactly the three options it always had.
+  for (const extra of ["nulldiff", "planarity"] as Mode[]) {
+    if (p.arrays[extra]) order.push(extra);
+  }
+  for (const m of order) {
+    if (m !== "activation" && !p.arrays[m]) continue;
     const o = document.createElement("option");
     o.value = m; o.textContent = LABEL[m];
     sel.appendChild(o);

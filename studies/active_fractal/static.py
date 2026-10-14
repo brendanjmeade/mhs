@@ -115,6 +115,25 @@ def solve(P: np.ndarray, d: np.ndarray, g: np.ndarray, lam: float, *,
     Convergence is the NATURAL RESIDUAL ``max|min(delta, w)|``, which is zero
     exactly at the solution -- rather than a step-size test, which reports
     success on a solver that has merely slowed down.
+
+    WHILE NOTHING LOCKS, THIS IS A LINEAR SOLVE, and the consequence is worth
+    stating because it rules out a whole class of experiment. On a uniformly
+    driven, uniformly strong crack every element slips, so the complementarity
+    never binds: slip is exactly proportional to the driving and energy to its
+    square. Measured on a disc, ``moment / driving`` is constant to six figures
+    across a THOUSANDFOLD change in the Coulomb margin -- 1.0 down to 0.001 --
+    with no element locked at any level. EVERY DIMENSIONLESS RATIO IS THEREFORE
+    BLIND TO THE LOADING AMPLITUDE, so no uniform knob can change a competition:
+    not the load, not the confining pressure, not the system stiffness of
+    :func:`load_feedback`, not proximity to failure. Each was measured
+    separately before the common cause was noticed.
+
+    What survives is geometric. The energy available at a crack's front against
+    the same patch in the far field is 4.67, 9.34 and 13.42 at radii 3, 6 and
+    9 h -- linear in length, since ``G ~ d_tau^2 L / mu`` grows while an
+    isolated patch is fixed -- and a FRICTIONLESS weak site still reaches only
+    0.669 of the front at 6 h and 0.465 at 9 h. So one crack outgrows a new one
+    by a widening margin, and only spatial heterogeneity can change that.
     """
     n = P.shape[0]
     idx = np.arange(n)
