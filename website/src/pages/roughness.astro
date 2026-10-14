@@ -39,8 +39,10 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
       <label data-ctl="state"><span>state</span></label>
       <label data-ctl="field"><span>field</span></label>
       <label data-ctl="map"><span>colours</span></label>
+      <label data-ctl="crack"><span>crack surface</span></label>
+      <div class="rng" data-ctl="decades"><span>decades</span></div>
     </div>
-    <div data-canvas class="canvas" aria-label="Three movable orthogonal slices through the von Mises stress around a rough dipping crack, computed with a mollified kernel and with a classical triangular dislocation element"></div>
+    <div data-canvas class="canvas" aria-label="Three movable orthogonal slices through the von Mises stress around a rough dipping crack, computed with a mollified kernel and with a classical triangular dislocation element, with the crack's own triangulated surface drawn inside the box"></div>
     <div data-bar class="bar"></div>
     <div class="panel slices">
       <span class="lbl">slices</span>
@@ -127,8 +129,24 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     agreement to one part in ten thousand everywhere else.
   </p>
   <p class="cap">
-    Colour is on a log scale. The difference state is the magnitude of a signed
-    difference, floored four decades below its own maximum &mdash; the state
+    <b>The crack surface is the mesh itself</b>: 1044 facets on 571 shared
+    vertices, welded from the same triangles the field was computed from and
+    refused unless it reproduces them. The wireframe on it is its own edge set,
+    and the <b>1518 interior edges</b> in that picture are the lines this page is
+    about &mdash; there is nothing physical at any of them. Translucent, so it
+    never hides a slice; turn it off to read the slices alone.
+  </p>
+  <p class="cap">
+    Colour is log<sub>10</sub> of the field and always was &mdash; the payload
+    stores log<sub>10</sub> in each byte, one level per 1/253 of the span
+    &mdash; so the ticks are whole powers of ten. What the <b>decades</b>
+    slider sets is how much of that ramp is shown, counted down from the
+    array&rsquo;s own maximum, with both ends saturating. It opens on all
+    3.0&nbsp;decades, because a 1/<i>r</i><sup>3</sup> field in a 20&nbsp;km box
+    is mostly far field and narrowing the window buys contrast at the crack by
+    flattening the rest: 2.5&nbsp;decades puts 28&nbsp;% of the voxels on one
+    colour, 2.0&nbsp;decades 70&nbsp;%. The difference state is the magnitude
+    of a signed difference, floored four decades below its own maximum &mdash; the state
     arrays quantise at about 1.6&nbsp;% relative, so anything below that floor is
     under the payload&rsquo;s own resolution rather than a measurement, and it is
     drawn as no-data rather than as a colour. See

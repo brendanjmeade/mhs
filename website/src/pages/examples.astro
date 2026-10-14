@@ -40,6 +40,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
       <label data-ctl="state"><span>state</span></label>
       <label data-ctl="field"><span>field</span></label>
       <label data-ctl="map"><span>colours</span></label>
+      <div class="rng" data-ctl="decades"><span>decades</span></div>
     </div>
     <div data-canvas class="canvas" aria-label="Three movable orthogonal slices through the stress and displacement field of a surface-breaking fault in an elastic half space"></div>
     <div data-bar class="bar"></div>
@@ -57,7 +58,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     the fault where the field is largest and where a quadrature scheme is most
     strained. Nothing is masked out, because the two states differ only in
     whether the free surface is present &mdash; so hiding a region would hide
-    exactly the comparison this page is for. Colour is on a log scale; the
+    exactly the comparison this page is for. Colour is log<sub>10</sub> of the
+    field, with ticks at whole powers of ten; <b>decades</b> sets how much of
+    the ramp is shown, counted down from each array&rsquo;s own maximum, and the
     difference state shows the magnitude of a signed difference.
   </p>
   <p class="cap">
