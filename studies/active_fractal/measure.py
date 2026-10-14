@@ -454,6 +454,47 @@ def participation_ratio(centers, weight, cell: float, *, available=None):
     return float(m.sum() ** 2 / (n_cells * s2))
 
 
+def region_concentration(centers, weight, cell: float) -> float:
+    """How many REGIONS the weight really occupies: ``1 / sum(p^2)``.
+
+    THE QUESTION :func:`participation_ratio` CANNOT ANSWER. That one is a
+    global occupancy moment normalised by the cells that could carry weight,
+    so two blobs in opposite corners and one blob of twice the mass score the
+    same: it says how evenly, not how many. This says how many, in the inverse
+    participation ratio's standard form, which `spectrum.measure` already uses
+    per mode and states the limits of -- weight spread evenly over ``m``
+    regions returns ``m``, weight in one region returns 1, and both are exact
+    rather than calibrated.
+
+    WHY IT IS THE LOCALIZATION MEASUREMENT FOR A FABRIC. Once orientation
+    varies with position, the no-interaction null clusters exactly as the
+    active set does -- its score is a closed form in each element's own normal,
+    so a smooth orientation field makes a smooth score field. "The active set
+    is clustered" then means nothing. What interaction can still do is pick
+    FEWER of the equally favourable domains than the loading alone would, and
+    that is this number, read against the null at matched cardinality.
+
+    ``cell`` should be the fabric's own correlation length: smaller and every
+    domain is split across many cells, larger and distinct domains are merged.
+    """
+    c = np.asarray(centers, float).reshape(-1, 3)
+    w = np.asarray(weight, float).ravel()
+    if c.shape[0] == 0 or w.sum() <= 0.0:
+        return float("nan")
+    idx = np.floor((c - c.min(axis=0)) / cell).astype(np.int64)
+    _, inv = np.unique(idx, axis=0, return_inverse=True)
+    m = np.bincount(inv.ravel(), weights=w)
+    p = m / m.sum()
+    # SQUARED, not fourth power. `spectrum.measure` writes this as
+    # ``1 / sum(v^4)`` because its ``v`` is an amplitude whose SQUARE is the
+    # share; here ``p`` is already the share, so the same statistic is
+    # ``1 / sum(p^2)``. Taking the fourth power of a share instead returns
+    # ``m^3`` for ``m`` equal regions -- measured, 8, 125 and 4096 for m = 2,
+    # 5 and 16, which is how the error surfaced.
+    p2 = float((p ** 2).sum())
+    return 1.0 / p2 if p2 > 0.0 else float("nan")
+
+
 def connected_clusters(points, reach: float):
     """``(n,)`` cluster labels for points within ``reach`` of one another.
 

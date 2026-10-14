@@ -1877,12 +1877,138 @@ def c_cloud() -> None:
                f"{float(np.abs(Pl.decode_linear_u8(bw, mw) - cats).max()):.3e}")
 
 
+# ----------------------------------------------------------------- [rough] ---
+def c_rough() -> None:
+    """The rough CONTIGUOUS crack: the tiling survives, and the flat crack's
+    coupling obeys a sum rule that gives the sweep an analytic baseline."""
+    print("\n[rough] a contiguous crack with displaced shared vertices")
+    h, a, depth = 0.5, 4.0, -20.0
+    s30, c30 = math.sin(math.radians(30.0)), math.cos(math.radians(30.0))
+    nrm = (s30, 0.0, c30)
+
+    # -- the vertex table ----------------------------------------------------
+    flat = N.disc_mesh(a, h, depth=depth, normal=nrm)
+    counts = {tol: N.weld_vertices(flat, tol * h)[0].shape[0]
+              for tol in (1e-12, 1e-9, 1e-6)}
+    print(f"       weld counts by tolerance {counts}")
+    check_true("welding is tolerance independent over six decades",
+               len(set(counts.values())) == 1, f"{counts}")
+    # A TOLERANCE IS NEEDED AT ALL: exact comparison over-counts, because
+    # disc_mesh reaches a shared vertex by two arithmetic paths.
+    exact = np.unique(flat.reshape(-1, 3), axis=0).shape[0]
+    check_true("and exact comparison would have over-counted",
+               exact > counts[1e-9], f"{exact} exact against {counts[1e-9]}")
+
+    # -- the flat limit, to MACHINE PRECISION, not bit-identically -----------
+    r0 = N.rough_disc(a, h, rms_slope=0.0, corr_over_h=8.0, depth=depth,
+                      normal=nrm)
+    gap = float(np.abs(r0.tris - flat).max())
+    check(f"rms_slope=0 reproduces disc_mesh ({gap:.1e} km)", gap / h, 1e-13)
+
+    # -- contiguity, which the whole experiment rests on ---------------------
+    for sl in (0.0, 0.1, 0.25, 0.5):
+        r = N.rough_disc(a, h, rms_slope=sl, corr_over_h=8.0, depth=depth,
+                         normal=nrm, seed=1)
+        share = N.edge_sharing(r.idx)
+        nv = np.cross(r.tris[:, 1] - r.tris[:, 0], r.tris[:, 2] - r.tris[:, 0])
+        nv /= np.linalg.norm(nv, axis=1, keepdims=True)
+        n_e = int(share[1] + share[2])
+        euler = r.verts.shape[0] - n_e + r.tris.shape[0]
+        check_true(f"slope {sl}: no edge shared by three triangles",
+                   len(share) <= 3, f"sharing histogram {list(share)}")
+        check_true(f"slope {sl}: Euler V-E+F = 1 (a disc)", euler == 1,
+                   f"{r.verts.shape[0]} - {n_e} + {r.tris.shape[0]} = {euler}")
+        check_true(f"slope {sl}: every vertex stays below z = 0",
+                   bool(np.all(r.verts[:, 2] < 0.0)),
+                   f"max z {r.verts[:, 2].max():.3f} km")
+        # The measured failure mode is a POSITIVE self-interaction while
+        # tdcs.unit_normals still reports an innocent n_z, so the normal alone
+        # is not a sufficient check -- but a hemisphere flip is what causes it.
+        check_true(f"slope {sl}: all normals in one hemisphere",
+                   bool(np.all(nv[:, 2] > 0.0)),
+                   f"min n_z {nv[:, 2].min():.3f}")
+        check(f"slope {sl}: realized rms slope is the requested one",
+              abs(r.slope_rms - sl), 1e-12)
+
+    # The calibration is a single exact rescale, so the sweep's x-axis must not
+    # move with the seed -- the fiction smooth_field's docstring records.
+    got = [N.rough_disc(a, h, rms_slope=0.2, corr_over_h=8.0, depth=depth,
+                        normal=nrm, seed=sd).slope_rms for sd in range(1, 6)]
+    check("realized slope is seed independent", float(np.std(got)), 1e-14)
+
+    # -- the guards ----------------------------------------------------------
+    for kw, why in ((dict(rms_slope=0.1, corr_over_h=2.0), "below Nyquist"),
+                    (dict(rms_slope=0.1, corr_over_h=40.0), "longer than 2a"),
+                    (dict(rms_slope=-0.1, corr_over_h=8.0), "negative slope")):
+        try:
+            N.rough_disc(a, h, depth=depth, normal=nrm, **kw)
+            check_true(f"rough_disc refuses a roughness {why}", False,
+                       "NOT REFUSED")
+        except ValueError:
+            check_true(f"rough_disc refuses a roughness {why}", True)
+
+    # -- THE SUM RULE, which is the sweep's analytic baseline ----------------
+    # Uniform slip on an infinite plane is a rigid translation and produces no
+    # stress, so sum_j P_ij = 0 and the triggering budget is B = 1 exactly.
+    # A finite crack loses a perimeter fraction out its free edge, measured as
+    # B = 1 - 0.40 h/a. The consequence worth gating is the SIGN STRUCTURE:
+    # the diagonal is negative, every interior off-diagonal is positive, and
+    # so a coplanar contiguous crack has NO STRESS SHADOW AT ALL.
+    net = N.Network(tris=flat, fault_id=np.zeros(flat.shape[0], np.int64),
+                    length=np.array([0.0]), width=np.array([0.0]),
+                    azimuth=np.array([0.0]), dip=np.array([0.0]),
+                    center=flat.reshape(-1, 3).mean(axis=0)[None, :],
+                    h=h, eps=0.1 * h, meta=dict(kind="disc"))
+    mat, _ = Kmod.assemble(net, mu=30.0, lam=30.0, workers=1, verbose=False)
+    fric = Fr.build_friction(net, regime="thrust", drop_ratio=0.9,
+                             mean_stress_ratio=0.6667)
+    P = Kmod.project(mat, fric.slip_dir, fric.slip_dir)
+    del mat
+    cen = flat.mean(axis=1)
+    deep = np.linalg.norm(cen - cen.mean(axis=0), axis=1) < 0.5 * a
+    dg = np.abs(np.diag(P))
+    off = P - np.diag(np.diag(P))
+    neg = float((np.minimum(off, 0.0).sum(axis=1) / dg)[deep].max())
+    rowsum = float((P.sum(axis=1) / dg)[deep].mean())
+    B = Kmod.branching_ratio(P)
+    print(f"       interior rowsum/|P_ii| {rowsum:+.5f}, B {B[deep].mean():.5f}"
+          f", deficit*a/h {-rowsum * a / h:.3f}")
+    check_true("the self-interaction diagonal is negative",
+               bool(np.all(np.diag(P) < 0.0)),
+               f"worst {float(np.diag(P).max()):.4e}")
+    check("a coplanar contiguous crack has NO stress shadow", abs(neg), 1e-12)
+    check("B = 1 + sum_j P_ij/|P_ii| exactly",
+          float(np.abs(B[deep] - (1.0 + (P.sum(axis=1) / dg)[deep])).max()),
+          1e-12)
+
+    # -- region_concentration's exact limits, and the weighting trap ---------
+    # Both limits, because the statistic is the sweep's headline and neither
+    # was gated when it was written.
+    pts = np.array([[0.1, 0.1, -1.0], [0.2, 0.2, -1.0], [0.15, 0.1, -1.0]])
+    check("all weight in one cell gives exactly 1 domain",
+          abs(M.region_concentration(pts, np.ones(3), 1.0) - 1.0), 1e-12)
+    m = 5
+    spread = np.stack([2.0 * np.arange(m), np.zeros(m), -np.ones(m)], axis=1)
+    check(f"weight spread over {m} cells gives exactly {m}",
+          abs(M.region_concentration(spread, np.ones(m), 1.0) - m), 1e-12)
+    # THE TRAP, kept as a tripwire: a varying weight against a FLAT weight is
+    # not a null, it is a weighting artefact. Comparing the same positions
+    # under the two weightings must give different answers, so the two can
+    # never be quoted as though interchangeable.
+    w_vary = np.array([100.0, 1.0, 1.0, 1.0, 1.0])
+    check_true("a varying weight is NOT interchangeable with a flat one",
+               abs(M.region_concentration(spread, w_vary, 1.0)
+                   - M.region_concentration(spread, np.ones(m), 1.0)) > 1.0,
+               f"{M.region_concentration(spread, w_vary, 1.0):.3f} against "
+               f"{M.region_concentration(spread, np.ones(m), 1.0):.3f}")
+
+
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,
            "kernel": c_kernel, "crack": c_crack, "load": c_load,
            "static": c_static,
            "spectrum": c_spectrum, "slip": c_slip, "align": c_align,
-           "cloud": c_cloud}
+           "cloud": c_cloud, "rough": c_rough}
 
 
 def main() -> bool:

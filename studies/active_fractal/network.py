@@ -300,6 +300,107 @@ def subparallel_normals(rng, n: int, mean_normal, spread_deg: float
     return np.where(v[:, 2:3] < 0.0, -v, v)
 
 
+#: First zero of the Bessel function J0, which is the correlation function of
+#: an isotropic single-wavenumber field in the plane. `smooth_field` scales its
+#: wavenumber by this so that its ``corr`` argument IS the distance at which
+#: the correlation first vanishes, rather than a wavelength 2.6 times shorter.
+J0_FIRST_ZERO = 2.404825557695773
+
+
+def smooth_field(rng, xy: np.ndarray, corr: float, n_modes: int = 64
+                 ) -> np.ndarray:
+    """A smooth scalar field of unit variance whose correlation dies at ``corr``.
+
+    A sum of random Fourier modes at one wavenumber: each is
+    ``sin(k u.x + phase)`` with ``u`` a random unit direction, so the sum is
+    stationary, isotropic in the plane and smooth, and dividing by
+    ``sqrt(n_modes / 2)`` makes the variance 1 because each sine contributes
+    1/2. The one-wavenumber spectrum is deliberate -- the point is to set ONE
+    length and sweep it, not to imitate a spectrum.
+
+    TWO THINGS MEASUREMENT CORRECTED HERE, both of which would have made the
+    sweep's x-axis a fiction. Eight modes left the REALIZED variance at
+    0.62-1.29 instead of 1, because the expectation is only approached as the
+    mode count grows; 64 holds it near 1. And ``k = 2 pi / corr`` makes
+    ``corr`` a WAVELENGTH, whose correlation already crosses zero at 0.38 of
+    it -- the correlation function of this field is ``J0(k r)``. Scaling by
+    :data:`J0_FIRST_ZERO` makes the argument mean what its name says.
+
+    Numpy only, and written here because the repository has nothing like it --
+    `cascade_cells` and `levy_dust` are point processes, not fields, and
+    `verify_import_hygiene` pins the dependency set to numpy and numba so
+    scipy's smoothers are not available.
+    """
+    k = J0_FIRST_ZERO / float(corr)
+    u = rng.normal(size=(int(n_modes), xy.shape[1]))
+    u /= np.linalg.norm(u, axis=1, keepdims=True)
+    ph = rng.uniform(0.0, 2.0 * math.pi, int(n_modes))
+    f = np.sin(k * (np.asarray(xy, float) @ u.T) + ph).sum(axis=1)
+    # NORMALISED TO THE REALIZED SPREAD, not to the expected one. The variance
+    # of a sum of sines is n/2 in EXPECTATION, but over a box only a couple of
+    # wavelengths wide the sample variance still ran 0.72 to 1.25 across seeds
+    # at 64 modes -- a finite-domain effect that no mode count removes. Left
+    # alone it would make the caller's swing amplitude vary 25 % between
+    # realizations, so the sweep's own axis would be a fiction.
+    f = f - f.mean()
+    sd = float(f.std())
+    return f / sd if sd > 0.0 else f
+
+
+def fabric_normals(rng, centers: np.ndarray, *, mean_normal, swing_deg: float,
+                   corr_km: float, spread_deg: float) -> np.ndarray:
+    """Orientations that vary smoothly with MAP POSITION, plus local grain.
+
+    WHY A FABRIC AT ALL. Three experiments in a row found no spatial
+    organization, and the reason was the same each time: orientation was drawn
+    independently of position, so the loading selected a spatially RANDOM
+    subset and a 2 % interaction cannot build structure on a random scatter.
+    Real fractured systems are not like that -- California, southeast Asia and
+    Turkey have regional trends that bend across the system and local trends
+    within it, and the interesting question is how slip localizes in a medium
+    that is heavily fractured but NOT randomly fractured.
+
+    THREE SCALES, WHICH IS WHAT THE GEOLOGY HAS. ``mean_normal`` is the
+    regional trend; ``swing_deg`` and ``corr_km`` are the local trend's
+    amplitude and wavelength; ``spread_deg`` is the grain, the i.i.d. scatter
+    of individual fractures about their local fabric. Depth is NOT a
+    coordinate here: the field is a function of ``(x, y)`` only, so domains are
+    columnar, which is the strike-slip case where a trend bends along strike
+    while any one fault stays near-vertical through the seismogenic layer.
+
+    WHAT THIS COSTS, AND IT HAS TO BE SAID. `friction.first_failure_lambda` is
+    a closed form in an element's own normal and the remote tensor, so making
+    orientation a function of position makes the no-interaction null's score a
+    function of position too. The null then clusters exactly as the active set
+    does, and "the active set is clustered" stops being evidence of anything.
+    What remains mechanical is whether slip concentrates into FEWER domains
+    than the loading alone chose, which is what `measure.region_concentration`
+    measures and why it exists.
+
+    Keep ``corr_km`` well under the box. At ``corr ~ box`` the field is one
+    lobe, the null concentrates in it, and the comparison inverts.
+    """
+    c = np.asarray(centers, float).reshape(-1, 3)
+    n = c.shape[0]
+    if swing_deg == 0.0 or not np.isfinite(corr_km):
+        return subparallel_normals(rng, n, mean_normal, spread_deg)
+    m = np.asarray(mean_normal, float)
+    m = m / np.linalg.norm(m)
+    a = np.cross(m, [0.0, 0.0, 1.0] if abs(m[2]) < 0.9 else [1.0, 0.0, 0.0])
+    a /= np.linalg.norm(a)
+    b = np.cross(m, a)
+    t1 = math.radians(swing_deg) * smooth_field(rng, c[:, :2], corr_km)
+    t2 = math.radians(swing_deg) * smooth_field(rng, c[:, :2], corr_km)
+    local = (m[None, :] + t1[:, None] * a[None, :] + t2[:, None] * b[None, :])
+    local /= np.linalg.norm(local, axis=1, keepdims=True)
+    # The grain, about each element's OWN local mean rather than the regional
+    # one, which is what makes this a fabric and not a wider scatter.
+    out = np.empty((n, 3))
+    for i in range(n):
+        out[i] = subparallel_normals(rng, 1, local[i], spread_deg)[0]
+    return out
+
+
 def fabric(normals: np.ndarray) -> np.ndarray:
     """Eigenvalues ``S1 >= S2 >= S3`` of the orientation tensor ``<n (x) n>``.
 
@@ -637,20 +738,212 @@ def disc_mesh(a: float, h: float, *, depth: float = -20.0,
     out[:, :, :2] = np.asarray(tri)
     out[:, :, 2] = depth
 
+    return rotate_to_normal(out, normal)
+
+
+def rotate_to_normal(tris: np.ndarray, normal) -> np.ndarray:
+    """Rotate a ``+z``-facing mesh about its own centroid to face ``normal``.
+
+    The MINIMAL rotation -- about the axis perpendicular to both -- so a flat
+    mesh keeps its in-plane layout and only its orientation changes. Factored
+    out of :func:`disc_mesh` because :func:`rough_disc` needs the same step and
+    needs it to happen LAST: roughness is displaced along the surface normal
+    while the surface is still horizontal, so the displacement is normal to the
+    plane by construction rather than by trigonometry.
+    """
     n_hat = np.asarray(normal, float)
-    n_hat /= np.linalg.norm(n_hat)
-    if abs(float(n_hat @ np.array([0.0, 0.0, 1.0])) - 1.0) > 1e-12:
-        # Rotate the flat disc onto the requested normal about the axis
-        # perpendicular to both, which is the minimal rotation.
-        z = np.array([0.0, 0.0, 1.0])
-        v = np.cross(z, n_hat)
-        c = float(z @ n_hat)
-        vx = np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]],
-                       [-v[1], v[0], 0.0]])
-        R = np.eye(3) + vx + vx @ vx / (1.0 + c)
-        mid = out.mean(axis=(0, 1))
-        out = (out - mid) @ R.T + mid
-    return out
+    n_hat = n_hat / np.linalg.norm(n_hat)
+    if abs(float(n_hat @ np.array([0.0, 0.0, 1.0])) - 1.0) <= 1e-12:
+        return tris
+    z = np.array([0.0, 0.0, 1.0])
+    v = np.cross(z, n_hat)
+    c = float(z @ n_hat)
+    vx = np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]],
+                   [-v[1], v[0], 0.0]])
+    R = np.eye(3) + vx + vx @ vx / (1.0 + c)
+    mid = tris.mean(axis=(0, 1))
+    return (tris - mid) @ R.T + mid
+
+
+def weld_vertices(tris: np.ndarray, tol: float
+                  ) -> tuple[np.ndarray, np.ndarray]:
+    """``(verts, idx)``: the shared-vertex table of a triangle soup.
+
+    A TOLERANCE IS REQUIRED, NOT OPTIONAL. :func:`disc_mesh` reaches the same
+    geometric vertex by different arithmetic paths -- ``i*h + h`` from one cell
+    against ``(i+1)*h`` from the next -- so vertices that must coincide differ
+    in the last bit: measured on a 1848-triangle disc, 5544 vertex slots hold
+    only 1192 bit-exact distinct points but exactly 991 welded ones, and that
+    991 is identical at tolerances of 1e-12, 1e-9 and 1e-6 ``h``. The count is
+    therefore not delicate, while exact comparison is simply wrong.
+
+    This is the representation :mod:`growth` says it lacks -- a front advance
+    "needs the shared VERTICES moved", which cannot be expressed on a soup.
+    Displacing ``verts`` and re-indexing keeps a tiling contiguous EXACTLY,
+    because a shared vertex moves once.
+    """
+    flat = np.asarray(tris, float).reshape(-1, 3)
+    keys = np.round(flat / float(tol)).astype(np.int64)
+    uniq, inv = np.unique(keys, axis=0, return_inverse=True)
+    inv = inv.reshape(-1)
+    verts = np.zeros((uniq.shape[0], 3))
+    np.add.at(verts, inv, flat)
+    verts /= np.bincount(inv, minlength=uniq.shape[0])[:, None]
+    return verts, inv.reshape(-1, 3)
+
+
+def edge_sharing(idx: np.ndarray) -> np.ndarray:
+    """``np.bincount`` of how many triangles share each edge of ``idx``.
+
+    A manifold surface gives only 1s (boundary) and 2s (interior); a 3 is a
+    non-manifold seam. Nothing else here can check contiguity -- :class:`Network`
+    carries no connectivity at all -- and the rough-fault experiment rests
+    entirely on the tiling staying a tiling.
+    """
+    e = np.concatenate([idx[:, [0, 1]], idx[:, [1, 2]], idx[:, [2, 0]]])
+    _, counts = np.unique(np.sort(e, axis=1), axis=0, return_counts=True)
+    return np.bincount(counts)
+
+
+@dataclasses.dataclass(frozen=True)
+class RoughDisc:
+    """A rough crack and the roughness it actually realized.
+
+    The REALIZED values are returned rather than the requested ones because
+    :func:`smooth_field` already records what happens otherwise: over a finite
+    domain the realized amplitude wandered 25 % between seeds, so a sweep
+    plotted against the requested number has a fictional x-axis. ``verts`` and
+    ``idx`` come out too, because they are the representation a front advance
+    needs and nothing else in the module exposes one.
+    """
+
+    tris: np.ndarray            # (n, 3, 3), contiguous, facing `normal`
+    verts: np.ndarray           # (n_v, 3) the shared-vertex table
+    idx: np.ndarray             # (n, 3) into `verts`
+    slope_rms: float            # realized rms in-facet gradient, dimensionless
+    tilt_rms_deg: float         # realized rms angle facet-to-mean-plane
+    height_rms: float           # realized rms displacement, km
+    amp_km: float               # the amplitude that produced it
+    corr_km: float              # the roughness wavelength it was built at
+
+
+def rough_disc(a: float, h: float, *, rms_slope: float, corr_over_h: float,
+               depth: float = -20.0, seed: int = 0,
+               normal=(0.0, 0.0, 1.0), n_modes: int = 64,
+               tol_over_h: float = 1e-9) -> RoughDisc:
+    """:func:`disc_mesh` with its shared vertices displaced by one roughness.
+
+    THE POINT IS THAT CONTIGUITY SURVIVES. Displacing a triangle soup opens
+    gaps at every shared edge -- the failure :func:`growth.kink_candidates`
+    records, where 0 of 12 adjacent pairs still conformed at any nonzero angle
+    and fifteen increments built three disconnected ribbons. Displacing the
+    WELDED vertex table instead moves each shared vertex once, so the tiling is
+    still a tiling afterwards and :func:`edge_sharing` can prove it.
+
+    ONE WAVELENGTH, NOT A SPECTRUM, AND THE MESH DECIDES THAT. A self-affine
+    surface needs a decade of wavelength to mean anything, and the resolvable
+    band here is ``4h`` (not the lattice's ``2h`` Nyquist, which aliases rather
+    than resolves) up to ``a``, so it spans only ``(a/h)/4``: a factor of 8 at
+    ``a/h = 32`` and 12 at 48, both under one decade. A band sum over that
+    range was tried and its realized Hurst exponent was set by the fit window
+    rather than by the input -- 0.40 against 0.68 for the same field over
+    ``[4h, a]`` and ``[4h, a/4]``. :func:`measure.dimension` already refuses a
+    slope over less than 0.5 decades for exactly this reason, and
+    :func:`smooth_field` says in its own docstring that its one-wavenumber
+    spectrum is deliberate: "the point is to set ONE length and sweep it, not
+    to imitate a spectrum". So the sweep is two honest knobs, ``rms_slope`` and
+    ``corr_over_h``, instead of one dishonest exponent.
+
+    ``rms_slope`` IS THE AMPLITUDE CONTROL, NOT HEIGHT. What the kernel sees is
+    the relative tilt between neighbouring facets: tilt is what breaks the
+    coplanarity that makes a flat crack's off-diagonal coupling purely
+    positive, and tilt is what walks the geometry toward the near-perpendicular
+    on-face contact that cost ``sym(-P)`` an eigenvalue on the cloud. Height
+    alone says nothing without a wavelength. The amplitude is solved for, which
+    is exact in one pass because the facet gradient is linear in it.
+
+    A HEIGHT FIELD CANNOT SELF-INTERSECT, which is why this parameterisation is
+    safe at large slope: the in-plane layout is untouched, so separations only
+    ever grow in quadrature. Measured, the closest non-adjacent centroid pair
+    stays at exactly 1.528 h from zero slope to 0.5.
+
+    Displacement happens while the disc is still horizontal and the rotation to
+    ``normal`` is applied last, so the displacement is along the surface normal
+    by construction. Use a DIPPING ``normal``: a horizontal plane is principal
+    in every :data:`friction.LOAD_TENSORS` regime and carries no driving shear
+    at all, while a vertical one sits at ``n_z = 0`` where ``tdcs``'s hemisphere
+    flip is float noise and 183 of 580 normals once came back anti-aligned with
+    their own vertex order.
+    """
+    if rms_slope < 0.0:
+        raise ValueError(f"rms_slope must be >= 0; got {rms_slope!r}")
+    if corr_over_h < 4.0:
+        raise ValueError(
+            f"corr_over_h must be >= 4; got {corr_over_h!r}. The lattice's "
+            f"Nyquist wavelength is 2 h, where a mode aliases instead of "
+            f"resolving, and eps = 0.1 h floors the resolvable structure "
+            f"below that again.")
+    corr = float(corr_over_h) * h
+    if corr > 2.0 * a:
+        raise ValueError(
+            f"corr_over_h * h = {corr} exceeds the disc diameter {2 * a}, so "
+            f"the roughness would be a rigid tilt of the whole crack rather "
+            f"than roughness on it.")
+    flat = disc_mesh(a, h, depth=depth)          # +z, before any rotation
+    verts, idx = weld_vertices(flat, tol_over_h * h)
+    out = verts.copy()
+
+    if rms_slope > 0.0:
+        rng = np.random.default_rng(seed)
+        f = smooth_field(rng, verts[:, :2], corr, n_modes=n_modes)
+        s1 = _facet_slope_rms(verts[:, :2], idx, f)
+        if not s1 > 0.0:
+            raise RuntimeError(
+                f"the roughness field is flat on this lattice (realized facet "
+                f"slope {s1!r}), so no amplitude can reach rms_slope="
+                f"{rms_slope}. corr = {corr} km is probably below the mesh's "
+                f"own resolution at h = {h}.")
+        amp = float(rms_slope) / s1
+        out[:, 2] = verts[:, 2] + amp * f
+    else:
+        amp, f = 0.0, np.zeros(verts.shape[0])
+
+    if not np.all(out[:, 2] < 0.0):
+        raise ValueError(
+            f"roughness pushed {int((out[:, 2] >= 0).sum())} vertices to "
+            f"z >= 0, which mhs refuses: a triangle straddling the free "
+            f"surface is a sign error, not an intention. Deepen `depth` "
+            f"(now {depth}) or lower rms_slope (now {rms_slope}).")
+
+    tris = rotate_to_normal(out[idx], normal)
+    nrm = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+    nrm /= np.linalg.norm(nrm, axis=1, keepdims=True)
+    mean_n = np.asarray(normal, float)
+    mean_n = mean_n / np.linalg.norm(mean_n)
+    tilt = np.degrees(np.arccos(np.clip(np.abs(nrm @ mean_n), 0.0, 1.0)))
+    return RoughDisc(
+        tris=tris, verts=out, idx=idx,
+        slope_rms=_facet_slope_rms(verts[:, :2], idx, amp * f),
+        tilt_rms_deg=float(np.sqrt((tilt ** 2).mean())),
+        height_rms=float((amp * f).std()), amp_km=amp, corr_km=corr)
+
+
+def _facet_slope_rms(xy: np.ndarray, idx: np.ndarray,
+                     z: np.ndarray) -> float:
+    """RMS of ``|grad z|`` over the facets of a linear field on a triangulation.
+
+    Exact, not a finite difference: ``z`` is linear on each triangle, so its
+    gradient follows from the two edge differences by one 2x2 solve, and it is
+    LINEAR IN THE AMPLITUDE of ``z``, which is what lets :func:`rough_disc`
+    hit a requested slope in a single pass instead of iterating.
+    """
+    p = xy[idx]                                  # (n, 3, 2)
+    e1, e2 = p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]
+    d1, d2 = z[idx[:, 1]] - z[idx[:, 0]], z[idx[:, 2]] - z[idx[:, 0]]
+    det = e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]
+    gx = (d1 * e2[:, 1] - d2 * e1[:, 1]) / det
+    gy = (e1[:, 0] * d2 - e2[:, 0] * d1) / det
+    return float(np.sqrt((gx ** 2 + gy ** 2).mean()))
 
 
 def build_aligned(*, seed: int, n_elements: int = 5000, h: float = 0.5,
@@ -821,7 +1114,8 @@ def build_cloud(*, seed: int, n_elements: int = 20000, h: float = 0.5,
                 spacing_over_h: float = 1.5, eps_over_h: float = 0.1,
                 centers: str = "uniform", cascade: tuple[int, int, int] = (3, 4, 3),
                 z_top: float = -2.0, spread_deg: float | None = None,
-                mean_normal=(0.0, 0.0, 1.0)) -> Network:
+                mean_normal=(0.0, 0.0, 1.0), swing_deg: float = 0.0,
+                corr_km: float = float("inf")) -> Network:
     """A DENSE CLOUD of independently-oriented single-triangle slip patches.
 
     The element IS the fracture here: one equilateral triangle of edge ``h``,
@@ -905,7 +1199,9 @@ def build_cloud(*, seed: int, n_elements: int = 20000, h: float = 0.5,
     cen[:, 2] = np.clip(cen[:, 2], z_bottom + reach, z_top - reach)
 
     nrm = (isotropic_normals(rng, cen.shape[0]) if spread_deg is None else
-           subparallel_normals(rng, cen.shape[0], mean_normal, spread_deg))
+           fabric_normals(rng, cen, mean_normal=mean_normal,
+                          swing_deg=swing_deg, corr_km=corr_km,
+                          spread_deg=spread_deg))
     tris = oriented_triangle(cen, nrm, h)
 
     # The separation floor still applies, and at s = 1.5 h with eps = 0.1 h it
@@ -962,6 +1258,13 @@ def build_cloud(*, seed: int, n_elements: int = 20000, h: float = 0.5,
         "total_area_km2": area_tot,
         "P32_per_km": area_tot / (box ** 3),
         "nearest_neighbour_km": nn,
+        "orientation": ("isotropic" if spread_deg is None else
+                        "subparallel" if swing_deg == 0.0 else "fabric"),
+        "spread_deg": spread_deg,
+        "mean_normal": (None if spread_deg is None
+                        else [float(v) for v in mean_normal]),
+        "swing_deg": float(swing_deg),
+        "corr_km": (None if not np.isfinite(corr_km) else float(corr_km)),
         "fabric_S": [float(v) for v in S],
         "fabric_anisotropy": float(abs(S[0] - 1.0 / 3.0)),
         "window_r_lo_km": 2.0 * h, "window_r_hi_km": box / 6.0,
