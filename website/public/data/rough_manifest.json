@@ -43,9 +43,9 @@
  "defaults": {
   "field": "von_mises",
   "slices": {
-   "x": 0.5,
-   "y": 0.5,
-   "z": 0.5
+   "x": 0.04,
+   "y": 0.96,
+   "z": 0.04
   },
   "state": "mollified"
  },
@@ -114,7 +114,7 @@
  },
  "schema": 1,
  "source": {
-  "git": "2923368",
+  "git": "a279794",
   "sampled_from": null,
   "volume_run": "roughvol.py"
  },

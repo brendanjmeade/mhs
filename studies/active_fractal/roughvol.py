@@ -389,10 +389,15 @@ def cmd_volume(a) -> int:
         "diff_drawn_fraction": float(drawn.mean()),
         "units": "km, GPa"}
 
-    # The crack sits at the middle of the box by construction, so the opening
-    # z slice cuts through it rather than sitting where a free surface would be.
+    # THE SLICES OPEN AT THE FAR WALLS, not through the middle. Centred slices
+    # are what the half-space payload wants, where the fault is a plane at the
+    # edge of the box; here the crack sits at the box's centre by construction,
+    # so x = y = z = 0.5 puts three opaque planes through the subject and the
+    # mesh is 90 % hidden on load. The camera sits at +x, -y, +z, so the far
+    # walls are x low, y high, z low: the field is still drawn on three faces
+    # and the crack is in the open in front of them.
     man["defaults"] = {"state": "mollified", "field": FIELD,
-                       "slices": {"x": 0.5, "y": 0.5, "z": 0.5}}
+                       "slices": {"x": 0.04, "y": 0.96, "z": 0.04}}
 
     (out / "rough_geometry.json").write_text(json.dumps({
         "box": {"origin": grid["origin"], "spacing": grid["spacing"],
