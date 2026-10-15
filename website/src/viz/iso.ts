@@ -154,17 +154,35 @@ export class IsoScene {
     return g;
   }
 
-  /** Show exactly these surface files, plus this scene's crack. */
+  /** Show exactly these surface files, plus this scene's crack.
+   *
+   * LATEST CALL WINS, and an overtaken one drops out at its next await. Two
+   * controls changed in the same tick start two of these at once; each awaits
+   * its fetches and then clears and repopulates, so without the token the
+   * slower one adds its group to a container the faster one has just emptied
+   * and the scene ends up holding both answers, framed on whichever finished
+   * last. Seen on the deployed page as a detail slab framed edge-on.
+   *
+   * The crack is loaded before anything is cleared, so there is no frame in
+   * which the scene is missing it. */
+  private seq = 0;
   async show(files: string[], crackFile: string | null): Promise<void> {
+    const mine = ++this.seq;
     const want = await Promise.all(files.map((f) => this.load(f)));
+    const crackGroup = crackFile ? await this.load(crackFile) : null;
+    if (mine !== this.seq) return;
     this.isos.clear();
     for (const g of want) this.isos.add(g);
     this.crack.clear();
-    if (crackFile) this.crack.add(await this.load(crackFile));
+    if (crackGroup) this.crack.add(crackGroup);
     this.applyLook();
     this.buildFurniture();
     this.render();
   }
+
+  /** Whether this is still the newest `show`, so a caller can drop its own
+   * follow-up work -- reframing, the legend -- when it has been overtaken. */
+  current(): number { return this.seq; }
 
   setCrack(on: boolean) { this.crack.visible = on; this.render(); }
 
@@ -468,7 +486,9 @@ export async function startIso(root: HTMLElement, baseUrl: string,
     if (!want.length) { status.textContent = "no surface for that choice"; return; }
     status.textContent = "loading…";
     try {
+      const mine = view.current() + 1;
       await view.show(want.map((s) => s.file), man.scenes[scene].crack);
+      if (mine !== view.current()) return;    // overtaken; that call owns it
       view.setCrack(crackOn);
       if (reframe) view.preset("oblique");
       const s = want[0];
