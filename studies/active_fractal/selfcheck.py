@@ -2157,12 +2157,255 @@ def c_iso() -> None:
               float(np.abs(back["NORMAL"] - nrm.astype(np.float32)).max()), 1e-12)
 
 
+# --------------------------------------------------------------- [onfault] ---
+def c_onfault() -> None:
+    """The dense on-fault readout IS the solve's own condition, and both
+    kernels are calibrated on the one crack with a closed form.
+
+    Three things are pinned. (a) The readout evaluated at the centroids gives
+    ``S = -w``, the LCP's own margin, for both kernels -- which is what makes
+    the map between the centroids the solution's own residual rather than a
+    different quantity that happens to look like it. (b) The signs: a slipping
+    centroid is at strength, a locked one below it, the remote load drives
+    every facet the way it says. (c) On a frictionless penny crack under a
+    uniform drop, where the on-fault shear is -d_tau everywhere inside, how far
+    each kernel departs from that between the collocation points, binned by
+    distance to the nearest facet edge and to the rim -- and a control with
+    UNIFORM imposed slip, where no interior edge carries a residual, so that
+    staircase physics is separated from on-element kernel error. The numbers
+    printed here are the ones the page quotes.
+    """
+    print("\n[onfault] the Coulomb condition read between the collocation points")
+    import tempfile                                            # noqa: PLC0415
+    import onfault as OF                                       # noqa: PLC0415
+    import mhs                                                 # noqa: PLC0415
+    from mhs import tdcs                                       # noqa: PLC0415
+
+    # -- (d) the lattice, on one facet -------------------------------------
+    h = 0.125
+    eps = 0.1 * h
+    tri = np.array([[[0.0, 0.0, -5.0], [h, 0.0, -5.0],
+                     [0.3 * h, 0.9 * h, -5.0]]])
+    k = 4
+    c = OF.cells(tri, k, eps=eps)
+    corners = c["corners"]
+    area_f = 0.5 * np.linalg.norm(np.cross(tri[0, 1] - tri[0, 0],
+                                           tri[0, 2] - tri[0, 0]))
+    world = np.einsum("cjb,bx->cjx", corners, tri[0])            # (k^2, 3, 3)
+    cell_a = 0.5 * np.linalg.norm(np.cross(world[:, 1] - world[:, 0],
+                                           world[:, 2] - world[:, 0]), axis=1)
+    check_true(f"k^2 = {k * k} cells per facet", corners.shape[0] == k * k,
+               f"{corners.shape[0]}")
+    check("every cell has area A/k^2", float(np.abs(cell_a * k * k / area_f
+                                                   - 1.0).max()), 1e-12)
+    check("the cells tile the facet", abs(float(cell_a.sum()) / area_f - 1.0),
+          1e-12)
+    check("samples are the cell centroids",
+          float(np.abs(c["pts"] - world.mean(axis=1)).max()), 1e-12)
+    elen = [np.linalg.norm(tri[0, (i + 1) % 3] - tri[0, (i + 2) % 3])
+            for i in range(3)]
+    want_near = (2.0 * area_f / max(elen)) / (3.0 * k) / eps
+    check("the nearest sample to an edge is altitude/(3k)",
+          abs(float(c["edge_eps"].min()) / want_near - 1.0), 1e-9)
+
+    # -- (e) frames ----------------------------------------------------------
+    s30, c30 = math.sin(math.radians(30.0)), math.cos(math.radians(30.0))
+    disc = N.disc_mesh(1.0, h, depth=-20.0, normal=(s30, 0.0, c30))
+    check("cutde's frame equals tdcs's on a dipping disc",
+          OF.frame_gate(disc), 1e-12)
+    for label, bad in (("a horizontal facet",
+                        np.concatenate([disc, tri])),
+                       ("a reversed-winding facet",
+                        np.concatenate([disc, disc[:1, [0, 2, 1]]]))):
+        try:
+            OF.frame_gate(bad)
+            caught = False
+        except SystemExit:
+            caught = True
+        check_true(f"and REFUSES {label}", caught, "")
+
+    # -- the small system: two rough discs, the same gates as the page's --------
+    faults = (dict(name="A", a=1.0, dip=30.0, seed=1, centre=(0.0, 0.0, -20.0)),
+              # 0.8 km along A's normal: at this scale the one-wavelength
+              # roughness has peaks of ~0.15 km on each disc, and 0.5 km put
+              # them 0.226 km apart, under the 2 h clearance the gate holds.
+              dict(name="B", a=0.8, dip=30.0, seed=2,
+                   centre=(0.8 * s30 - 0.2 * c30, 0.4,
+                           -20.0 + 0.8 * c30 + 0.2 * s30)))
+    discs, net = OF.build(faults, h=h)
+    n, fid = net.n_elements, net.fault_id
+    print(f"       two rough discs: {n} elements, clearance "
+          f"{net.meta['clearance_km']:.3f} km, min n_z {net.meta['min_nz']:.3f}")
+    fric = Fr.build_friction(net, regime=OF.REGIME, drop_ratio=OF.DROP_RATIO,
+                             mean_stress_ratio=OF.MEAN_STRESS)
+    with tempfile.TemporaryDirectory() as tmp:
+        Km, _ = Kmod.assemble(net, mu=OF.MU, lam=OF.LAM, workers=1,
+                              cache_dir=pathlib.Path(tmp), verbose=False)
+    Kc = OF.classical_matrix(net.tris)
+    ops = {"mollified": OF.operators(Km, fric),
+           "classical": OF.operators(Kc, fric)}
+    del Km
+    check_true("both coupled operators are positive definite",
+               all(o["mineig"] > 0 for o in ops.values()),
+               " ".join(f"{k} {o['mineig']:+.3f}" for k, o in ops.items()))
+    lam0 = float(np.nanmin(fric.first_failure_lambda()))
+    lam = 1.2 * lam0
+    z = dict(tris=net.tris, lam=lam, slip_dir=fric.slip_dir,
+             tau_load_mag=fric.tau_load_mag, sigma_eff_0=fric.sigma_eff_0,
+             sigma_n_load=fric.sigma_n_load, mu=fric.mu)
+    cen = net.tris.mean(axis=1)
+    nrm = tdcs.unit_normals(net.tris)
+    facet = np.arange(n)
+    for kern, o in ops.items():
+        sol = St.solve(o["P_eff"], o["d"], o["g"], lam)
+        check_true(f"{kern}: the coupled LCP converged", sol.converged,
+                   f"{sol.sweeps} sweeps, {int(sol.active.sum())}/{n} active")
+        w = o["g"] - (lam * o["d"] + o["P_eff"].T @ sol.delta)
+        slip = Fr.slip_cartesian(net.tris, fric.slip_dir, sol.delta)
+        if kern == "mollified":
+            t = OF.mollified_traction(cen, nrm, net.tris, slip, 1, eps=net.eps)
+        else:
+            t = OF.classical_traction(cen, nrm, net.tris, slip)
+        m = OF.metrics(t, facet, z, True)
+        # (a) the identity that makes the dense map the solver's own residual
+        check(f"{kern}: S at the centroids is -w", float(np.abs(m["S"] + w).max()),
+              1e-9)
+        check(f"{kern}: dsigma_n at the centroids is -(N^T delta)",
+              float(np.abs(m["dsn"] + o["Nrm"].T @ sol.delta).max()), 1e-12)
+        # (b) the signs
+        check(f"{kern}: slipping centroids sit at strength",
+              float(np.abs(m["S"][sol.active]).max()), 1e-9)
+        check_true(f"{kern}: locked centroids sit below it",
+                   bool(np.all(m["S"][~sol.active] < 0.0)),
+                   f"max {m['S'][~sol.active].max():.3e}")
+    check_true("the remote load drives every facet",
+               bool(np.all(lam * fric.tau_load_mag > 0.0)), "")
+    # The load tensors are TENSION positive and k is compression on every
+    # plane, so the isotropic part of the path enters the tensor with a minus
+    # sign here, and ``build_friction`` adds it to its compression-positive
+    # ``sigma_n_load`` with a plus. Same statement, two conventions, pinned.
+    D = Fr.rotate_about_vertical(Fr.LOAD_TENSORS[OF.REGIME], 0.0)
+    tau, sn = Fr.resolve_tensor(net.tris, lam * (D - OF.MEAN_STRESS * np.eye(3)))
+    check("the per-facet remote shear is the resolved tensor's",
+          float(np.abs(np.linalg.norm(tau, axis=1) - lam * fric.tau_load_mag).max()),
+          1e-12)
+    check("and so is the remote normal stress",
+          float(np.abs(sn - lam * fric.sigma_n_load).max()), 1e-12)
+    # the classical matrix against the field contraction: two orders of the
+    # same cutde strain, one column
+    j = n // 2
+    unit = np.zeros((n, 3))
+    unit[j] = tdcs.slip_frame(net.tris)[j, 0, :]           # unit strike slip on j
+    tj = OF.classical_traction(cen, nrm, net.tris, unit)
+    col = np.einsum("ia,ia->i", tj, tdcs.slip_frame(net.tris)[:, 0, :])
+    check("the classical matrix column is the field contraction",
+          float(np.abs(col - Kc[j, 0, 0, :]).max() / np.abs(col).max()), 1e-12)
+
+    # -- (c) the penny calibration ---------------------------------------------
+    # Frictionless, uniform drop d_tau along the dip direction, on a DIPPING
+    # disc because a horizontal one is the frame trap. The exact on-fault shear
+    # along the slip direction is -d_tau everywhere inside the crack.
+    a_, dtau = 1.0, 0.01
+    tris = disc
+    nd = tris.shape[0]
+    frame = tdcs.slip_frame(tris)
+    sd = np.tile([0.0, 1.0], (nd, 1))                        # along dip
+    s_cart = frame[:, 1, :]
+    with tempfile.TemporaryDirectory() as tmp:
+        pen_net = N.Network(tris=tris, fault_id=np.zeros(nd, np.int64),
+                            length=np.array([2.0]), width=np.array([2.0]),
+                            azimuth=np.zeros(1), dip=np.array([30.0]),
+                            center=tris.reshape(-1, 3).mean(0)[None],
+                            h=h, eps=eps, meta={})
+        Km, _ = Kmod.assemble(pen_net, mu=OF.MU, lam=OF.LAM, workers=1,
+                              cache_dir=pathlib.Path(tmp), verbose=False)
+    Kc = OF.classical_matrix(tris)
+    kp = 5
+    cp = OF.cells(tris, kp, eps=eps)
+    r_cell = np.linalg.norm((cp["pts"] - tris.reshape(-1, 3).mean(0))
+                            - np.outer((cp["pts"] - tris.reshape(-1, 3).mean(0))
+                                       @ frame[0, 2, :], frame[0, 2, :]), axis=1)
+    rim_eps = (a_ - r_cell) / eps
+    ebins = ((0.0, 1.0), (1.0, 2.0), (2.0, np.inf))
+    rbins = ((0.0, 2.0), (2.0, 10.0), (10.0, np.inf))
+    res = {}
+    for kern, Kmat in (("mollified", Km), ("classical", Kc)):
+        P = Kmod.project(Kmat, sd, sd)
+        sol = St.solve(P, np.full(nd, dtau), np.zeros(nd), 1.0,
+                       max_sweeps=20000)
+        check_true(f"penny {kern}: the frictionless solve converged",
+                   sol.converged, f"{sol.sweeps} sweeps")
+        slip = sd[:, 1:2] * sol.delta[:, None] * s_cart
+        uni = s_cart * (sol.delta.mean())                        # the control
+        if kern == "mollified":
+            t = OF.mollified_traction(cp["pts"], cp["nrm"], tris, slip, 1,
+                                      eps=eps)
+            tu = OF.mollified_traction(cp["pts"], cp["nrm"], tris, uni, 1,
+                                       eps=eps)
+        else:
+            t = OF.classical_traction(cp["pts"], cp["nrm"], tris, slip)
+            tu = OF.classical_traction(cp["pts"], cp["nrm"], tris, uni)
+        res[kern] = dict(
+            resid=(np.einsum("oi,oi->o", t, s_cart[cp["facet"]]) + dtau) / dtau,
+            uni=np.einsum("oi,oi->o", tu, s_cart[cp["facet"]]))
+        check_true(f"penny {kern}: every cell is finite",
+                   bool(np.isfinite(res[kern]["resid"]).all()),
+                   f"{int((~np.isfinite(res[kern]['resid'])).sum())} non-finite")
+    print("       |residual| / d_tau, median by distance to the nearest facet "
+          "edge (rows) and to the rim (columns), in eps:")
+    print("       edge \\ rim     " + "".join(f"{lo:>4.0f}-{hi:<6.0f}" if np.isfinite(hi)
+                                             else f"{lo:>4.0f}+      " for lo, hi in rbins))
+    table = {}
+    for kern in ("mollified", "classical"):
+        for elo, ehi in ebins:
+            row = []
+            for rlo, rhi in rbins:
+                m = ((cp["edge_eps"] >= elo) & (cp["edge_eps"] < ehi)
+                     & (rim_eps >= rlo) & (rim_eps < rhi))
+                row.append(float(np.median(np.abs(res[kern]["resid"][m])))
+                           if m.any() else float("nan"))
+            table[(kern, elo)] = row
+            print(f"       {kern[:4]} {elo:3.0f}-{ehi if np.isfinite(ehi) else 9:<3.0f}"
+                  "    " + "".join(f"{v:10.4f}" for v in row))
+    # Pinned at 1.5x the measured values on this h = a/8 disc: cores 0.084
+    # and 0.097 (the P0 staircase, which both kernels see alike), nearest-edge
+    # 0.35 against 0.96, rim 1.7 against 7.5. The core level is the
+    # discretisation's and not the kernel's: see the control below.
+    core_m, core_c = table[("mollified", 2.0)][2], table[("classical", 2.0)][2]
+    near_m, near_c = table[("mollified", 0.0)][2], table[("classical", 0.0)][2]
+    check("in the facet cores, far from the rim, the mollified residual is the"
+          " staircase's", core_m, 0.15)
+    check("and the classical one is the same staircase", core_c, 0.15)
+    check_true("  -- the two cores agree",
+               0.7 < core_c / core_m < 1.4, f"ratio {core_c / core_m:.3f}")
+    check_true("nearest the edges the classical residual is the larger",
+               near_c > 2.0 * near_m, f"{near_c:.4f} against {near_m:.4f}")
+    check_true("and the mollified one is bounded there",
+               near_m < 10.0 * core_m,
+               f"near {near_m:.4f} against core {core_m:.4f}")
+    # The control: uniform slip leaves no interior residual, so the two kernels
+    # must agree in the interior at EVERY edge distance -- what differs
+    # between them with a solved slip is then the staircase, not the kernel.
+    far = rim_eps >= 10.0
+    dev = np.abs(res["mollified"]["uni"][far] - res["classical"]["uni"][far])
+    scale = float(np.median(np.abs(res["classical"]["uni"][far])))
+    # Measured 1.2 %: the kernel-level difference on the element itself, an
+    # order of magnitude under the staircase above.
+    check("control: uniform slip, interior, kernels agree at every edge distance",
+          float(np.median(dev)) / scale, 2e-2)
+    worst_bin = max(float(np.median(dev[(cp["edge_eps"][far] >= lo)
+                                        & (cp["edge_eps"][far] < hi)])) / scale
+                    for lo, hi in ebins)
+    check("  and in the nearest-edge bin as well", worst_bin, 2e-2)
+
+
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,
            "kernel": c_kernel, "crack": c_crack, "load": c_load,
            "static": c_static,
            "spectrum": c_spectrum, "slip": c_slip, "align": c_align,
-           "cloud": c_cloud, "rough": c_rough, "iso": c_iso}
+           "cloud": c_cloud, "rough": c_rough, "iso": c_iso,
+           "onfault": c_onfault}
 
 
 def main() -> bool:

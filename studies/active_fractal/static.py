@@ -24,16 +24,23 @@ static solutions BRACKET the whole loading history exactly:
 with zero violations either way. The strength drop moves the active set by at
 most 2.3 % of the network; it does not decide it.
 
-MOLLIFICATION IS WHAT MAKES THIS WELL POSED, rather than being a numerical
-convenience. The uniqueness theorem needs a finite, correctly signed diagonal
-``P_ii`` -- how much an element's own slip relieves its own shear. For a
-classical dislocation element that number DOES NOT EXIST: the traction kernel
-is hypersingular on the element's own surface, so one gets a Hadamard finite
-part, a collocation-dependent value, or a divergence. Mollification smears the
-slip over a width ``eps`` and the self-interaction becomes a convergent
-integral -- and ``eps`` is physical rather than arbitrary, a fault being a
-gouge zone of finite thickness, so ``P_ii`` is the self-stiffness of a slip
-patch of that width. Without it the theorem has no matrix to act on.
+MOLLIFICATION IS WHAT MAKES THIS WELL POSED EVERYWHERE ON THE FAULT, rather
+than being a numerical convenience. The uniqueness theorem needs a finite,
+correctly signed diagonal ``P_ii`` -- how much an element's own slip relieves
+its own shear. For a classical dislocation element that number exists at ONE
+point, the centroid, which sits a fixed 0.29 h from the element's own edges
+and so a fixed distance from the 1/d singularity of its bounding loop:
+measured (commit 1ef89ab, and the on-fault page), it is finite, negative, and
+moves by under a per cent as the centroid is approached along the normal, so
+a centroid-collocated classical matrix is a perfectly usable one. What the
+classical kernel does NOT have is a value anywhere else on the element -- it
+is hypersingular on the surface and 1/d at every edge -- so its ``P_ii`` is a
+property of where it was sampled rather than of the fault. Mollification
+smears the slip over a width ``eps`` and the self-interaction becomes a
+convergent integral at every point -- and ``eps`` is physical rather than
+arbitrary, a fault being a gouge zone of finite thickness, so ``P_ii`` is the
+self-stiffness of a slip patch of that width, the same number at the centroid
+and between centroids.
 
 TWO THINGS THAT ARE MEASURED RATHER THAN GUARANTEED, and both matter before
 this is trusted on a new network.
