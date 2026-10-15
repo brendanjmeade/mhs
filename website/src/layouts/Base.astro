@@ -6,7 +6,7 @@ interface Props {
   title: string;
   description?: string;
   current: "home" | "concepts" | "running" | "examples" | "fractal"
-         | "roughness" | "isosurface";
+         | "roughness" | "isosurface" | "onfault";
 }
 const { title, description, current } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
@@ -17,6 +17,7 @@ const pages = [
   { key: "fractal", href: `${base}fractal/`, label: "Active fractal" },
   { key: "roughness", href: `${base}roughness/`, label: "Rough crack" },
   { key: "isosurface", href: `${base}isosurface/`, label: "Isosurfaces" },
+  { key: "onfault", href: `${base}onfault/`, label: "On the fault" },
 ];
 ---
 <!doctype html>

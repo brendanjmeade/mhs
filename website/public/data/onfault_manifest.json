@@ -1,0 +1,381 @@
+{
+ "arrays": {
+  "onfault.area": {
+   "bytes": 7008,
+   "dtype": "float32",
+   "sha256": "3cd9b0eb0c251e7e",
+   "shape": [
+    1752
+   ]
+  },
+  "onfault.classical.S": {
+   "bytes": 700800,
+   "dtype": "float32",
+   "sha256": "bc36dd8cd175fdbb",
+   "shape": [
+    175200
+   ]
+  },
+  "onfault.classical.dsn": {
+   "bytes": 700800,
+   "dtype": "float32",
+   "sha256": "1af3f8b5398f820a",
+   "shape": [
+    175200
+   ]
+  },
+  "onfault.classical.dts": {
+   "bytes": 700800,
+   "dtype": "float32",
+   "sha256": "33eb1b137203dbb7",
+   "shape": [
+    175200
+   ]
+  },
+  "onfault.classical.slip": {
+   "bytes": 7008,
+   "dtype": "float32",
+   "sha256": "cd7bfcc9668bf8f5",
+   "shape": [
+    1752
+   ]
+  },
+  "onfault.corners": {
+   "bytes": 3600,
+   "dtype": "float32",
+   "sha256": "1b70b09bf42f3a44",
+   "shape": [
+    100,
+    3,
+    3
+   ]
+  },
+  "onfault.edge_eps": {
+   "bytes": 175200,
+   "dtype": "uint8",
+   "sha256": "eea7c2898502c833",
+   "shape": [
+    175200
+   ]
+  },
+  "onfault.fault_id": {
+   "bytes": 1752,
+   "dtype": "uint8",
+   "sha256": "eb540cf15b130ae1",
+   "shape": [
+    1752
+   ]
+  },
+  "onfault.mollified.S": {
+   "bytes": 700800,
+   "dtype": "float32",
+   "sha256": "e011eb645831de6a",
+   "shape": [
+    175200
+   ]
+  },
+  "onfault.mollified.dsn": {
+   "bytes": 700800,
+   "dtype": "float32",
+   "sha256": "b8b0f28a774dd7ba",
+   "shape": [
+    175200
+   ]
+  },
+  "onfault.mollified.dts": {
+   "bytes": 700800,
+   "dtype": "float32",
+   "sha256": "8099f2429282d47e",
+   "shape": [
+    175200
+   ]
+  },
+  "onfault.mollified.slip": {
+   "bytes": 7008,
+   "dtype": "float32",
+   "sha256": "12755a72ddf86424",
+   "shape": [
+    1752
+   ]
+  },
+  "onfault.tris": {
+   "bytes": 63072,
+   "dtype": "float32",
+   "sha256": "5d469a233d388035",
+   "shape": [
+    1752,
+    3,
+    3
+   ]
+  }
+ },
+ "cells_per_facet": 100,
+ "defaults": {
+  "kernel": "mollified",
+  "mask_eps": 0.0,
+  "metric": "S"
+ },
+ "edge_eps_step": 0.02,
+ "eps_km": 0.05,
+ "faults": [
+  {
+   "a_km": 6.0,
+   "centre_km": [
+    0.0,
+    0.0,
+    -20.0
+   ],
+   "classical": {
+    "active_alone": 0.9597701149425287,
+    "active_system": 0.9549808429118773,
+    "max_slip_m": 2.595236346680828,
+    "moment_ratio": 0.9726367338443621,
+    "name": "A",
+    "shadow_GPa": -0.0002262813615846196
+   },
+   "dip_deg": 30.0,
+   "mollified": {
+    "active_alone": 0.9588122605363985,
+    "active_system": 0.9549808429118773,
+    "max_slip_m": 2.6147878720764735,
+    "moment_ratio": 0.9722176448438786,
+    "name": "A",
+    "shadow_GPa": -0.0002297038018766962
+   },
+   "n": 1044,
+   "name": "A",
+   "remote_shear_MPa": 115.52192865964945,
+   "remote_sigma_n_MPa": 180.42304283797964,
+   "seed": 1
+  },
+  {
+   "a_km": 4.0,
+   "centre_km": [
+    0.13397459621556118,
+    3.0,
+    -17.76794919243112
+   ],
+   "classical": {
+    "active_alone": 0.9244444444444444,
+    "active_system": 0.8333333333333334,
+    "max_slip_m": 1.2021107707079794,
+    "moment_ratio": 0.7928118268864887,
+    "name": "B",
+    "shadow_GPa": -0.0021224111196117453
+   },
+   "dip_deg": 30.0,
+   "mollified": {
+    "active_alone": 0.9244444444444444,
+    "active_system": 0.8311111111111111,
+    "max_slip_m": 1.219059993149807,
+    "moment_ratio": 0.7926627384054723,
+    "name": "B",
+    "shadow_GPa": -0.002134482029247233
+   },
+   "n": 450,
+   "name": "B",
+   "remote_shear_MPa": 102.60552023235002,
+   "remote_sigma_n_MPa": 162.4105899737829,
+   "seed": 2
+  },
+  {
+   "a_km": 3.0,
+   "centre_km": [
+    -8.0,
+    0.0,
+    -13.5
+   ],
+   "classical": {
+    "active_alone": 0.06589147286821706,
+    "active_system": 0.07751937984496124,
+    "max_slip_m": 0.18030475621189956,
+    "moment_ratio": 1.1268897038778536,
+    "name": "C",
+    "shadow_GPa": 0.0007029899701536802
+   },
+   "dip_deg": 50.0,
+   "mollified": {
+    "active_alone": 0.06589147286821706,
+    "active_system": 0.07751937984496124,
+    "max_slip_m": 0.1890032963648687,
+    "moment_ratio": 1.1233263559112612,
+    "name": "C",
+    "shadow_GPa": 0.0007104028088946114
+   },
+   "n": 258,
+   "name": "C",
+   "remote_shear_MPa": 132.18627658065137,
+   "remote_sigma_n_MPa": 271.7210711500914,
+   "seed": 3
+  }
+ ],
+ "friction": {
+  "coupled": true,
+  "mean_stress_ratio": 0.6667,
+  "mu": 0.5999999999999999,
+  "regime": "thrust",
+  "sigma_eff_GPa": 0.14999999999999997
+ },
+ "git": "b487e66",
+ "h_km": 0.5,
+ "k": 10,
+ "kernels": {
+  "classical": {
+   "B": 0.895519640672723,
+   "active_fraction": 0.7945205479452054,
+   "min_eig_sym_negP": 5.212635931063076,
+   "residual": 9.558899644046548e-10,
+   "sweeps": 142
+  },
+  "mollified": {
+   "B": 0.8908470986648935,
+   "active_fraction": 0.7939497716894978,
+   "min_eig_sym_negP": 5.160822698565454,
+   "residual": 8.985025778951439e-10,
+   "sweeps": 133
+  }
+ },
+ "ladder": [
+  {
+   "active": [
+    0.47413793103448276,
+    0.30444444444444446,
+    0.0
+   ],
+   "converged": true,
+   "factor": 1.05,
+   "sweeps": 60
+  },
+  {
+   "active": [
+    0.7452107279693486,
+    0.54,
+    0.011627906976744186
+   ],
+   "converged": true,
+   "factor": 1.1,
+   "sweeps": 98
+  },
+  {
+   "active": [
+    0.9549808429118773,
+    0.8311111111111111,
+    0.07751937984496124
+   ],
+   "converged": true,
+   "factor": 1.2,
+   "sweeps": 131
+  },
+  {
+   "active": [
+    0.9980842911877394,
+    0.9488888888888889,
+    0.22868217054263565
+   ],
+   "converged": true,
+   "factor": 1.35,
+   "sweeps": 141
+  },
+  {
+   "active": [
+    1.0,
+    0.9933333333333333,
+    0.39147286821705424
+   ],
+   "converged": true,
+   "factor": 1.5,
+   "sweeps": 143
+  }
+ ],
+ "lam0_GPa": 0.11749185460616,
+ "lam_GPa": 0.140990225527392,
+ "lam_over_lam0": 1.2,
+ "lam_rule": {
+  "A_min": 0.7,
+  "BC_max": 0.95,
+  "BC_min": 0.05
+ },
+ "metrics": {
+  "S": "tau_s - mu sigma_n', total, GPa",
+  "dsn": "slip-induced normal stress, compression positive, GPa",
+  "dts": "slip-induced shear along the slip direction, GPa"
+ },
+ "n_cells": 175200,
+ "n_facets": 1752,
+ "nearest_edge_eps": 0.28867513459563565,
+ "schema": 1,
+ "source": "onfault.py",
+ "stats": {
+  "classical": {
+   "S": {
+    "max": 0.19136045143954294,
+    "min": -0.35027581913523864,
+    "nonfinite": 0,
+    "p01": -0.0982713512001014,
+    "p50": -0.0037085220222045426,
+    "p99": 0.08011660480713191,
+    "saturated_area_fraction": 0.2988240424609752
+   },
+   "dsn": {
+    "max": 0.07605160851747521,
+    "min": -0.06764477902464093,
+    "nonfinite": 0,
+    "p01": -0.02824083558086767,
+    "p50": 0.00032074140065243715,
+    "p99": 0.026917623366983747,
+    "saturated_area_fraction": 0.08213508345001844
+   },
+   "dts": {
+    "max": 0.19568051911514314,
+    "min": -0.36366650626619584,
+    "nonfinite": 0,
+    "p01": -0.10385288452407083,
+    "p50": -0.004104449154570795,
+    "p99": 0.07675906788349712,
+    "saturated_area_fraction": 0.17581359186021386
+   }
+  },
+  "mollified": {
+   "S": {
+    "max": 0.04004840079696893,
+    "min": -0.09908145039903295,
+    "nonfinite": 0,
+    "p01": -0.06884898412038071,
+    "p50": -0.002095064796167362,
+    "p99": 0.01907170080161944,
+    "saturated_area_fraction": 0.1011248913924869
+   },
+   "dsn": {
+    "max": 0.023240177027073206,
+    "min": -0.021750769624058426,
+    "nonfinite": 0,
+    "p01": -0.012105356816256373,
+    "p50": 0.0003238094885653253,
+    "p99": 0.010369245722255926,
+    "saturated_area_fraction": 0.009920041378051718
+   },
+   "dts": {
+    "max": 0.04247046849116472,
+    "min": -0.07030023926235641,
+    "nonfinite": 0,
+    "p01": -0.03154280876262577,
+    "p50": -0.005625608100623196,
+    "p99": 0.018619665764503527,
+    "saturated_area_fraction": 0.009261333013125426
+   }
+  }
+ },
+ "system": {
+  "clearance_km": 1.0401569761553813,
+  "corr_over_h": 8.0,
+  "min_nz": 0.39912558995316794,
+  "slope": 0.25
+ },
+ "units": "km, GPa",
+ "window": {
+  "S": 0.024,
+  "dsn": 0.013,
+  "dts": 0.032,
+  "rule": "symmetric; half-width = area-weighted p99 of the mollified |metric|, over slipping facets for S, rounded to 2 significant figures of MPa"
+ }
+}

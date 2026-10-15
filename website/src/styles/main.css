@@ -241,6 +241,12 @@ button:disabled { opacity: .5; cursor: default; }
   border-radius: 2px;
 }
 #viewer .btns button:hover { background: var(--bg-alt, #f3f3f2); }
+/* ---- the on-fault scene -----------------------------------------------------
+ Colour is data here -- a Coulomb excess in MPa on every cell of every facet --
+ so the canvas is light, unlit, and keeps the site's own background: the
+ opposite decision from the isosurface plate, for the opposite reason. */
+#viewer.onfault .canvas { min-height: 520px; background: #fafaf9; }
+#viewer.onfault .panel input[type="range"] { width: 140px; }
 /* The publication view hides the chrome and nothing else: same canvas, same
    camera, so what is saved is what was being looked at. */
 #viewer.publication .panel, #viewer.publication .status { display: none; }

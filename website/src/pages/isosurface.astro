@@ -58,10 +58,14 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
   <h2>What a level set is a test of</h2>
   <p>
     On the rough-crack page the classical triangular dislocation element comes
-    out <i>well</i>: approached along its normal, an element&rsquo;s own centroid
-    is perfectly behaved, which is why it assembles a good interaction matrix
-    and recovers Eshelby marginally better than the mollified kernel does. What
-    it cannot do is hand you the field between the elements. Two adjacent
+    out <i>well</i> at the one place a collocation scheme ever asks: an
+    element&rsquo;s own centroid, which sits a fixed 0.29&nbsp;<i>h</i> from
+    its own edges and so a fixed distance from the singularity of its bounding
+    loop. It is finite there for that geometric reason, which is why it
+    assembles a good interaction matrix and recovers Eshelby marginally better
+    than the mollified kernel does. What it cannot do is hand you the field
+    between the elements, or anywhere else on the fault &mdash; the
+    <a href={`${base}onfault/`}>On the fault</a> page is that measurement. Two adjacent
     elements that slip by different amounts leave a residual dislocation on the
     edge they share, and its stress diverges as 1/<i>d</i> &mdash; on
     <b>1518 interior edges</b>, none of which is a physical feature of the

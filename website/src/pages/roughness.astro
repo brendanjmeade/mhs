@@ -57,8 +57,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
   <p>
     A collocation scheme only ever asks a kernel for traction at an element&rsquo;s
     own centroid, and that is the one place where the classical finite part
-    exists. Approached along its normal, a classical element&rsquo;s own centroid
-    is perfectly well behaved: stepping in from 30&nbsp;<i>eps</i> to
+    exists &mdash; finite for a geometric reason, the centroid being a fixed
+    0.29&nbsp;<i>h</i> from the element&rsquo;s own edges. Approached along its
+    normal that value is flat: stepping in from 30&nbsp;<i>eps</i> to
     0.003&nbsp;<i>eps</i> the von Mises stress changes by less than a per cent,
     with a log-log slope of <b>+0.002</b> &mdash; flat, and matching the
     mollified kernel to 1&ndash;3&nbsp;%. That is why a classical triangular
