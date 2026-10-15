@@ -2003,12 +2003,166 @@ def c_rough() -> None:
                f"{M.region_concentration(spread, np.ones(m), 1.0):.3f}")
 
 
+# ------------------------------------------------------------------ [iso] ---
+def c_iso() -> None:
+    """The isosurface pipeline against a closed form: a level set whose area,
+    radius and normals are known, and a round trip through the GLB writer."""
+    print("\n[iso] contouring, normals and the glTF writer")
+    import isosurf as Iso                                    # noqa: PLC0415
+
+    # An ELLIPSOID, not a sphere. A sphere centred in a cubic grid is symmetric
+    # under swapping two axes, so the index-order check below would pass on a
+    # transposed grid and prove nothing -- measured: 1.7e-7 either way.
+    n, h, R = 41, 0.05, 0.5
+    ax = h * np.arange(n)
+    c = np.full(3, ax.mean())
+    abc = np.array([1.0, 0.72, 0.5])
+    K, J, I = np.meshgrid(ax, ax, ax, indexing="ij")          # x fastest
+    q = np.stack([(I - c[0]) / abc[0], (J - c[1]) / abc[1], (K - c[2]) / abc[2]])
+    f = np.sqrt((q ** 2).sum(0)).ravel()
+    dims = np.array([n, n, n])
+    got = Iso.contour(f, dims, h, R)
+    pts, tri, nrm = got["points"], got["triangles"], got["normals"]
+    check_true("the level set is non-empty", tri.shape[0] > 100,
+               f"{tri.shape[0]} triangles, {pts.shape[0]} vertices")
+
+    # -- geometry against the closed form ------------------------------------
+    rr = np.sqrt((((got["raw_points"] - c) / abc) ** 2).sum(1))
+    check("every vertex sits on the level surface", float(np.abs(rr - R).max() / R),
+          1e-2)
+    # Through surface_extent, because that is the area the manifest PUBLISHES
+    # as the kernel discriminator; a second copy of the arithmetic here would
+    # check nothing about the number that ships.
+    area, pieces = Iso.surface_extent(got["polydata"])
+    sm = (abc * R) ** 1.6075                     # Thomsen, p = 1.6075
+    want = 4 * np.pi * ((sm[0] * sm[1] + sm[0] * sm[2] + sm[1] * sm[2]) / 3
+                        ) ** (1 / 1.6075)
+    check(f"surface area ({area:.4f} against {want:.4f})",
+          abs(area / want - 1.0), 2e-2)
+    check_true("one closed ellipsoid is one piece", pieces == 1, f"{pieces}")
+
+    # -- the unbounded-node fill ---------------------------------------------
+    # The classical kernel hands back inf at a node that lands on an element
+    # edge (one in 203,391 on the published detail grid), and marching cubes
+    # must still put that node on a side of the level. The fill takes the
+    # largest-magnitude finite face neighbour, so what is checked is that it
+    # picks exactly that, that it leaves a clean grid alone, and that it refuses
+    # a neighbourhood it cannot resolve rather than guessing through it.
+    same, nf0, _ = Iso.fill_nonfinite(f, dims)
+    check_true("a finite grid is returned unchanged", nf0 == 0
+               and np.array_equal(same, f), f"{nf0} filled")
+    blown = f.reshape(n, n, n).copy()
+    iz, iy, ix = n // 3, n // 2, n // 4
+    nb = [blown[iz + 1, iy, ix], blown[iz - 1, iy, ix], blown[iz, iy + 1, ix],
+          blown[iz, iy - 1, ix], blown[iz, iy, ix + 1], blown[iz, iy, ix - 1]]
+    want_fill = max(nb, key=abs)
+    blown[iz, iy, ix] = np.inf
+    filled, nf1, mag = Iso.fill_nonfinite(blown.ravel(), dims)
+    check_true("one unbounded node is filled, and only it", nf1 == 1
+               and np.isfinite(filled).all(), f"{nf1} filled")
+    check("and it takes the most extreme finite neighbour",
+          abs(filled.reshape(n, n, n)[iz, iy, ix] - want_fill), 1e-12)
+    check("and reports the magnitude it used", abs(mag - abs(want_fill)), 1e-12)
+    walled = f.reshape(n, n, n).copy()
+    walled[iz - 1:iz + 2, iy - 1:iy + 2, ix - 1:ix + 2] = np.nan
+    try:
+        Iso.fill_nonfinite(walled.ravel(), dims)
+        caught = False
+    except SystemExit:
+        caught = True
+    check_true("and it REFUSES a node with no finite neighbour", caught)
+
+    # -- the tube radius, on a cylinder whose radius is known ----------------
+    # This is the number that tests r = A / L on the detail scene, so it is
+    # pinned on geometry with an answer: points scattered on a cylinder of
+    # radius r0 about a tilted segment must measure r0. The last case is the
+    # bias the estimator exists to avoid -- one stray vertex hugging an
+    # ENDPOINT, where several edges meet on the real mesh, moves a plain
+    # minimum by an order of magnitude and must not move the radius at all.
+    rng = np.random.default_rng(3)
+    ends = np.array([[0.11, -0.20, 0.30], [0.60, 0.44, 1.05]])
+    ax = ends[1] - ends[0]
+    e1 = np.cross(ax, [0.0, 0.0, 1.0]); e1 /= np.linalg.norm(e1)
+    e2 = np.cross(ax, e1); e2 /= np.linalg.norm(e2)
+    r0 = 0.037
+    tt = rng.uniform(0.0, 1.0, 6000)
+    th = rng.uniform(0.0, 2 * np.pi, 6000)
+    cyl = (ends[0] + tt[:, None] * ax
+           + r0 * (np.cos(th)[:, None] * e1 + np.sin(th)[:, None] * e2))
+    rad, close = Iso.tube_radius(cyl, ends)
+    check(f"tube radius on a known cylinder ({rad:.4f} for {r0})",
+          abs(rad / r0 - 1.0), 2e-2)
+    far = np.vstack([cyl, ends[0] + 0.5 * ax + 9 * r0 * e1])
+    check("and a distant vertex does not move it",
+          abs(Iso.tube_radius(far, ends)[0] / rad - 1.0), 1e-12)
+    spike = np.vstack([cyl, ends[0] + 0.1 * r0 * e1])
+    sr, sc = Iso.tube_radius(spike, ends)
+    check("and one hugging an endpoint does not either",
+          abs(sr / rad - 1.0), 1e-12)
+    check_true("though it DOES move a plain minimum", sc < 0.2 * close,
+               f"{sc:.5f} against {close:.5f}")
+
+    # -- the level check, and that it can fail -------------------------------
+    err = Iso.level_error(got["raw_points"], f, dims, h, R)
+    check("the contour is at the level it claims", err, 1e-4)
+    for name, g in (("y<->z", f.reshape(n, n, n).transpose(1, 0, 2).ravel()),
+                    ("x<->z", f.reshape(n, n, n).transpose(2, 1, 0).ravel())):
+        bad = Iso.level_error(got["raw_points"], g, dims, h, R)
+        check_true(f"and it CATCHES a {name} transposed grid", bad > 0.1,
+                   f"{bad:.3f} against {err:.1e}")
+    bad = Iso.level_error(got["raw_points"], f, dims, h * 1.1, R)
+    check_true("and a 10 % error in the spacing", bad > 0.1, f"{bad:.3f}")
+
+    # -- normals: unit, and along -grad f ------------------------------------
+    # The failure this pins: where the level passes exactly through a grid node,
+    # flying edges emits coincident vertices and zero-area triangles, and the
+    # normal filter hands back a ZERO normal -- 84 of 1064 vertices here before
+    # the cleaning pass, which in a lit scene is black speckle.
+    check("normals are unit length",
+          float(np.abs(np.linalg.norm(nrm, axis=1) - 1.0).max()), 1e-4)
+    grad = (pts - c) / abc ** 2
+    grad /= np.linalg.norm(grad, axis=1, keepdims=True)
+    ang = np.degrees(np.arccos(np.clip(
+        -np.einsum("ij,ij->i", nrm, grad), -1.0, 1.0)))
+    check(f"and point along -grad f (worst {ang.max():.2f} deg)",
+          float(ang.max()), 10.0)
+
+    # -- decimation reports what it cost -------------------------------------
+    small = Iso.contour(f, dims, h, R, max_tris=300)
+    check_true("decimation reaches its budget",
+               small["triangles"].shape[0] <= 320,
+               f"{small['n_raw']} -> {small['triangles'].shape[0]}")
+    check(f"and its deviation is measured "
+          f"({small['deviation_km'] / h:.3f} cells)",
+          small["deviation_km"] / h, 1.0)
+
+    # -- the glTF writer round trips -----------------------------------------
+    with tempfile.TemporaryDirectory() as d:
+        path = pathlib.Path(d) / "iso.glb"
+        nb = Iso.write_glb(path, [dict(name="iso", points=pts, normals=nrm,
+                                       triangles=tri, color=(0.5, 0.5, 0.5))])
+        back = Iso.read_glb(path)["meshes"][0]
+        check_true(f"glTF round trip ({nb} bytes)",
+                   back["POSITION"].shape[0] == pts.shape[0]
+                   and back["INDICES"].shape[0] == tri.shape[0]
+                   and np.array_equal(back["INDICES"], tri),
+                   f"{back['POSITION'].shape[0]} verts, "
+                   f"{back['INDICES'].shape[0]} triangles")
+        # float32 is exact for these magnitudes, so this is equality, not a
+        # tolerance: a drift here would be the writer's offsets, not rounding.
+        check("positions survive the writer exactly",
+              float(np.abs(back["POSITION"] - pts.astype(np.float32)).max()),
+              1e-12)
+        check("and so do the normals",
+              float(np.abs(back["NORMAL"] - nrm.astype(np.float32)).max()), 1e-12)
+
+
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,
            "kernel": c_kernel, "crack": c_crack, "load": c_load,
            "static": c_static,
            "spectrum": c_spectrum, "slip": c_slip, "align": c_align,
-           "cloud": c_cloud, "rough": c_rough}
+           "cloud": c_cloud, "rough": c_rough, "iso": c_iso}
 
 
 def main() -> bool:
