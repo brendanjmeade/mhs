@@ -481,7 +481,14 @@ export async function startIso(root: HTMLElement, baseUrl: string,
     pubWrap.append(box);
   }
 
+  // A reframe OUTLIVES the call that asked for it. Only the scene change asks,
+  // and if another control moves in the same tick that call is overtaken and
+  // drops out -- taking the reframe with it, so the camera stays framed on the
+  // scene that just left. A 1.6 km slab in a frame fitted to a 14 km box is a
+  // speck, which is what this looked like on the deployed page.
+  let wantReframe = false;
   async function refresh(reframe: boolean) {
+    wantReframe ||= reframe;
     const want = pick().filter((s) => s.level_tag === level);
     if (!want.length) { status.textContent = "no surface for that choice"; return; }
     status.textContent = "loading…";
@@ -490,7 +497,7 @@ export async function startIso(root: HTMLElement, baseUrl: string,
       await view.show(want.map((s) => s.file), man.scenes[scene].crack);
       if (mine !== view.current()) return;    // overtaken; that call owns it
       view.setCrack(crackOn);
-      if (reframe) view.preset("oblique");
+      if (wantReframe) { wantReframe = false; view.preset("oblique"); }
       const s = want[0];
       const sc = man.scenes[scene];
       status.textContent =
