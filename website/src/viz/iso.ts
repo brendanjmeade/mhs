@@ -64,14 +64,19 @@ export type Preset = "oblique" | "strike" | "cross" | "top";
 const LOOKS: Record<Look, {
   background: number; env: boolean; ambient: number;
   key: number; fill: number; rim: number;
-  iso?: number; crack: number; lines: number; exposure: number;
+  iso?: number; crack: number; lines: number; furniture: number;
+  exposure: number;
 }> = {
+  // `lines` is the crack's own wireframe, which lies ON a lit surface and
+  // should stay subordinate to it. `furniture` is the scale bar, which is
+  // annotation and has to read against the BACKGROUND -- at `lines` on the
+  // dark look it is about 2.5:1 against #0b0d12 and effectively invisible.
   cinematic: { background: 0x0b0d12, env: true, ambient: 0.25, key: 2.1,
                fill: 0.75, rim: 2.4, crack: 0x1a1c20, lines: 0x4a5058,
-               exposure: 1.15 },
+               furniture: 0x9aa2aa, exposure: 1.15 },
   neutral: { background: 0xf7f7f6, env: false, ambient: 1.4, key: 1.6,
              fill: 0.9, rim: 0.0, iso: 0xb9bcc0, crack: 0x6f7378,
-             lines: 0x9aa0a6, exposure: 1.0 },
+             lines: 0x9aa0a6, furniture: 0x44484c, exposure: 1.0 },
 };
 
 export class IsoScene {
@@ -196,7 +201,8 @@ export class IsoScene {
     paint(this.crack, L.crack);
     for (const o of this.furniture.children) {
       const m = (o as LineSegments).material as LineBasicMaterial;
-      if (m && !(o as LineSegments).userData.keepColor) m.color.setHex(L.lines);
+      if (m && !(o as LineSegments).userData.keepColor)
+        m.color.setHex(L.furniture);
     }
   }
 
@@ -233,7 +239,8 @@ export class IsoScene {
     seg([o.x, y, o.z, o.x + this.barKm, y, o.z,
          o.x, y - 0.01 * span, o.z, o.x, y + 0.01 * span, o.z,
          o.x + this.barKm, y - 0.01 * span, o.z,
-         o.x + this.barKm, y + 0.01 * span, o.z], LOOKS[this.look].lines);
+         o.x + this.barKm, y + 0.01 * span, o.z],
+        LOOKS[this.look].furniture);
   }
 
   // --- camera --------------------------------------------------------------
