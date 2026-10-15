@@ -16,19 +16,24 @@
 // so a Blender import needs one rotation); our camera is z up already, which is
 // why nothing here rotates anything.
 //
-// RENDER ON DEMAND, like the rest of the site: a lighting rig does not need an
-// idle loop, and fault.ts:206 records why leaving one running is a bad idea on
-// a phone.
+// RENDER ON DEMAND, like the rest of the site, through the shared stage.ts:
+// a lighting rig does not need an idle loop, and fault.ts:206 records why
+// leaving one running is a bad idea on a phone.
 
 import {
-  ACESFilmicToneMapping, AmbientLight, Box3, BufferGeometry, Color,
-  DirectionalLight, Float32BufferAttribute, Group, LineBasicMaterial,
-  LineSegments, Mesh, MeshStandardMaterial, PerspectiveCamera, PMREMGenerator,
-  Scene, SRGBColorSpace, Vector3, WebGLRenderer,
+  ACESFilmicToneMapping, AmbientLight, Box3, Color, DirectionalLight, Group,
+  Mesh, MeshStandardMaterial, PerspectiveCamera, PMREMGenerator, Scene,
+  SRGBColorSpace, Vector3, WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import {
+  buildFurniture, fitCamera, onDemand, presetDir, recolourFurniture,
+  screenshot, type Preset,
+} from "./stage";
+
+export type { Preset } from "./stage";
 
 export interface IsoSurface {
   scene: string; kernel: string; scalar: string; level_tag: string;
@@ -52,7 +57,6 @@ export interface IsoManifest {
 }
 
 export type Look = "cinematic" | "neutral";
-export type Preset = "oblique" | "strike" | "cross" | "top";
 
 /** Art direction, and the neutral view that exists to check it.
  *
@@ -95,7 +99,7 @@ export class IsoScene {
   private look: Look = "cinematic";
   private base: string;
   private el: HTMLElement;
-  private raf = 0;
+  private stop: (() => void) | null = null;
   private dir = new Vector3(1.0, -1.35, 0.85);
   /** Scale-bar length in km, so the page can say what the bar means. */
   barKm = 0;
@@ -217,111 +221,30 @@ export class IsoScene {
     };
     paint(this.isos, L.iso);
     paint(this.crack, L.crack);
-    for (const o of this.furniture.children) {
-      const m = (o as LineSegments).material as LineBasicMaterial;
-      if (m && !(o as LineSegments).userData.keepColor)
-        m.color.setHex(L.furniture);
-    }
+    recolourFurniture(this.furniture, L.furniture);
   }
 
-  // --- axes and scale bar --------------------------------------------------
-  /** A triad and a round scale bar, parked at the content's lower corner.
-   *
-   * No 3-D text: a label in the scene would need a font or a canvas texture,
-   * and the page can simply say how long the bar is. The triad keeps its own
-   * colours in both looks, because an axis that changes colour with the
-   * lighting is not an axis. */
+  // --- axes, scale bar, camera: the shared stage ---------------------------
   private buildFurniture() {
-    this.furniture.clear();
     const box = new Box3().setFromObject(this.content);
-    if (box.isEmpty()) return;
-    const size = box.getSize(new Vector3());
-    const span = Math.max(size.x, size.y, size.z);
-    const raw = span / 4;
-    const p = 10 ** Math.floor(Math.log10(raw));
-    this.barKm = [1, 2, 5, 10].map((m) => m * p)
-      .reduce((a, b) => (Math.abs(b - raw) < Math.abs(a - raw) ? b : a));
-    const o = new Vector3(box.min.x, box.min.y, box.min.z);
-    const seg = (pts: number[], color: number, keep = false) => {
-      const g = new BufferGeometry();
-      g.setAttribute("position", new Float32BufferAttribute(pts, 3));
-      const l = new LineSegments(g, new LineBasicMaterial({ color }));
-      l.userData.keepColor = keep;
-      this.furniture.add(l);
-    };
-    const a = 0.12 * span;
-    seg([o.x, o.y, o.z, o.x + a, o.y, o.z], 0xd4573f, true);
-    seg([o.x, o.y, o.z, o.x, o.y + a, o.z], 0x55a35a, true);
-    seg([o.x, o.y, o.z, o.x, o.y, o.z + a], 0x4a7fc1, true);
-    const y = o.y - 0.04 * span;
-    seg([o.x, y, o.z, o.x + this.barKm, y, o.z,
-         o.x, y - 0.01 * span, o.z, o.x, y + 0.01 * span, o.z,
-         o.x + this.barKm, y - 0.01 * span, o.z,
-         o.x + this.barKm, y + 0.01 * span, o.z],
-        LOOKS[this.look].furniture);
+    if (box.isEmpty()) { this.furniture.clear(); return; }
+    this.barKm = buildFurniture(this.furniture, box, LOOKS[this.look].furniture);
   }
 
-  // --- camera --------------------------------------------------------------
+  /** Presets are taken about the receiver plane, the crack's mean plane. */
   preset(name: Preset) {
-    const n = this.manifest.receiver.normal;
-    // Horizontal strike of the receiver plane, which is the crack's mean plane:
-    // the same (-n_y, n_x, 0) the solver's own frame uses.
-    const strike = new Vector3(-n[1], n[0], 0).normalize();
-    const cross = new Vector3().crossVectors(new Vector3(0, 0, 1), strike);
-    this.dir = {
-      oblique: new Vector3(1.0, -1.35, 0.85),
-      strike: strike.clone(),
-      cross: cross.clone(),
-      top: new Vector3(0, 0, 1),
-    }[name].clone().normalize();
+    this.dir = presetDir(name, this.manifest.receiver.normal);
     this.fit();
   }
 
-  /** Frame the content by pushing the camera back until every corner clears.
-   *
-   * Corner by corner rather than by bounding sphere: a sphere around a slab
-   * that is 1.6 km across and 0.6 km thick wastes most of the frame on empty
-   * half space, which is exactly the complaint fractal.ts records. */
   fit() {
     const box = new Box3().setFromObject(this.content);
     if (box.isEmpty()) return;
-    const c = box.getCenter(new Vector3());
-    const right = new Vector3().crossVectors(new Vector3(0, 0, 1), this.dir);
-    if (right.lengthSq() < 1e-9) right.set(1, 0, 0);
-    right.normalize();
-    const up = new Vector3().crossVectors(this.dir, right).normalize();
-    const vt = Math.tan((this.camera.fov * Math.PI) / 360);
-    const ht = vt * Math.max(this.camera.aspect, 1e-6);
-    let d = 0, r = 0;
-    for (const sx of [box.min.x, box.max.x]) {
-      for (const sy of [box.min.y, box.max.y]) {
-        for (const sz of [box.min.z, box.max.z]) {
-          const v = new Vector3(sx, sy, sz).sub(c);
-          r = Math.max(r, v.length());
-          d = Math.max(d, v.dot(this.dir) + Math.abs(v.dot(up)) / vt,
-                       v.dot(this.dir) + Math.abs(v.dot(right)) / ht);
-        }
-      }
-    }
-    d *= 1.08;
-    this.camera.position.copy(c).addScaledVector(this.dir, d);
-    this.controls.target.copy(c);
-    this.camera.near = Math.max(0.01, d - 3 * r);
-    this.camera.far = d + 3 * r;
-    this.camera.updateProjectionMatrix();
-    this.controls.update();
+    fitCamera(this.camera, this.controls, box, this.dir);
     this.render();
   }
 
-  /** A PNG of exactly what is on screen, rendered in this tick.
-   *
-   * Rendering immediately before the read is what makes `preserveDrawingBuffer`
-   * unnecessary -- the buffer is only guaranteed between a draw and the end of
-   * the frame, and asking for it to persist costs every frame to serve one. */
-  screenshot(): string {
-    this.renderer.render(this.scene, this.camera);
-    return this.renderer.domElement.toDataURL("image/png");
-  }
+  screenshot(): string { return screenshot(this.renderer, this.scene, this.camera); }
 
   resize() {
     const w = this.el.clientWidth || 640;
@@ -332,22 +255,12 @@ export class IsoScene {
     this.render();
   }
 
-  start() {
-    const tick = () => {
-      this.raf = requestAnimationFrame(tick);
-      if (this.controls.update()) this.renderer.render(this.scene, this.camera);
-    };
-    this.controls.addEventListener("start", () => { if (!this.raf) tick(); });
-    this.controls.addEventListener("end", () => {
-      cancelAnimationFrame(this.raf); this.raf = 0; this.render();
-    });
-    this.render();
-  }
+  start() { this.stop = onDemand(this.controls, () => this.render()); }
 
   render() { this.renderer.render(this.scene, this.camera); }
 
   dispose() {
-    cancelAnimationFrame(this.raf);
+    this.stop?.();
     this.controls.dispose();
     this.env?.texture.dispose();
     this.renderer.dispose();
