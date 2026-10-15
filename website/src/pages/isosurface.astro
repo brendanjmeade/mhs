@@ -1,0 +1,353 @@
+---
+import Base from "../layouts/Base.astro";
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+---
+<Base
+  title="mhs — Isosurfaces"
+  description="Opaque level sets of three stress scalars around a rough crack, computed with a mollified kernel and with a classical triangular dislocation element, at two scales."
+  current="isosurface"
+>
+  <Fragment slot="sidebar">
+    <h1>Isosurfaces<span class="sub">the field, asked for everywhere at once</span></h1>
+    <p>
+      A collocation scheme asks a kernel for traction at element centroids. A
+      slice asks for stress on a plane. A <b>level set</b> asks for it
+      everywhere and then draws the places where the answer equals a number
+      &mdash; which is the sharpest form of the question, and the one picture
+      the slice viewer cannot make.
+    </p>
+    <p>
+      The same rough crack as the <a href={`${base}roughness/`}>Rough crack</a>
+      page: 1044 elements, radius 6&nbsp;km, dipping 30&deg; at 20&nbsp;km,
+      slipping to a peak of 0.27&nbsp;m. Three scalars, two levels each, both
+      kernels, two scales.
+    </p>
+    <div class="note">
+      Colour here is <b>material and light, not data</b>. A level set carries
+      one value of its scalar everywhere by definition, so there is nothing for
+      a colour map to say; the shape is carried by silhouette and shading. The
+      numbers are in the legend under the canvas.
+    </div>
+    <p class="contact">
+      Switch <b>look</b> to <i>neutral</i> to see the same geometry under flat
+      white light with no rim &mdash; the view that exists so the art direction
+      can be checked rather than trusted.
+    </p>
+  </Fragment>
+
+  <div id="viewer" class="iso">
+    <div class="panel">
+      <label data-ctl="scene"><span>scene</span></label>
+      <label data-ctl="scalar"><span>scalar</span></label>
+      <label data-ctl="level"><span>level</span></label>
+      <label data-ctl="kernel"><span>kernel</span></label>
+    </div>
+    <div data-canvas class="canvas" aria-label="Opaque stress isosurfaces around a rough dipping crack, lit from three directions, with the crack's own triangulated surface inside them"></div>
+    <p data-legend class="legend"></p>
+    <div class="panel">
+      <label data-ctl="crack"><span>crack</span></label>
+      <label data-ctl="look"><span>look</span></label>
+      <span class="lbl">view</span>
+      <span class="btns" data-ctl="view"></span>
+      <span class="btns" data-ctl="shot"></span>
+      <label data-ctl="publication"><span>publication view</span></label>
+    </div>
+    <p data-status class="status">loading&hellip;</p>
+  </div>
+
+  <h2>What a level set is a test of</h2>
+  <p>
+    On the rough-crack page the classical triangular dislocation element comes
+    out <i>well</i>: approached along its normal, an element&rsquo;s own centroid
+    is perfectly behaved, which is why it assembles a good interaction matrix
+    and recovers Eshelby marginally better than the mollified kernel does. What
+    it cannot do is hand you the field between the elements. Two adjacent
+    elements that slip by different amounts leave a residual dislocation on the
+    edge they share, and its stress diverges as 1/<i>d</i> &mdash; on
+    <b>1518 interior edges</b>, none of which is a physical feature of the
+    crack.
+  </p>
+  <p>
+    A level set is where that becomes visible rather than tabulated, because it
+    is the one readout that asks the kernel for a value at every point at once.
+    Where the two kernels agree, the two surfaces are the same surface. Where
+    they do not, one of them wraps the mesh.
+  </p>
+
+  <h2>Two scales, because one grid cannot hold both</h2>
+  <p>
+    The classical field reaches a level <i>L</i> at a distance
+    <i>r</i>&nbsp;&asymp;&nbsp;<i>A</i>/<i>L</i> from a shared edge, with
+    <i>A</i>&nbsp;&asymp;&nbsp;2&times;10<sup>&minus;4</sup>&nbsp;GPa&nbsp;km
+    measured on this mesh. At 0.05&nbsp;GPa that is <b>4&nbsp;m</b>. Resolving
+    4&nbsp;m over a 12&nbsp;km crack is of order 10<sup>9</sup> grid points, or
+    several hundred hours of kernel evaluation &mdash; so this page does not
+    pretend to show the singular lines at full scale. It shows two honest
+    things instead:
+  </p>
+  <div class="wide">
+    <table>
+      <thead>
+        <tr><th>scene</th><th>box</th><th>spacing</th><th>points</th>
+            <th>what it is for</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><b>envelope</b></td><td>14 &times; 14 &times; 9 km</td>
+            <td>0.2 km = 4 <i>eps</i></td><td>231,886</td>
+            <td>the shape of the field around the whole crack, and how far
+                apart the two kernels put the same level</td></tr>
+        <tr><td><b>detail</b></td><td>1.6 &times; 1.6 &times; 0.6 km</td>
+            <td>0.02 km = 0.4 <i>eps</i></td><td>203,391</td>
+            <td>one patch at 20&times; the resolution, fine enough for a
+                shared edge&rsquo;s own structure to be several cells across</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    The detail slab is centred on the interior edge carrying the largest slip
+    mismatch on the whole crack, and it is oriented on the <i>local</i> mean
+    plane of the facets it contains rather than on the crack&rsquo;s global mean
+    plane: across a 2.4&nbsp;km footprint this surface wanders 0.47&nbsp;km about
+    the global plane and 0.18&nbsp;km about the local one, so the global
+    alignment would have sampled mostly empty half space and clipped the crack
+    at both ends.
+  </p>
+
+  <h2>What the three scalars are</h2>
+  <p>
+    Stress is a tensor, and &ldquo;a stress isosurface&rdquo; means nothing
+    until the scalar is named. All three here come from the same elastic stress
+    tensor, with the mollified double layer&rsquo;s eigenstress subtracted, in
+    GPa:
+  </p>
+  <ul>
+    <li><b>von Mises</b>,
+      &radic;(3/2&nbsp;<i>s<sub>ij</sub>s<sub>ij</sub></i>) on the deviator
+      &mdash; an invariant, positive, the same quantity the slice viewer
+      shows.</li>
+    <li><b>Differential stress</b>,
+      <i>&sigma;</i><sub>1</sub>&nbsp;&minus;&nbsp;<i>&sigma;</i><sub>3</sub>
+      &mdash; also an invariant, and the one a rock-mechanics reader expects.</li>
+    <li><b>&Delta;CFS</b> on a declared receiver: planes parallel to the
+      crack&rsquo;s mean plane, slipping in the crack&rsquo;s mean slip
+      direction, friction 0.6. Signed, so its two surfaces are the
+      <b>+<i>L</i> and &minus;<i>L</i> lobes</b> rather than nested shells. The
+      normal is tension positive and positive &Delta;CFS is toward failure; the
+      sign is anchored by a test rather than by this sentence, and the anchor is
+      that inside a slipping patch slip must <i>relieve</i> the Coulomb stress
+      on planes parallel to it &mdash; measured here on 117 elements more than
+      1.25&nbsp;km inside the patch, 100&nbsp;% negative, where an inverted slip
+      direction would give 0&nbsp;%.</li>
+  </ul>
+  <p>
+    Levels are set by a rule rather than by eye: the 90th and 99th percentiles
+    of the mollified scalar inside the box, and both kernels are then contoured
+    at the same number &mdash; which is the only way the comparison means
+    anything.
+  </p>
+
+  <h2>What the comparison measured</h2>
+  <p>
+    Both kernels were evaluated at all 231,886 points of the envelope grid, and
+    contoured at the <i>same</i> levels &mdash; percentiles of the mollified
+    field, so the classical surface is never handed a level chosen to flatter
+    it. Two numbers come out of each pair. The <b>distance</b> is from every
+    vertex of one surface to the other surface, point to surface rather than
+    point to vertex, so a denser mesh cannot read as a closer one. The
+    <b>area</b> is the discriminator the distance cannot be: two level sets at
+    the same level enclose the same region or they do not.
+  </p>
+  <div class="wide">
+    <table>
+      <thead>
+        <tr><th>level</th><th>median apart</th><th>worst apart</th>
+            <th>mollified area</th><th>classical area</th><th>excess</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>von Mises p90</td><td>1.2 m <span class="dim">(0.006 cell)</span></td>
+            <td>758 m <span class="dim">(3.8 cells)</span></td>
+            <td>251.2 km<sup>2</sup></td><td>251.7 km<sup>2</sup></td>
+            <td><b>+0.2 %</b></td></tr>
+        <tr><td>von Mises p99</td><td>9.3 m <span class="dim">(0.046 cell)</span></td>
+            <td>498 m <span class="dim">(2.5 cells)</span></td>
+            <td>121.4 km<sup>2</sup></td><td>130.2 km<sup>2</sup></td>
+            <td><b>+7.3 %</b></td></tr>
+        <tr><td>&Delta;CFS +<i>L</i> lobe</td><td>31.6 m <span class="dim">(0.158 cell)</span></td>
+            <td>1231 m <span class="dim">(6.2 cells)</span></td>
+            <td>20.6 km<sup>2</sup></td><td>30.5 km<sup>2</sup></td>
+            <td><b>+48 %</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    So the answer is not one word. Over nearly all of their area the two
+    surfaces <i>are</i> the same surface: a median departure of 1.2&nbsp;m at
+    p90 is six thousandths of a grid cell, and the two fields&rsquo; minima over
+    the whole box agree to five digits
+    (1.1168 against 1.1166&times;10<sup>&minus;5</sup>&nbsp;GPa) &mdash; the far
+    field is not in question. The departures are local, and they are large where
+    they occur: several cells, at isolated places, which is what a defect on a
+    shared edge looks like from 0.2&nbsp;km away.
+  </p>
+  <p>
+    The area says which kernel is the one moving, and the trend says why. Move
+    the level from p90 into the tail and the classical surface inflates
+    &mdash; 0.2&nbsp;%, then 7.3&nbsp;%, then 48&nbsp;% &mdash; because the tail
+    of the classical field <i>is</i> the edge singularities. Taken over the
+    whole box, the classical von Mises maximum is
+    <b>0.217&nbsp;GPa against the mollified 0.0134</b>, sixteen times larger, on
+    a grid whose cells are 4&nbsp;<i>eps</i> wide and which therefore comes
+    nowhere near resolving the lines carrying it. That factor is a lower bound
+    set by the grid, not a property of the field.
+  </p>
+  <div class="note">
+    One statistic was measured and <b>does not</b> discriminate: the number of
+    separate pieces. A tail level set of a rough crack is dozens of lobes rather
+    than one shell, and at von Mises p99 the <i>mollified</i> surface carries
+    more of them than the classical one &mdash; 38 against 34. Fragmentation
+    here is set by the roughness of the crack and by where it slips, not by the
+    kernel, so the piece count is published as a description of what you are
+    looking at and not as evidence.
+  </div>
+
+  <h2>And what it measured at twenty times the resolution</h2>
+  <p>
+    The detail slab samples at 0.02&nbsp;km &mdash; 0.4&nbsp;<i>eps</i>, ten
+    times finer than the envelope &mdash; and there the two kernels are not the
+    same object at all:
+  </p>
+  <div class="wide">
+    <table>
+      <thead>
+        <tr><th>level</th><th>median apart</th><th>worst apart</th>
+            <th>mollified area</th><th>classical area</th><th>excess</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>von Mises p90</td><td>18.1 m <span class="dim">(0.90 cell)</span></td>
+            <td>394 m <span class="dim">(19.7 cells)</span></td>
+            <td>3.70 km<sup>2</sup></td><td>5.26 km<sup>2</sup></td>
+            <td><b>+42 %</b></td></tr>
+        <tr><td>von Mises p99</td><td>58.6 m <span class="dim">(2.93 cells)</span></td>
+            <td>448 m <span class="dim">(22.4 cells)</span></td>
+            <td>0.93 km<sup>2</sup></td><td>3.09 km<sup>2</sup></td>
+            <td><b>+232 %</b></td></tr>
+        <tr><td>&Delta;CFS +<i>L</i> lobe</td><td>161 m <span class="dim">(8.1 cells)</span></td>
+            <td>965 m <span class="dim">(48.2 cells)</span></td>
+            <td>0.13 km<sup>2</sup></td><td>1.30 km<sup>2</sup></td>
+            <td><b>+918 %</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    The field itself says the same thing more bluntly. On these same points,
+    from this same slip, von Mises runs to <b>0.0142&nbsp;GPa</b> under the
+    mollified kernel and <b>4.11&nbsp;GPa</b> under the classical one &mdash; a
+    factor of 290. And the mollified maximum barely moved from the
+    envelope&rsquo;s 0.0134: a bounded field does not care what grid you ask it
+    on. The classical maximum went from 0.217 to 4.11&nbsp;GPa for the same
+    refinement, because what it is reporting is not a feature of the crack but
+    how close the grid came to a line.
+  </p>
+
+  <h2>The tubes, predicted before they were looked at</h2>
+  <p>
+    A residual dislocation on a shared edge gives a 1/<i>d</i> field, so a level
+    <i>L</i> should be reached at <i>r</i>&nbsp;=&nbsp;<i>A</i>/<i>L</i> and the
+    classical level set should wrap that edge in a tube of radius <i>r</i>. That
+    is a falsifiable statement, and it was written down before the surfaces were
+    extracted: 3.4 to 7.6 cells at these levels, which is why the slab is
+    sampled this finely. Measured afterwards off the extracted geometry, as the
+    median standoff along the middle of the edge the slab is centred on:
+  </p>
+  <div class="wide">
+    <table>
+      <thead>
+        <tr><th>level</th><th>predicted <i>r</i></th><th>measured</th>
+            <th>ratio</th><th>mollified, same edge</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>von Mises p90 <span class="dim">6.40 MPa</span></td>
+            <td>112.7 m</td><td>78.1 m</td><td>0.69</td><td>15.3 m</td></tr>
+        <tr><td>von Mises p99 <span class="dim">9.30 MPa</span></td>
+            <td>77.5 m</td><td>51.9 m</td><td>0.67</td><td>32.9 m</td></tr>
+        <tr><td>&sigma;<sub>1</sub>&minus;&sigma;<sub>3</sub> p90 <span class="dim">7.28 MPa</span></td>
+            <td>99.1 m</td><td>79.2 m</td><td>0.80</td><td>15.3 m</td></tr>
+        <tr><td>&sigma;<sub>1</sub>&minus;&sigma;<sub>3</sub> p99 <span class="dim">10.59 MPa</span></td>
+            <td>68.1 m</td><td>52.2 m</td><td>0.77</td><td>33.0 m</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    The tubes are there, and they are about two thirds to four fifths of the
+    predicted radius. The prefactor <i>A</i> is the weak half of that
+    prediction &mdash; it was measured at one edge whose slip mismatch is 3.6
+    times smaller and scaled linearly &mdash; so the law is tested separately
+    from it. <b>r&nbsp;&prop;&nbsp;1/<i>L</i> holds to 3.4&nbsp;% on von Mises
+    and 4.0&nbsp;% on differential stress</b>: the ratio of the two measured
+    radii is 0.664 and 0.660 against the 0.687 that the two levels alone
+    predict, with no fitted quantity anywhere in it.
+  </p>
+  <p>
+    The mollified surface is the control, and it behaves in the opposite sense.
+    Its standoff from that same edge <i>grows</i> with the level, 15.3&nbsp;m to
+    32.9&nbsp;m, where a tube must shrink as 1/<i>L</i>. It is not wrapping the
+    edge; it does not know the edge is there, and its position is set by the
+    smooth field around it.
+  </p>
+  <div class="note">
+    The tube rule is <b>not</b> applicable to &Delta;CFS, and the measurement
+    says so rather than being quietly omitted: both lobes come within
+    13.1&nbsp;m of the edge, under one cell, against a predicted 152&nbsp;m. The
+    1/<i>d</i> coefficient of a <i>signed</i> scalar changes sign with azimuth
+    around the line, so there is no radius at which the field reaches
+    +<i>L</i> all the way round. Both lobes run into the line instead of
+    standing off it &mdash; which is why they measure the same 13.1&nbsp;m.
+  </div>
+
+  <h2>How much to trust the surfaces</h2>
+  <p>
+    Each surface is checked against the field it claims to come from: every
+    vertex of the undecimated contour is compared with the trilinearly
+    interpolated grid, and the worst departure from the requested level is
+    reported in the manifest. Across all 24 published surfaces that worst
+    departure is <b>0.11&nbsp;%</b>. The check is not a tautology, and the
+    selfcheck proves it on a closed form by breaking it on purpose: against an
+    analytic ellipsoid the contour sits on its level to 3&times;10<sup>&minus;5</sup>&nbsp;%,
+    while a <i>y</i>&harr;<i>z</i> transposed grid reads 44&nbsp;% off, an
+    <i>x</i>&harr;<i>z</i> transposed one 100&nbsp;%, and a 10&nbsp;% error in
+    the grid spacing 56&nbsp;%.
+  </p>
+  <p>
+    Nothing here was decimated or smoothed. The budget is 60,000 triangles and
+    the largest surface on the page is 38,434, so every published mesh is the
+    contour as it came out, and every decimation deviation in the manifest is
+    exactly zero. That is deliberate: a smoothing pass is precisely what would
+    remove a structure a few cells across and manufacture the agreement this
+    page is testing.
+  </p>
+  <div class="note">
+    One grid node in the classical detail field &mdash; <b>1 of 203,391</b>
+    &mdash; came out non-finite, where the point landed close enough to an
+    element edge for the kernel&rsquo;s logarithms to overflow. The field really
+    is unbounded there, so rather than invent a value, that node is given the
+    largest-magnitude value among its six neighbours: because the field grows
+    toward the edge, that puts it on the side of the level it is genuinely on.
+    Every surface&rsquo;s manifest entry carries how many nodes this happened
+    to. The mollified field has none, at either scale.
+  </div>
+  <p class="cap">
+    The meshes are binary glTF in kilometres, <i>z</i> up and depth negative,
+    with no transform node &mdash; the same files this page loads will open in
+    Blender, which declares <i>y</i> up and will want one rotation. Every
+    surface carries its scene, kernel, scalar, level, triangle count and sha256
+    in <a href={`${base}data/iso_manifest.json`}>iso_manifest.json</a>. See
+    <a href={`${base}roughness/`}>Rough crack</a> for the measurement this
+    picture is of, and <a href={`${base}concepts/`}>Concepts</a> for what
+    <i>eps</i> is.
+  </p>
+
+  <script>
+    import { startIso } from "../viz/iso";
+    startIso(document.getElementById("viewer")!, import.meta.env.BASE_URL);
+  </script>
+</Base>

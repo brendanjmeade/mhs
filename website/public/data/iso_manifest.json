@@ -1,0 +1,731 @@
+{
+ "axis_up": "z",
+ "eps_km": 0.05,
+ "receiver": {
+  "friction": 0.6,
+  "normal": [
+   0.5044016440966465,
+   0.010460866478954745,
+   0.863405786235597
+  ],
+  "sign": "normal is tension positive; positive dCFS is toward failure",
+  "slip_direction": [
+   -0.8626894481723565,
+   -0.036378912655055363,
+   0.5044239196609445
+  ]
+ },
+ "scenes": {
+  "detail": {
+   "centre": [
+    -3.1230045375554942,
+    -1.5155444566227674,
+    -17.653692687883176
+   ],
+   "crack": "iso/crack_detail.glb",
+   "grid": {
+    "dims": [
+     81,
+     81,
+     31
+    ],
+    "origin": [
+     -2.3162289202009685,
+     -2.0984381466977675,
+     -18.26960505933952
+    ],
+    "rotation": [
+     [
+      -0.30308819536967413,
+      -0.8596252996096646,
+      0.4113172620964852
+     ],
+     [
+      0.9529625101899624,
+      -0.2734024454969089,
+      0.13081879440185776
+     ],
+     [
+      0.0,
+      0.43161956288762476,
+      0.9020557371541383
+     ]
+    ],
+    "spacing": 0.02
+   },
+   "level_percentiles": [
+    90.0,
+    99.0
+   ],
+   "max_triangles": 60000,
+   "n_facets": 29,
+   "spacing_over_eps": 0.39999999999999997
+  },
+  "envelope": {
+   "crack": "iso/crack_envelope.glb",
+   "grid": {
+    "dims": [
+     71,
+     71,
+     46
+    ],
+    "origin": [
+     -7.0,
+     -7.0,
+     -24.5
+    ],
+    "rotation": [
+     [
+      1.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      1.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      1.0
+     ]
+    ],
+    "spacing": 0.2
+   },
+   "level_percentiles": [
+    90.0,
+    99.0
+   ],
+   "max_triangles": 60000,
+   "n_facets": 1044,
+   "spacing_over_eps": 4.0
+  }
+ },
+ "schema": 1,
+ "surfaces": [
+  {
+   "area_km2": 251.23675104631295,
+   "bytes": 458440,
+   "classical_area_excess": 0.0018776512041809301,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.7578599358180484,
+    "median": 0.0012203233914167264
+   },
+   "file": "iso/envelope.mollified.von_mises.p90.glb",
+   "kernel": "mollified",
+   "level_GPa": 0.0007556293677827168,
+   "level_MPa": 0.7556293677827168,
+   "level_rel_error": 1.1285287016021972e-05,
+   "level_tag": "p90",
+   "pieces": 6,
+   "scalar": "von_mises",
+   "scene": "envelope",
+   "sha256": "eeba9c8221e75f11",
+   "triangles": 18828,
+   "triangles_before_decimation": 18828,
+   "unbounded_nodes_filled": 0,
+   "vertices": 9636
+  },
+  {
+   "area_km2": 251.70848603444955,
+   "bytes": 457940,
+   "classical_area_excess": 0.0018776512041809301,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.7578599358180484,
+    "median": 0.0012203233914167264
+   },
+   "file": "iso/envelope.classical.von_mises.p90.glb",
+   "kernel": "classical",
+   "level_GPa": 0.0007556293677827168,
+   "level_MPa": 0.7556293677827168,
+   "level_rel_error": 9.854672490536843e-06,
+   "level_tag": "p90",
+   "pieces": 6,
+   "scalar": "von_mises",
+   "scene": "envelope",
+   "sha256": "bd62bf7c13858010",
+   "triangles": 18832,
+   "triangles_before_decimation": 18832,
+   "unbounded_nodes_filled": 0,
+   "vertices": 9613
+  },
+  {
+   "area_km2": 121.35413813663372,
+   "bytes": 298020,
+   "classical_area_excess": 0.07299874586656974,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.49784570256323935,
+    "median": 0.009298461002631748
+   },
+   "file": "iso/envelope.mollified.von_mises.p99.glb",
+   "kernel": "mollified",
+   "level_GPa": 0.0033881688425048194,
+   "level_MPa": 3.3881688425048195,
+   "level_rel_error": 6.087462797960667e-06,
+   "level_tag": "p99",
+   "pieces": 38,
+   "scalar": "von_mises",
+   "scene": "envelope",
+   "sha256": "8cad2c247d185f62",
+   "triangles": 8804,
+   "triangles_before_decimation": 8804,
+   "unbounded_nodes_filled": 0,
+   "vertices": 7964
+  },
+  {
+   "area_km2": 130.21283802632644,
+   "bytes": 310092,
+   "classical_area_excess": 0.07299874586656974,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.49784570256323935,
+    "median": 0.009298461002631748
+   },
+   "file": "iso/envelope.classical.von_mises.p99.glb",
+   "kernel": "classical",
+   "level_GPa": 0.0033881688425048194,
+   "level_MPa": 3.3881688425048195,
+   "level_rel_error": 0.00011532847470436572,
+   "level_tag": "p99",
+   "pieces": 34,
+   "scalar": "von_mises",
+   "scene": "envelope",
+   "sha256": "f2c3ea8efe320be8",
+   "triangles": 9276,
+   "triangles_before_decimation": 9276,
+   "unbounded_nodes_filled": 0,
+   "vertices": 8231
+  },
+  {
+   "area_km2": 250.65609802167305,
+   "bytes": 457100,
+   "classical_area_excess": 0.002174956961396912,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.7779928838226214,
+    "median": 0.0012533151002175923
+   },
+   "file": "iso/envelope.mollified.diff_stress.p90.glb",
+   "kernel": "mollified",
+   "level_GPa": 0.000850389904494224,
+   "level_MPa": 0.850389904494224,
+   "level_rel_error": 2.50565185455476e-05,
+   "level_tag": "p90",
+   "pieces": 9,
+   "scalar": "diff_stress",
+   "scene": "envelope",
+   "sha256": "dc1a33cd0d8716cf",
+   "triangles": 18748,
+   "triangles_before_decimation": 18748,
+   "unbounded_nodes_filled": 0,
+   "vertices": 9620
+  },
+  {
+   "area_km2": 251.20126424698185,
+   "bytes": 456288,
+   "classical_area_excess": 0.002174956961396912,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.7779928838226214,
+    "median": 0.0012533151002175923
+   },
+   "file": "iso/envelope.classical.diff_stress.p90.glb",
+   "kernel": "classical",
+   "level_GPa": 0.000850389904494224,
+   "level_MPa": 0.850389904494224,
+   "level_rel_error": 7.63064153758436e-06,
+   "level_tag": "p90",
+   "pieces": 6,
+   "scalar": "diff_stress",
+   "scene": "envelope",
+   "sha256": "6b25a6d046440db7",
+   "triangles": 18748,
+   "triangles_before_decimation": 18748,
+   "unbounded_nodes_filled": 0,
+   "vertices": 9586
+  },
+  {
+   "area_km2": 120.81813633460735,
+   "bytes": 297476,
+   "classical_area_excess": 0.08074712438175435,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.5095086883110792,
+    "median": 0.009371852504522136
+   },
+   "file": "iso/envelope.mollified.diff_stress.p99.glb",
+   "kernel": "mollified",
+   "level_GPa": 0.0038494541187387233,
+   "level_MPa": 3.8494541187387235,
+   "level_rel_error": 6.481537355322365e-06,
+   "level_tag": "p99",
+   "pieces": 39,
+   "scalar": "diff_stress",
+   "scene": "envelope",
+   "sha256": "0c00480a69adf106",
+   "triangles": 8812,
+   "triangles_before_decimation": 8812,
+   "unbounded_nodes_filled": 0,
+   "vertices": 7937
+  },
+  {
+   "area_km2": 130.57385341678963,
+   "bytes": 310600,
+   "classical_area_excess": 0.08074712438175435,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.5095086883110792,
+    "median": 0.009371852504522136
+   },
+   "file": "iso/envelope.classical.diff_stress.p99.glb",
+   "kernel": "classical",
+   "level_GPa": 0.0038494541187387233,
+   "level_MPa": 3.8494541187387235,
+   "level_rel_error": 8.915507805355708e-05,
+   "level_tag": "p99",
+   "pieces": 32,
+   "scalar": "diff_stress",
+   "scene": "envelope",
+   "sha256": "80cd6e43659a3c99",
+   "triangles": 9296,
+   "triangles_before_decimation": 9296,
+   "unbounded_nodes_filled": 0,
+   "vertices": 8242
+  },
+  {
+   "area_km2": 20.59471134679179,
+   "bytes": 107296,
+   "classical_area_excess": 0.4787955191995188,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 1.230831878924554,
+    "median": 0.03155340291485451
+   },
+   "file": "iso/envelope.mollified.dcfs.+.glb",
+   "kernel": "mollified",
+   "level_GPa": 0.0014588891689440303,
+   "level_MPa": 1.4588891689440304,
+   "level_rel_error": 1.2698811979789347e-05,
+   "level_tag": "+",
+   "pieces": 102,
+   "scalar": "dcfs",
+   "scene": "envelope",
+   "sha256": "c11783d4a6633cd1",
+   "triangles": 2164,
+   "triangles_before_decimation": 2164,
+   "unbounded_nodes_filled": 0,
+   "vertices": 3338
+  },
+  {
+   "area_km2": 30.45536685884319,
+   "bytes": 138976,
+   "classical_area_excess": 0.4787955191995188,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 1.230831878924554,
+    "median": 0.03155340291485451
+   },
+   "file": "iso/envelope.classical.dcfs.+.glb",
+   "kernel": "classical",
+   "level_GPa": 0.0014588891689440303,
+   "level_MPa": 1.4588891689440304,
+   "level_rel_error": 6.602622053593344e-05,
+   "level_tag": "+",
+   "pieces": 136,
+   "scalar": "dcfs",
+   "scene": "envelope",
+   "sha256": "41d92f603cf3a8db",
+   "triangles": 2676,
+   "triangles_before_decimation": 2676,
+   "unbounded_nodes_filled": 0,
+   "vertices": 4402
+  },
+  {
+   "area_km2": 89.44010921140578,
+   "bytes": 233944,
+   "classical_area_excess": 0.09142793469722554,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.7404267755504229,
+    "median": 0.007503878731915383
+   },
+   "file": "iso/envelope.mollified.dcfs.-.glb",
+   "kernel": "mollified",
+   "level_GPa": -0.0014588891689440303,
+   "level_MPa": -1.4588891689440304,
+   "level_rel_error": 1.5642863794957126e-05,
+   "level_tag": "-",
+   "pieces": 40,
+   "scalar": "dcfs",
+   "scene": "envelope",
+   "sha256": "c23f80561c14be92",
+   "triangles": 7028,
+   "triangles_before_decimation": 7028,
+   "unbounded_nodes_filled": 0,
+   "vertices": 6183
+  },
+  {
+   "area_km2": 97.61743367569892,
+   "bytes": 266272,
+   "classical_area_excess": 0.09142793469722554,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.7404267755504229,
+    "median": 0.007503878731915383
+   },
+   "file": "iso/envelope.classical.dcfs.-.glb",
+   "kernel": "classical",
+   "level_GPa": -0.0014588891689440303,
+   "level_MPa": -1.4588891689440304,
+   "level_rel_error": 3.667331514442259e-05,
+   "level_tag": "-",
+   "pieces": 59,
+   "scalar": "dcfs",
+   "scene": "envelope",
+   "sha256": "2c21f45eb620f672",
+   "triangles": 7588,
+   "triangles_before_decimation": 7588,
+   "unbounded_nodes_filled": 0,
+   "vertices": 7250
+  },
+  {
+   "area_km2": 3.6986029453841858,
+   "bytes": 660760,
+   "classical_area_excess": 0.42335943312071667,
+   "closest_approach_km": 0.012372919446087384,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.39386622431336976,
+    "median": 0.018065517623264502
+   },
+   "file": "iso/detail.mollified.von_mises.p90.glb",
+   "kernel": "mollified",
+   "level_GPa": 0.006396713370301099,
+   "level_MPa": 6.396713370301099,
+   "level_rel_error": 3.1686430298094752e-06,
+   "level_tag": "p90",
+   "pieces": 6,
+   "scalar": "von_mises",
+   "scene": "detail",
+   "sha256": "d8eeed8962a52cc9",
+   "triangles": 26140,
+   "triangles_before_decimation": 26140,
+   "tube_radius_km": 0.015262426450292695,
+   "unbounded_nodes_filled": 0,
+   "vertices": 14410
+  },
+  {
+   "area_km2": 5.264441391680648,
+   "bytes": 978952,
+   "classical_area_excess": 0.42335943312071667,
+   "closest_approach_km": 0.04971200976464555,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.39386622431336976,
+    "median": 0.018065517623264502
+   },
+   "file": "iso/detail.classical.von_mises.p90.glb",
+   "kernel": "classical",
+   "level_GPa": 0.006396713370301099,
+   "level_MPa": 6.396713370301099,
+   "level_rel_error": 8.010771475080677e-05,
+   "level_tag": "p90",
+   "pieces": 3,
+   "predicted_tube_radius_cells": 5.6335438045270365,
+   "predicted_tube_radius_km": 0.11267087609054073,
+   "scalar": "von_mises",
+   "scene": "detail",
+   "sha256": "d5ed2b6870a58b1e",
+   "triangles": 38338,
+   "triangles_before_decimation": 38338,
+   "tube_radius_km": 0.07807713074179913,
+   "tube_radius_ratio": 0.6929663942530938,
+   "unbounded_nodes_filled": 1,
+   "vertices": 21569
+  },
+  {
+   "area_km2": 0.9318473239655997,
+   "bytes": 198804,
+   "classical_area_excess": 2.3156396250424027,
+   "closest_approach_km": 0.018221226127861728,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.44830824804331154,
+    "median": 0.0586284605102497
+   },
+   "file": "iso/detail.mollified.von_mises.p99.glb",
+   "kernel": "mollified",
+   "level_GPa": 0.00930458382129217,
+   "level_MPa": 9.30458382129217,
+   "level_rel_error": 1.50682907428018e-06,
+   "level_tag": "p99",
+   "pieces": 12,
+   "scalar": "von_mises",
+   "scene": "detail",
+   "sha256": "df4934c86922a568",
+   "triangles": 6918,
+   "triangles_before_decimation": 6918,
+   "tube_radius_km": 0.03288606876850517,
+   "unbounded_nodes_filled": 0,
+   "vertices": 4773
+  },
+  {
+   "area_km2": 3.0896699118300672,
+   "bytes": 591112,
+   "classical_area_excess": 2.3156396250424027,
+   "closest_approach_km": 0.03880075492344978,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.44830824804331154,
+    "median": 0.0586284605102497
+   },
+   "file": "iso/detail.classical.von_mises.p99.glb",
+   "kernel": "classical",
+   "level_GPa": 0.00930458382129217,
+   "level_MPa": 9.30458382129217,
+   "level_rel_error": 4.757846169604704e-05,
+   "level_tag": "p99",
+   "pieces": 7,
+   "predicted_tube_radius_cells": 3.872947535184922,
+   "predicted_tube_radius_km": 0.07745895070369845,
+   "scalar": "von_mises",
+   "scene": "detail",
+   "sha256": "5026903f07eccfd9",
+   "triangles": 21952,
+   "triangles_before_decimation": 21952,
+   "tube_law_expected": 0.6874797941701769,
+   "tube_law_ratio": 0.6643992149655605,
+   "tube_radius_km": 0.051874384371614776,
+   "tube_radius_ratio": 0.6697016148598295,
+   "unbounded_nodes_filled": 1,
+   "vertices": 13602
+  },
+  {
+   "area_km2": 3.7170943834520083,
+   "bytes": 671328,
+   "classical_area_excess": 0.42499540800667757,
+   "closest_approach_km": 0.012159693727604047,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.3919755851662236,
+    "median": 0.018284081782325275
+   },
+   "file": "iso/detail.mollified.diff_stress.p90.glb",
+   "kernel": "mollified",
+   "level_GPa": 0.007275351141559064,
+   "level_MPa": 7.275351141559065,
+   "level_rel_error": 3.7317657238011626e-06,
+   "level_tag": "p90",
+   "pieces": 5,
+   "scalar": "diff_stress",
+   "scene": "detail",
+   "sha256": "e0caba1dd99b170d",
+   "triangles": 26504,
+   "triangles_before_decimation": 26504,
+   "tube_radius_km": 0.015272202394064367,
+   "unbounded_nodes_filled": 0,
+   "vertices": 14668
+  },
+  {
+   "area_km2": 5.296842427546524,
+   "bytes": 982536,
+   "classical_area_excess": 0.42499540800667757,
+   "closest_approach_km": 0.04899662307054927,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.3919755851662236,
+    "median": 0.018284081782325275
+   },
+   "file": "iso/detail.classical.diff_stress.p90.glb",
+   "kernel": "classical",
+   "level_GPa": 0.007275351141559064,
+   "level_MPa": 7.275351141559065,
+   "level_rel_error": 5.3339613810503915e-05,
+   "level_tag": "p90",
+   "pieces": 4,
+   "predicted_tube_radius_cells": 4.953185664227978,
+   "predicted_tube_radius_km": 0.09906371328455957,
+   "scalar": "diff_stress",
+   "scene": "detail",
+   "sha256": "d1d7fcf8a79ae85b",
+   "triangles": 38434,
+   "triangles_before_decimation": 38434,
+   "tube_radius_km": 0.07921379345430804,
+   "tube_radius_ratio": 0.7996247145184956,
+   "unbounded_nodes_filled": 1,
+   "vertices": 21670
+  },
+  {
+   "area_km2": 0.9202413574248522,
+   "bytes": 197704,
+   "classical_area_excess": 2.3839857292345754,
+   "closest_approach_km": 0.019089182850307706,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.44566298389867914,
+    "median": 0.05711559986191629
+   },
+   "file": "iso/detail.mollified.diff_stress.p99.glb",
+   "kernel": "mollified",
+   "level_GPa": 0.010586054720200877,
+   "level_MPa": 10.586054720200877,
+   "level_rel_error": 1.965792446545505e-06,
+   "level_tag": "p99",
+   "pieces": 15,
+   "scalar": "diff_stress",
+   "scene": "detail",
+   "sha256": "27bdb336096720cf",
+   "triangles": 6916,
+   "triangles_before_decimation": 6916,
+   "tube_radius_km": 0.03295028717052146,
+   "unbounded_nodes_filled": 0,
+   "vertices": 4728
+  },
+  {
+   "area_km2": 3.114083620977154,
+   "bytes": 593832,
+   "classical_area_excess": 2.3839857292345754,
+   "closest_approach_km": 0.038708998687031274,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.44566298389867914,
+    "median": 0.05711559986191629
+   },
+   "file": "iso/detail.classical.diff_stress.p99.glb",
+   "kernel": "classical",
+   "level_GPa": 0.010586054720200877,
+   "level_MPa": 10.586054720200877,
+   "level_rel_error": 2.800124793485455e-05,
+   "level_tag": "p99",
+   "pieces": 8,
+   "predicted_tube_radius_cells": 3.4041166354287657,
+   "predicted_tube_radius_km": 0.06808233270857532,
+   "scalar": "diff_stress",
+   "scene": "detail",
+   "sha256": "af07b1635b8d852c",
+   "triangles": 22154,
+   "triangles_before_decimation": 22154,
+   "tube_law_expected": 0.687258032747162,
+   "tube_law_ratio": 0.659533211129288,
+   "tube_radius_km": 0.052244127562651954,
+   "tube_radius_ratio": 0.7673668848316583,
+   "unbounded_nodes_filled": 1,
+   "vertices": 13614
+  },
+  {
+   "area_km2": 0.12756366139290756,
+   "bytes": 38236,
+   "classical_area_excess": 9.181048417576886,
+   "closest_approach_km": 0.02129892959891452,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.9647803927703205,
+    "median": 0.16126976365604015
+   },
+   "file": "iso/detail.mollified.dcfs.+.glb",
+   "kernel": "mollified",
+   "level_GPa": 0.004733728223258625,
+   "level_MPa": 4.733728223258625,
+   "level_rel_error": 1.5554070503717485e-06,
+   "level_tag": "+",
+   "pieces": 19,
+   "scalar": "dcfs",
+   "scene": "detail",
+   "sha256": "1f5323b539f19e61",
+   "triangles": 1120,
+   "triangles_before_decimation": 1120,
+   "tube_radius_km": 0.03135860655815966,
+   "unbounded_nodes_filled": 0,
+   "vertices": 983
+  },
+  {
+   "area_km2": 1.2987318129645753,
+   "bytes": 376892,
+   "classical_area_excess": 9.181048417576886,
+   "closest_approach_km": 0.005945900012159447,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.9647803927703205,
+    "median": 0.16126976365604015
+   },
+   "file": "iso/detail.classical.dcfs.+.glb",
+   "kernel": "classical",
+   "level_GPa": 0.004733728223258625,
+   "level_MPa": 4.733728223258625,
+   "level_rel_error": 0.0008784613156289187,
+   "level_tag": "+",
+   "pieces": 157,
+   "predicted_tube_radius_cells": 7.6126391877623005,
+   "predicted_tube_radius_km": 0.152252783755246,
+   "scalar": "dcfs",
+   "scene": "detail",
+   "sha256": "21dc0ed8e40576a8",
+   "triangles": 10116,
+   "triangles_before_decimation": 10116,
+   "tube_radius_km": 0.01312389209118362,
+   "tube_radius_ratio": 0.08619804359229934,
+   "unbounded_nodes_filled": 1,
+   "vertices": 10595
+  },
+  {
+   "area_km2": 0.7443807415329313,
+   "bytes": 155172,
+   "classical_area_excess": 1.8256418851219203,
+   "closest_approach_km": 0.0195179148634158,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.49729831161264276,
+    "median": 0.03292247164426833
+   },
+   "file": "iso/detail.mollified.dcfs.-.glb",
+   "kernel": "mollified",
+   "level_GPa": -0.004733728223258625,
+   "level_MPa": -4.733728223258625,
+   "level_rel_error": 1.997518286102568e-06,
+   "level_tag": "-",
+   "pieces": 5,
+   "scalar": "dcfs",
+   "scene": "detail",
+   "sha256": "c7a099637b7b4529",
+   "triangles": 5830,
+   "triangles_before_decimation": 5830,
+   "tube_radius_km": 0.032652440712500314,
+   "unbounded_nodes_filled": 0,
+   "vertices": 3500
+  },
+  {
+   "area_km2": 2.103353401753565,
+   "bytes": 461732,
+   "classical_area_excess": 1.8256418851219203,
+   "closest_approach_km": 0.008129496968049517,
+   "decimation_deviation_km": 0.0,
+   "distance_to_other_kernel_km": {
+    "max": 0.49729831161264276,
+    "median": 0.03292247164426833
+   },
+   "file": "iso/detail.classical.dcfs.-.glb",
+   "kernel": "classical",
+   "level_GPa": -0.004733728223258625,
+   "level_MPa": -4.733728223258625,
+   "level_rel_error": 0.0010765798144980229,
+   "level_tag": "-",
+   "pieces": 34,
+   "predicted_tube_radius_cells": 7.6126391877623005,
+   "predicted_tube_radius_km": 0.152252783755246,
+   "scalar": "dcfs",
+   "scene": "detail",
+   "sha256": "9d71b1a1483e505d",
+   "triangles": 15916,
+   "triangles_before_decimation": 15916,
+   "tube_radius_km": 0.013123892095952272,
+   "tube_radius_ratio": 0.08619804362361996,
+   "unbounded_nodes_filled": 1,
+   "vertices": 11230
+  }
+ ],
+ "units": "km, GPa"
+}

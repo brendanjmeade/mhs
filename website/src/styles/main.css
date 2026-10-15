@@ -224,5 +224,27 @@ button:disabled { opacity: .5; cursor: default; }
 }
 #viewer .bar .ends .mid { color: var(--fg-faint); }
 #viewer .status { font-size: 13px; color: var(--fg-dim); margin-top: 8px; }
+/* ---- the lit isosurface scene ---------------------------------------------
+ A dark canvas on a light page, deliberately: these surfaces are read by
+ silhouette and grazing light, which a white background removes. It is a plate
+ on the page rather than a widget, so it keeps its own frame and its own
+ background, and `look: neutral` exists to check what the lighting is doing. */
+#viewer.iso .canvas { min-height: 520px; background: #0b0d12; border-radius: 2px; }
+#viewer .legend {
+  font-size: 12px; color: var(--fg-dim); margin: 6px 0 10px;
+  font-variant-numeric: tabular-nums;
+}
+#viewer .btns { display: inline-flex; gap: 4px; }
+#viewer .btns button {
+  font: inherit; font-size: 12px; padding: 2px 8px; cursor: pointer;
+  border: 1px solid var(--rule); background: #fff; color: var(--fg);
+  border-radius: 2px;
+}
+#viewer .btns button:hover { background: var(--bg-alt, #f3f3f2); }
+/* The publication view hides the chrome and nothing else: same canvas, same
+   camera, so what is saved is what was being looked at. */
+#viewer.publication .panel, #viewer.publication .status { display: none; }
+#viewer.publication .legend { margin-top: 8px; }
 .cap { font-size: 13px; color: var(--fg-dim); }
+.dim { color: var(--fg-dim); }
 .cap b { color: var(--fg); font-weight: 600; }
