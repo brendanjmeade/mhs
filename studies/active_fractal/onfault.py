@@ -1,35 +1,31 @@
-#!/usr/bin/env python
-"""On-fault stress on a system of rough faults, both kernels, for the site.
+"""On-fault stress on a system of three surface-breaking rough faults, one
+value per element, both kernels, for the site.
 
     python onfault.py solve   [--out out/onfault_state.npz] [--workers 12]
-    python onfault.py field   --state out/onfault_state.npz [--k 10] [--probe]
+    python onfault.py field   --state out/onfault_state.npz [--k 1] [--probe]
     python onfault.py payload --field out/onfault_field.npz
 
-WHY ON THE FAULT. Every other page evaluates stress OFF the fault. A
-collocation scheme asks a kernel for traction at element centroids and nowhere
-else, and never asks whether the condition it enforced there holds BETWEEN
-them. On the fault a classical constant-slip element is finite only at its own
-centroid, which sits a fixed 0.29 h from its own edges; everywhere else its
-field is the 1/d field of the residual dislocations on the edges it shares.
-The mollified field is bounded on the whole surface, with eps a resolution
-floor independent of h, so the boundary condition can be read at every point
-of the fault. That readout is this script, and no readout in either repository
-has done it before.
+THE SYSTEM. Three rough discs cut by the free surface, meshed by ``system``:
+rims sampled on the circle, traces exactly on z = 0, and C a splay whose
+lower edge lies on A along a polyline the two tilings share bit for bit. B is
+a parallel ramp in A's hanging wall. The roughness is the published
+one-wavelength field, tapered to zero at every rim, trace and junction line;
+``system`` gates all of it.
 
-WHAT IS COMPARED IS THE CONDITION ITSELF. The solve is the Coulomb LCP with the
-slip-induced normal stress coupled in (``static.coulomb_coupled``), so at a
-slipping centroid the Coulomb excess ``S = tau_s - mu sigma_n'`` is exactly
-``-w``, the solver's own margin, and zero to its tolerance. The dense map of
-``S`` is then the solution's own residual between the points where it was
-enforced. Both kernels go through the same friction, the same operators and
-the same solver; only the matrix differs.
+WHAT IS PLOTTED. One value per element, read at its centroid, which is the
+collocation point. The solve is the Coulomb LCP with the slip-induced normal
+stress coupled in (``static.coulomb_coupled``), so at a centroid the Coulomb
+excess ``S = tau_s - mu sigma_n'`` is exactly ``-w``, the solver's own margin:
+zero on every slipping element, the deficit on every locked one. The
+slip-induced shear and normal-stress changes are the element's own, and so is
+the slip. Both kernels go through the same friction, the same operators and
+the same solver; only the matrix differs, and at the centroids, where the
+classical element is finite, the two agree to about a per cent.
 
-THE HONEST FRAME. A P0 solution is a staircase, so BOTH kernels carry a stripe
-at every interior edge with a slip mismatch. The mollified stripe is bounded
--- about 6 MPa at the worst edge of the published crack -- and the classical
-one is 1/d, 3.95 GPa at 0.05 m from that same edge. So the page promises
-"bounded and checkable", not "smooth", and every cell carries its distance to
-the nearest facet edge so the facet cores can be read on their own.
+``cells(tris, k)`` still subdivides every facet into k^2 equal-area cells for
+a dense readout between the centroids (the page shipped one at k = 10 until
+2026-10-16; the machinery and the edge-distance byte are kept for it), and
+k = 1 is the facet itself with its sample at the centroid.
 
 THREE COMMANDS, for the reason roughvol.py gives: a second spawn pool raised
 after the first has closed deadlocks on this machine. ``solve`` runs the
@@ -44,7 +40,8 @@ pin inside the worker function can run. roughvol and isosurf pin inside the
 worker and measured a field readout at 1.45x on eight workers, against 8.5x
 for assembly, which pins around pool creation. The probe measures both.
 
-STUDY-ONLY DEPENDENCY: cutde, as roughvol states.
+STUDY-ONLY DEPENDENCIES: cutde, as roughvol states, and ``triangle`` through
+``system``.
 """
 from __future__ import annotations
 
@@ -68,37 +65,39 @@ import kernel as K                                           # noqa: E402
 import network                                               # noqa: E402
 import roughvol as R                                         # noqa: E402
 import static as St                                          # noqa: E402
+import system as Sy                                          # noqa: E402
 
 MU, LAM = R.MU, R.LAM
-H_KM = R.H_KM
+H_KM = 0.25                      # half the published crack's h: more, smaller elements
 EPS = 0.1 * H_KM
-SLOPE, CORR_OVER_H = R.SLOPE, R.CORR_OVER_H
+SLOPE = R.SLOPE
+CORR_KM = R.CORR_OVER_H * R.H_KM # the published correlation length, in km (4)
 REGIME, DROP_RATIO, MEAN_STRESS = R.REGIME, R.DROP_RATIO, R.MEAN_STRESS
-SCHEMA = 1
+SCHEMA = 2
 
-#: The system. Fault A is the published crack -- same radius, dip, depth and
-#: seed as ``roughvol.build`` -- so this page's main fault is the one the
-#: roughness and isosurface pages already show. B is a parallel ramp in A's
-#: hanging wall, 2 km along A's normal, where A's slip shadows it. C is a
-#: steeper splay above A's up-dip edge; 50 deg rather than 55 because a
-#: three-sigma facet tilt on top of 55 would reach n_z ~ 0.08, at the edge of
-#: the frame gate below. Centres are in km; no azimuth, because the thrust
-#: load ``diag(-1, 0, 1)`` compresses along x and strike-parallel discs are
-#: the regime's own symmetry.
-_S30, _C30 = np.sin(np.deg2rad(30.0)), np.cos(np.deg2rad(30.0))
+#: The system. Every fault strikes along y and dips toward +x, with no
+#: azimuth because the thrust load ``diag(-1, 0, 1)`` compresses along x and
+#: strike-parallel faults are the regime's own symmetry. ``trace`` is where
+#: the plane meets z = 0 and ``v_c`` how far down-dip the disc's centre sits,
+#: less than the radius, so every circle is cut by the surface. A is the main
+#: 30 deg thrust. B is a parallel ramp 3 km into A's hanging wall (its trace
+#: 6 km from A's), where A's slip shadows it. C is a 50 deg splay rooted on A:
+#: ``attach`` makes its lower edge the line where its plane meets A's
+#: (``system.junction_line``), and its disc is centred half-way down that
+#: width. 50 rather than steeper because a three-sigma facet tilt on top of
+#: the dip must keep n_z above the frame gate below. Centres in km.
 FAULTS = (
-    dict(name="A", a=R.A_KM, dip=R.DIP_DEG, seed=R.SEED,
-         centre=(0.0, 0.0, R.DEPTH)),
-    dict(name="B", a=4.0, dip=30.0, seed=2,
-         centre=(2.0 * _S30 + 1.0 * (-_C30), 3.0,
-                 R.DEPTH + 2.0 * _C30 + 1.0 * _S30)),
-    dict(name="C", a=3.0, dip=50.0, seed=3, centre=(-8.0, 0.0, -13.5)),
+    dict(name="A", a=6.0, dip=30.0, seed=R.SEED, trace=(0.0, 0.0), v_c=4.0),
+    dict(name="B", a=4.0, dip=30.0, seed=2, trace=(6.0, 3.0), v_c=3.0),
+    dict(name="C", a=4.0, dip=50.0, seed=3, trace=(4.0, 0.0), attach="A"),
 )
 
-#: Minimum vertex-to-facet distance between DIFFERENT faults, in h. 2 h = 1 km
-#: = 20 eps: outside every kernel's near field and inside the interaction
-#: range, which is what makes a stress shadow readable as one rather than as
-#: two surfaces inside each other's blobs.
+#: Minimum vertex-to-facet distance between faults that do NOT touch, in h.
+#: 2 h = 0.5 km = 20 eps: outside every kernel's near field and inside the
+#: interaction range, which is what makes a stress shadow readable as one
+#: rather than as two surfaces inside each other's blobs. A and C touch along
+#: the junction by construction; ``system`` gates that C stays on A's
+#: hanging-wall side everywhere else and reports how close it comes.
 CLEARANCE_OVER_H = 2.0
 
 #: Floor on the vertex-order normal's n_z. The upward-normal convention is
@@ -107,9 +106,10 @@ CLEARANCE_OVER_H = 2.0
 #: kept three degrees off vertical everywhere.
 MIN_NZ = 0.05
 
-#: Cells per facet side. At k = 10 a cell side is h/10 = eps and the nearest
-#: cell centroid to a facet edge sits 0.2887 h / k = 0.29 eps from it.
-K_DEFAULT = 10
+#: Cells per facet side. 1 is the facet itself, sampled at its centroid, the
+#: collocation point. At k = 10 a cell side is h/10 = eps and the nearest cell
+#: centroid to a facet edge sits 0.2887 h / k = 0.29 eps from it.
+K_DEFAULT = 1
 
 #: Load factors tried, as multiples of the system's first failure. The one
 #: taken is the smallest at which A slips over most of its area and B, C are
@@ -136,11 +136,7 @@ _W: dict = {}
 
 
 # --------------------------------------------------------------- geometry --
-def vertex_normals(tris: np.ndarray) -> np.ndarray:
-    """Unit normals from the vertex order, NOT flipped upward: the sign the
-    eigenstress and cutde both read."""
-    n = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
-    return n / np.linalg.norm(n, axis=1, keepdims=True)
+from system import clearance, point_triangle_distance        # noqa: E402,F401
 
 
 def frame_gate(tris: np.ndarray, tol: float = 1e-12) -> float:
@@ -167,120 +163,23 @@ def frame_gate(tris: np.ndarray, tol: float = 1e-12) -> float:
     return float(err.max())
 
 
-def point_triangle_distance(p: np.ndarray, tri: np.ndarray) -> np.ndarray:
-    """``(m,)`` distance from ``p[i]`` to triangle ``tri[i]``, pairwise.
+def build(faults=FAULTS, h: float = H_KM, *, corr_km: float = CORR_KM,
+          rms_slope: float = SLOPE) -> tuple[list[dict], network.Network]:
+    """The faults of ``faults`` as one Network, through ``system.build_system``.
 
-    The closest point of a triangle is either the point's projection, when
-    that projection lands inside, or a point on one of the three edges; both
-    are closed forms, so this is exact rather than iterated.
-    """
-    a, b, c = tri[:, 0], tri[:, 1], tri[:, 2]
-    ab, ac, ap = b - a, c - a, p - a
-    n = np.cross(ab, ac)
-    d00, d01, d11 = (ab * ab).sum(1), (ab * ac).sum(1), (ac * ac).sum(1)
-    d20, d21 = (ap * ab).sum(1), (ap * ac).sum(1)
-    den = d00 * d11 - d01 * d01
-    v = (d11 * d20 - d01 * d21) / den
-    w = (d00 * d21 - d01 * d20) / den
-    inside = (v >= 0.0) & (w >= 0.0) & (v + w <= 1.0)
-    dplane = np.abs((ap * n).sum(1)) / np.linalg.norm(n, axis=1)
-
-    def seg(s0, s1):
-        d = s1 - s0
-        t = np.clip(((p - s0) * d).sum(1) / (d * d).sum(1), 0.0, 1.0)
-        return np.linalg.norm(p - (s0 + t[:, None] * d), axis=1)
-
-    dedge = np.minimum(np.minimum(seg(a, b), seg(b, c)), seg(c, a))
-    return np.where(inside, dplane, dedge)
-
-
-def clearance(tris: np.ndarray, fault_id: np.ndarray,
-              reach: float) -> tuple[float, tuple[int, int]]:
-    """Minimum vertex-to-facet distance between facets of DIFFERENT faults.
-
-    Vertex-to-facet, not centroid-to-centroid: a rough disc has relief of
-    half a kilometre and it is the relief that can touch. Pairs farther than
-    ``reach`` apart are not examined, so the returned minimum is exact when it
-    is below ``reach`` and only a bound otherwise, which is all a gate needs.
-    Edge-to-edge pairs are not covered; between discs placed two or more
-    kilometres apart they cannot bind.
-    """
-    from scipy.spatial import cKDTree
-    cen = tris.mean(axis=1)
-    circ = float(np.linalg.norm(tris - cen[:, None, :], axis=2).max())
-    verts = tris.reshape(-1, 3)
-    vf = np.repeat(fault_id, 3)
-    hits = cKDTree(cen).query_ball_point(verts, reach + circ)
-    vi = np.concatenate([np.full(len(h), i) for i, h in enumerate(hits)])
-    fi = np.concatenate([np.asarray(h, dtype=np.int64) for h in hits])
-    keep = fault_id[fi] != vf[vi]
-    vi, fi = vi[keep], fi[keep]
-    if vi.size == 0:
-        return float("inf"), (-1, -1)
-    d = point_triangle_distance(verts[vi], tris[fi])
-    best = int(np.argmin(d))
-    return float(d[best]), (int(vf[vi[best]]), int(fault_id[fi[best]]))
-
-
-def build(faults=FAULTS, h: float = H_KM
-          ) -> tuple[list[network.RoughDisc], network.Network]:
-    """The rough discs of ``faults``, translated into place, as one Network.
-
-    ``rough_disc`` builds one disc centred at the origin and rotated last, so
-    placement is a translation of ``r.tris`` (never ``r.verts``, the
-    pre-rotation table). Gated here rather than trusted: upward vertex-order
-    normals, cutde's frame equal to tdcs's, the clearance between faults, and
-    each disc still a manifold tiling after its roughness. ``eps`` is 0.1 h
+    Gated there: rim vertices on their curve, traces at z = 0, the junction
+    shared bit for bit with the host carrying it as edges, each disc a
+    manifold tiling, no vertex above the surface, n_z >= MIN_NZ, the
+    clearance between faults that do not touch, and the splay on its host's
+    hanging-wall side. Gated here: cutde's frame equals tdcs's on every facet,
+    which is what lets one code path solve both kernels. ``eps`` is 0.1 h
     throughout, the study's rule.
     """
-    eps = 0.1 * h
-    discs, tris_all, fid = [], [], []
-    for i, f in enumerate(faults):
-        s, c = np.sin(np.deg2rad(f["dip"])), np.cos(np.deg2rad(f["dip"]))
-        r = network.rough_disc(f["a"], h, rms_slope=SLOPE,
-                               corr_over_h=CORR_OVER_H, depth=f["centre"][2],
-                               normal=(s, 0.0, c), seed=f["seed"])
-        t = r.tris.copy()
-        t[:, :, 0] += f["centre"][0]
-        t[:, :, 1] += f["centre"][1]
-        discs.append(r)
-        tris_all.append(t)
-        fid.append(np.full(t.shape[0], i, np.int64))
-    tris = np.ascontiguousarray(np.concatenate(tris_all))
-    fault_id = np.concatenate(fid)
-
-    nz = vertex_normals(tris)[:, 2]
-    if nz.min() < MIN_NZ:
-        raise SystemExit(f"{int((nz < MIN_NZ).sum())} facets have n_z < "
-                         f"{MIN_NZ} (min {nz.min():.4f}): too close to "
-                         f"vertical for the upward-normal convention")
-    frame_gate(tris)
-    dmin, (fa, fb) = clearance(tris, fault_id, CLEARANCE_OVER_H * h)
-    if dmin < CLEARANCE_OVER_H * h:
-        raise SystemExit(f"faults {faults[fa]['name']} and {faults[fb]['name']}"
-                         f" come within {dmin:.3f} km, under the "
-                         f"{CLEARANCE_OVER_H * h:.2f} km clearance")
-    for i, t in enumerate(tris_all):
-        _, idx = network.weld_vertices(t, 1e-9 * h)
-        share = network.edge_sharing(idx)
-        if share.size != 3:
-            raise SystemExit(f"fault {faults[i]['name']} is not a manifold "
-                             f"tiling: edge sharing {share}")
-
-    net = network.Network(
-        tris=tris, fault_id=fault_id,
-        length=np.array([2.0 * f["a"] for f in faults]),
-        width=np.array([2.0 * f["a"] for f in faults]),
-        azimuth=np.zeros(len(faults)),
-        dip=np.array([f["dip"] for f in faults]),
-        center=np.array([t.reshape(-1, 3).mean(0) for t in tris_all]),
-        h=h, eps=eps,
-        meta=dict(kind="system", slope=SLOPE, corr_over_h=CORR_OVER_H,
-                  faults=[dict(f, n=int(t.shape[0]), tilt_rms_deg=r.tilt_rms_deg,
-                               height_rms_km=r.height_rms)
-                          for f, t, r in zip(faults, tris_all, discs)],
-                  clearance_km=dmin, min_nz=float(nz.min())))
-    return discs, net
+    records, net = Sy.build_system(faults, h, rms_slope=rms_slope, corr=corr_km,
+                                   eps=0.1 * h, min_nz=MIN_NZ,
+                                   clearance_over_h=CLEARANCE_OVER_H)
+    frame_gate(net.tris)
+    return records, net
 
 
 # ---------------------------------------------------------------- solve --
@@ -356,8 +255,15 @@ def cmd_solve(a) -> int:
     print(f"  system: " + ", ".join(
         f"{f['name']} a={f['a']} dip={f['dip']} n={f['n']} "
         f"tilt {f['tilt_rms_deg']:.1f} deg" for f in net.meta["faults"]))
-    print(f"  {n} elements, eps {EPS} km, clearance {net.meta['clearance_km']:.3f}"
-          f" km, min n_z {net.meta['min_nz']:.3f}, cutde frame = tdcs frame")
+    cl = net.meta["clearance_km"]
+    print(f"  {n} elements, h {H_KM} km, eps {EPS} km, clearance between "
+          f"separate faults {cl:.3f} km" if cl is not None else
+          f"  {n} elements, h {H_KM} km, eps {EPS} km, separate faults more "
+          f"than {net.meta['clearance_reach_km']:.2f} km apart")
+    for name, c in net.meta["contact"].items():
+        print(f"  {name} is rooted on {c['host']}: off the junction it comes "
+              f"within {c['min_distance_km']:.3f} km of it")
+    print(f"  min n_z {net.meta['min_nz']:.3f}, cutde frame = tdcs frame")
 
     fric = Fr.build_friction(net, regime=REGIME, drop_ratio=DROP_RATIO,
                              mean_stress_ratio=MEAN_STRESS)
@@ -796,11 +702,12 @@ def cmd_payload(a) -> int:
         np.uint8)
     put("onfault.fault_id", fid, np.uint8)
     put("onfault.area", f["facet_area"], np.float32)   # per facet; a cell is 1/k^2 of it
-    slipping = {kern: z[f"active_{kern}"][facet] for kern in KERNELS}
+    # At k = 1 the Coulomb excess is identically zero on every slipping
+    # element (it is the solver's own margin), so its window is set by the
+    # locked deficit: the p99 over ALL facets, like the other metrics.
     win = {}
     for m in METRICS:
-        vm = f[f"mollified_{m}"]
-        win[m] = window_rule(vm, area, slipping["mollified"] if m == "S" else None)
+        win[m] = window_rule(f[f"mollified_{m}"], area)
     st: dict = {}
     for kern in KERNELS:
         put(f"onfault.{kern}.slip", np.linalg.norm(z[f"slip_{kern}"], axis=1),
@@ -825,11 +732,15 @@ def cmd_payload(a) -> int:
     table = json.loads(str(z["table"]))
     meta = json.loads(str(z["meta"]))
     faults = []
-    for i, fdef in enumerate(FAULTS):
+    for i, fm in enumerate(meta["faults"]):
         m = fid == i
         faults.append(dict(
-            name=fdef["name"], a_km=fdef["a"], dip_deg=fdef["dip"],
-            centre_km=list(fdef["centre"]), seed=fdef["seed"], n=int(m.sum()),
+            name=fm["name"], a_km=fm["a"], dip_deg=fm["dip"], seed=fm["seed"],
+            trace_km=fm["trace"], trace_length_km=fm["trace_length_km"],
+            v_c_km=fm["v_c"], attach=fm["attach"], junction=fm["junction"],
+            n=int(m.sum()), median_edge_km=fm["median_edge_km"],
+            tilt_rms_deg=fm["tilt_rms_deg"], height_rms_km=fm["height_rms_km"],
+            slope_rms=fm["slope_rms"],
             remote_shear_MPa=float(lam * z["tau_load_mag"][m].mean() * 1e3),
             remote_sigma_n_MPa=float((z["sigma_eff_0"][m]
                                       + lam * z["sigma_n_load"][m]).mean() * 1e3),
@@ -845,8 +756,15 @@ def cmd_payload(a) -> int:
                       sigma_eff_GPa=float(z["sigma_eff_0"].mean()),
                       regime=REGIME, mean_stress_ratio=MEAN_STRESS,
                       coupled=coupled),
-        system=dict(clearance_km=meta["clearance_km"], min_nz=meta["min_nz"],
-                    slope=SLOPE, corr_over_h=CORR_OVER_H),
+        system=dict(clearance_km=(meta["clearance_km"]
+                                  if meta["clearance_km"] is not None
+                                  and np.isfinite(meta["clearance_km"]) else None),
+                    clearance_reach_km=meta.get("clearance_reach_km",
+                                                CLEARANCE_OVER_H * H_KM),
+                    contact=meta["contact"],
+                    min_nz=meta["min_nz"], slope=SLOPE, corr_km=CORR_KM,
+                    taper_over_h=meta["taper_over_h"],
+                    junction_taper_over_h=meta["junction_taper_over_h"]),
         faults=faults,
         kernels={kern: dict(min_eig_sym_negP=float(z[f"mineig_{kern}"]),
                             B=float(z[f"B_{kern}"]), sweeps=int(z[f"sweeps_{kern}"]),
@@ -854,8 +772,8 @@ def cmd_payload(a) -> int:
                             active_fraction=float(z[f"active_{kern}"].mean()))
                  for kern in KERNELS},
         window=dict(rule="symmetric; half-width = area-weighted p99 of the "
-                         "mollified |metric|, over slipping facets for S, "
-                         "rounded to 2 significant figures of MPa",
+                         "mollified |metric| over all facets, rounded to 2 "
+                         "significant figures of MPa",
                     **{m: win[m] for m in METRICS}),
         stats=st, arrays=arrays,
         metrics=dict(S="tau_s - mu sigma_n', total, GPa",

@@ -4,28 +4,29 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 ---
 <Base
   title="mhs — On the fault"
-  description="The Coulomb condition a frictional solve enforced at element centroids, read densely across a system of three rough faults, with a mollified kernel and with a classical triangular dislocation element."
+  description="On-fault Coulomb excess, stress changes and slip on three rough faults that break the free surface, one of them a splay rooted on another, one value per element, with a mollified kernel and with a classical triangular dislocation element."
   current="onfault"
 >
   <Fragment slot="sidebar">
-    <h1>On the fault<span class="sub">the condition, read everywhere</span></h1>
+    <h1>On the fault<span class="sub">one value per element</span></h1>
     <p>
-      A frictional solve enforces its condition at element centroids and
-      nowhere else. This page asks whether the condition holds <i>between</i>
-      them: the Coulomb excess <i>&tau;<sub>s</sub></i>&nbsp;&minus;&nbsp;<i>&mu;&sigma;<sub>n</sub>&prime;</i>,
-      which is exactly zero on a slipping centroid by construction, sampled on
-      every cell of every facet of a system of three rough faults.
+      Three rough faults that break the surface, two of them joined. A is the
+      main 30&deg; thrust; B a parallel ramp 3&nbsp;km into its hanging wall;
+      C a 50&deg; splay rooted on A along a line the two meshes share. Each
+      element is painted with one value: the one read at its centroid, where
+      the frictional solve enforced its condition.
     </p>
     <p>
-      Two kernels, one solve, one window. The mollified kernel is bounded on the
-      whole surface. The classical element is finite at its own centroid &mdash;
-      and that is the only place it is.
+      Two kernels, one solve, one window: the mollified kernel of this package
+      and the classical triangular dislocation element. Both are finite at a
+      centroid, and away from the surface they give the same solve to a per
+      cent. Where they part is the row of elements that touch the surface
+      &mdash; the last section below.
     </p>
     <div class="note">
-      Colour is <b>data</b>: one value per cell, nothing interpolated, no light.
-      The <b>mask</b> blanks every cell closer than <i>d</i>&nbsp;eps to a facet
-      edge, which is where a piecewise-constant slip leaves its stripes on
-      <i>both</i> kernels, so the facet cores can be read on their own.
+      Colour is <b>data</b>: one value per element, nothing interpolated, no
+      light. The grey sheet is the free surface; the magenta loops are the
+      rims, each trace and the junction chord included.
     </div>
     <p class="contact">
       The legend states the saturated area at the current window for both
@@ -38,13 +39,12 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
       <label data-ctl="kernel"><span>kernel</span></label>
       <label data-ctl="metric"><span>metric</span></label>
       <div class="rng" data-ctl="window"><span class="lbl">window</span></div>
-      <div class="rng" data-ctl="mask"><span class="lbl">mask</span></div>
     </div>
-    <div data-canvas class="canvas" aria-label="Three rough faults coloured by on-fault Coulomb excess, one value per cell, for the mollified and the classical kernel"></div>
+    <div data-canvas class="canvas" aria-label="Three rough faults breaking the free surface, one a splay rooted on another, coloured by on-fault Coulomb excess, one value per element, for the mollified and the classical kernel"></div>
     <p data-legend class="legend"></p>
     <div class="panel">
       <label data-ctl="mark"><span>mark saturated</span></label>
-      <label data-ctl="wire"><span>facet edges</span></label>
+      <label data-ctl="wire"><span>element edges</span></label>
       <span class="lbl">view</span>
       <span class="btns" data-ctl="view"></span>
       <span class="btns" data-ctl="shot"></span>
@@ -53,78 +53,103 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     <p data-status class="status">loading&hellip;</p>
   </div>
 
-  <h2>What is being read, and why it is the sharpest test</h2>
-  <p>
-    Every other page on this site evaluates stress <i>off</i> the fault. The
-    result that motivates a mollified kernel in the first place is <i>on</i> it.
-    A constant-slip triangular element is finite at its own centroid for a
-    geometric reason: the centroid sits a fixed 0.29&nbsp;<i>h</i> from the
-    element&rsquo;s own edges, and so a fixed distance from the 1/<i>d</i>
-    singularity of its bounding dislocation loop. That is why a classical
-    matrix collocated at centroids is a perfectly usable one, and why the two
-    kernels&rsquo; solutions here agree at the centroids to about a per cent.
-    But finite at one point per element is not <i>well behaved</i>: everywhere
-    else on the surface the classical field is the field of the residual
-    dislocations on the shared edges, and it diverges there. The mollified
-    field is bounded on the whole surface, with <i>eps</i> a resolution floor
-    that does not depend on <i>h</i> &mdash; so the condition the solve
-    enforced can be <b>checked</b> at every point of the fault. No readout in
-    either repository had done that before this page.
-  </p>
-  <p>
-    The condition is Coulomb. At the load &lambda; the solve finds the slip
-    &delta; on every element such that each is either locked and below
-    strength, or slipping and exactly at it:
-    <i>w</i>&nbsp;=&nbsp;<i>&mu;</i>(<i>&sigma;</i><sub>eff,0</sub>&nbsp;+&nbsp;&lambda;<i>&sigma;<sub>n</sub></i><sup>load</sup>&nbsp;&minus;&nbsp;<i>N</i><sup>T</sup>&delta;)&nbsp;&minus;&nbsp;(&lambda;|<i>&tau;</i><sup>load</sup>|&nbsp;+&nbsp;<i>P</i><sup>T</sup>&delta;)&nbsp;&ge;&nbsp;0,
-    with &delta;&nbsp;&middot;&nbsp;<i>w</i>&nbsp;=&nbsp;0. The slip-induced
-    normal stress <i>N</i><sup>T</sup>&delta; is <b>coupled in</b>, so the
-    strength an element must reach depends on how its neighbours have clamped
-    or unclamped it; that keeps the problem a linear complementarity problem,
-    and its uniqueness needs sym(&minus;<i>P</i><sub>eff</sub>) positive
-    definite, which it is here for both kernels (smallest eigenvalue +5.16
-    mollified, +5.21 classical). The quantity on the canvas is
-    <i>S</i>&nbsp;=&nbsp;<i>&tau;<sub>s</sub></i>&nbsp;&minus;&nbsp;<i>&mu;&sigma;<sub>n</sub>&prime;</i>,
-    assembled from the remote load and the slip-induced traction at each cell,
-    with the same signs and the same friction as the solver &mdash; so that at
-    a centroid it is <b>exactly &minus;<i>w</i></b>, zero to the solver&rsquo;s
-    10<sup>&minus;9</sup>&nbsp;GPa on every slipping element, negative on every
-    locked one. Between the centroids it is the solution&rsquo;s own residual.
-  </p>
-
   <h2>The system</h2>
   <p>
-    Three rough discs, each with the published roughness (rms facet slope 0.25,
-    correlation length 8&nbsp;<i>h</i>, facet tilt rms 13.9&deg;), at
-    <i>h</i>&nbsp;=&nbsp;0.5&nbsp;km and <i>eps</i>&nbsp;=&nbsp;0.05&nbsp;km,
-    under the published thrust load with friction 0.6 and an effective normal
-    stress of 150&nbsp;MPa:
+    Three rough discs, each cut by the free surface, at
+    <i>h</i>&nbsp;=&nbsp;0.25&nbsp;km and
+    <i>eps</i>&nbsp;=&nbsp;0.1&nbsp;<i>h</i>&nbsp;=&nbsp;0.025&nbsp;km, under
+    the published thrust load with friction 0.6 and an effective normal stress
+    of 150&nbsp;MPa:
   </p>
   <div class="wide">
     <table>
       <thead>
-        <tr><th>fault</th><th>radius</th><th>dip</th><th>elements</th><th>role</th></tr>
+        <tr><th>fault</th><th>radius</th><th>dip</th><th>trace</th><th>elements</th><th>role</th></tr>
       </thead>
       <tbody>
-        <tr><td><b>A</b></td><td>6 km</td><td>30&deg;</td><td>1044</td>
-            <td>the published crack of the roughness and isosurface pages, unchanged</td></tr>
-        <tr><td><b>B</b></td><td>4 km</td><td>30&deg;</td><td>450</td>
-            <td>a parallel ramp 2 km into A&rsquo;s hanging wall, where A&rsquo;s slip shadows it</td></tr>
-        <tr><td><b>C</b></td><td>3 km</td><td>50&deg;</td><td>258</td>
-            <td>a steeper splay above A&rsquo;s up-dip edge, misoriented for this load</td></tr>
+        <tr><td><b>A</b></td><td>6 km</td><td>30&deg;</td><td>8.9 km</td><td>3770</td>
+            <td>the main thrust</td></tr>
+        <tr><td><b>B</b></td><td>4 km</td><td>30&deg;</td><td>5.3 km</td><td>1730</td>
+            <td>a parallel ramp 3 km into A&rsquo;s hanging wall, where A&rsquo;s slip shadows it</td></tr>
+        <tr><td><b>C</b></td><td>4 km</td><td>50&deg;</td><td>5.5 km</td><td>1558</td>
+            <td>a splay rooted on A at 4.5 km depth, misoriented for this load</td></tr>
       </tbody>
     </table>
   </div>
   <p>
-    1752 elements; the closest any vertex of one fault comes to a facet of
-    another is 1.04&nbsp;km, 20&nbsp;<i>eps</i>, so no fault sits inside
-    another&rsquo;s mollification band and every interaction is elastic. The
-    load is set by a rule, not by eye: the smallest multiple of the
-    system&rsquo;s first failure at which A slips over most of its area and B
-    and C are each partly locked and partly slipping. That is
-    &lambda;&nbsp;=&nbsp;1.20&nbsp;&lambda;<sub>0</sub>&nbsp;=&nbsp;141&nbsp;MPa
-    of tectonic shear; at 1.05 the splay does not slip at all, and at 1.35 B is
-    fully active. Solving each fault <i>alone</i> on the same matrix says what
-    the others do to it:
+    7058 elements. Every fault strikes along <i>y</i> and dips toward
+    +<i>x</i>; its trace is where the plane meets <i>z</i>&nbsp;=&nbsp;0, and
+    the disc&rsquo;s centre sits 4, 3 and 2.9&nbsp;km down-dip of it, so each
+    circle is cut by the surface and the trace is a straight chord whose
+    vertices lie exactly on <i>z</i>&nbsp;=&nbsp;0. C is cut twice: by the
+    surface, and by the line where its plane meets A&rsquo;s, 7.8&nbsp;km from
+    A&rsquo;s trace, 4.5&nbsp;km deep, 5.5&nbsp;km long, at 20&deg; to A.
+    That chord is C&rsquo;s lower boundary and an interior line of A&rsquo;s
+    mesh at once. Its 23 vertices are computed once and written into both
+    meshes, so A&rsquo;s edges along it are C&rsquo;s boundary edges and the
+    two tilings share them bit for bit; <i>conformal</i> here is a statement
+    about the floats, and the selfcheck pins it.
+  </p>
+  <p>
+    The outline of each fault is sampled on its circle and its chords at a
+    spacing of <i>h</i>, and the interior is a constrained Delaunay
+    triangulation (Shewchuk&rsquo;s Triangle) with no point added on any
+    segment, so every rim vertex lies on its curve and the median edge is
+    1.00&nbsp;<i>h</i> on all three faults. The roughness is the published
+    field &mdash; rms facet slope 0.25, correlation length 4&nbsp;km &mdash;
+    displaced along each fault&rsquo;s normal and tapered to zero within
+    1.5&nbsp;km of a rim or a trace and within 3&nbsp;km of the junction, so a
+    rim vertex stays on its curve, a trace vertex on the surface and a junction
+    vertex shared. A and B keep the published tilt (rms 14.0&deg; and
+    14.9&deg;); C, 5.8&nbsp;km wide between its two chords, is tapered over
+    most of its width and tilts 8.9&deg;. Off the junction, C comes within
+    53&nbsp;m of A, two <i>eps</i>; B&rsquo;s plane is 3&nbsp;km from
+    A&rsquo;s; no other pair comes within 0.5&nbsp;km.
+  </p>
+
+  <h2>The solve</h2>
+  <p>
+    The condition is Coulomb. At the load &lambda; the solve finds the slip
+    &delta; on every element such that each is either locked and below
+    strength, or slipping and exactly at it:
+    <i>w</i>&nbsp;=&nbsp;<i>&mu;</i>(<i>&sigma;</i><sub>eff,0</sub>&nbsp;+&nbsp;&lambda;<i>&sigma;<sub>n</sub></i><sup>load</sup>)&nbsp;&minus;&nbsp;(&lambda;|<i>&tau;</i><sup>load</sup>|&nbsp;+&nbsp;<i>P</i><sup>T</sup>&delta;)&nbsp;&ge;&nbsp;0,
+    with &delta;&nbsp;&middot;&nbsp;<i>w</i>&nbsp;=&nbsp;0, a linear
+    complementarity problem. The earlier version of this page coupled the
+    slip-induced normal stress into the strength. With the splay rooted on A
+    that coupling costs the operator its positive definiteness &mdash; the
+    smallest eigenvalue of sym(&minus;<i>P</i><sub>eff</sub>) is &minus;1.4
+    for the mollified kernel and &minus;2.7 for the classical one &mdash; so
+    the solve here is the uncoupled problem for both kernels: each
+    element&rsquo;s strength is set by the remote load alone, and the
+    normal-stress change is read out but not fed back.
+  </p>
+  <p>
+    The load is set by a rule, not by eye: the smallest multiple of the
+    system&rsquo;s first failure at which A slips over at least 70&nbsp;% of
+    its area and B and C are each partly locked and partly slipping. That is
+    &lambda;&nbsp;=&nbsp;1.10&nbsp;&lambda;<sub>0</sub>&nbsp;=&nbsp;129&nbsp;MPa
+    of tectonic shear:
+  </p>
+  <div class="wide">
+    <table>
+      <thead>
+        <tr><th>&lambda; / &lambda;<sub>0</sub></th><th>A active</th><th>B active</th><th>C active</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1.05</td><td>0.50</td><td>0.48</td><td>0.06</td></tr>
+        <tr><td><b>1.10</b></td><td><b>0.81</b></td><td><b>0.82</b></td><td><b>0.11</b></td></tr>
+        <tr><td>1.20</td><td>0.97</td><td>0.93</td><td>0.17</td></tr>
+        <tr><td>1.35</td><td>1.00</td><td>0.98</td><td>0.23</td></tr>
+        <tr><td>1.50</td><td>1.00</td><td>1.00</td><td>0.28</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    At that load the remote shear on A is 105&nbsp;MPa against a strength of
+    106; on C it is 123 against 155, which is what <i>misoriented</i> means
+    for a 50&deg; plane under a load that is optimal at 30&deg;. Solving each
+    fault <i>alone</i> on the same matrix says what the others do to it
+    (mollified kernel):
   </p>
   <div class="wide">
     <table>
@@ -133,184 +158,130 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
             <th>moment</th><th>Coulomb load from the others</th><th>max slip</th></tr>
       </thead>
       <tbody>
-        <tr><td><b>A</b></td><td>0.96</td><td>0.95</td><td>&times;0.97</td>
-            <td>&minus;0.23 MPa</td><td>2.62 m</td></tr>
-        <tr><td><b>B</b></td><td>0.92</td><td>0.83</td><td><b>&times;0.79</b></td>
-            <td><b>&minus;2.13 MPa</b></td><td>1.22 m</td></tr>
-        <tr><td><b>C</b></td><td>0.07</td><td>0.08</td><td>&times;1.12</td>
-            <td><b>+0.71 MPa</b></td><td>0.19 m</td></tr>
+        <tr><td><b>A</b></td><td>0.82</td><td>0.81</td><td>&times;0.98</td>
+            <td>&minus;0.09 MPa</td><td>0.78 m</td></tr>
+        <tr><td><b>B</b></td><td>0.83</td><td>0.82</td><td>&times;0.97</td>
+            <td>&minus;0.11 MPa</td><td>0.92 m</td></tr>
+        <tr><td><b>C</b></td><td>0.11</td><td>0.11</td><td><b>&times;0.89</b></td>
+            <td><b>&minus;1.18 MPa</b></td><td>0.21 m</td></tr>
       </tbody>
     </table>
   </div>
   <p>
-    B loses a fifth of its moment to A&rsquo;s shadow. C is loaded by the
-    others and slips a little more than it would alone &mdash; a misoriented
-    splay that moves only where the system pushes it, which is why it is here.
-    The classical kernel gives the same table to the second decimal: at the
-    centroids, where it is finite, it is a fine kernel. Switch the metric to
-    the normal-stress change to see why the coupling is in the solve: the
-    slip on A clamps and unclamps its own rough surface by
-    <b>&minus;22 to +23&nbsp;MPa</b>, three times the Coulomb excess it is
-    relieving, and B by &minus;16 to +18.
+    B, 3&nbsp;km away, loses 3&nbsp;% of its moment to A&rsquo;s shadow; two
+    kilometres closer, in the earlier version of this page, it lost a fifth. C
+    loses 11&nbsp;%: A&rsquo;s slip unloads the splay above it by 1.2&nbsp;MPa,
+    which on a fault 32&nbsp;MPa below strength keeps it locked everywhere but
+    its deep end. The classical kernel gives the same active fractions and
+    moment ratios to the second decimal. Its maximum slip on B is 1.12&nbsp;m
+    against 0.92, and that difference is the subject of the last section.
   </p>
 
   <h2>What the maps show</h2>
   <p>
-    The page opens on the Coulomb excess at a window of &plusmn;24&nbsp;MPa, the
-    99th percentile of the mollified map over the slipping facets. For scale:
-    the remote load resolves 116&nbsp;MPa of shear onto fault A against a
-    strength of 108, so the slip is relieving an excess of about
-    <b>7&nbsp;MPa</b> &mdash; and in doing so it changes the shear on the
-    rough surface by tens of MPa in both senses, which is why the residual
-    between the centroids is not small compared with the excess. On the
-    slipping facets, 79&nbsp;% of the area, that residual is:
-  </p>
-  <div class="wide">
-    <table>
-      <thead>
-        <tr><th>from the nearest facet edge</th><th>share of slipping area</th>
-            <th>mollified |<i>S</i>|, median</th><th>classical |<i>S</i>|, median</th>
-            <th>|classical &minus; mollified|, median</th></tr>
-      </thead>
-      <tbody>
-        <tr><td>&lt; 0.5 <i>eps</i></td><td>27 %</td><td>5.0 MPa</td><td><b>33.7 MPa</b></td><td>29.7 MPa</td></tr>
-        <tr><td>0.5&ndash;1 <i>eps</i></td><td>24 %</td><td>6.2</td><td>16.7</td><td>10.7</td></tr>
-        <tr><td>1&ndash;1.5 <i>eps</i></td><td>32 %</td><td>4.8</td><td>6.6</td><td>1.8</td></tr>
-        <tr><td>1.5&ndash;2 <i>eps</i></td><td>1 %</td><td>4.8</td><td>5.9</td><td>1.1</td></tr>
-        <tr><td>&ge; 2 <i>eps</i>, the cores</td><td>16 %</td><td><b>1.9</b></td><td><b>2.3</b></td><td><b>0.35</b></td></tr>
-        <tr><td>all</td><td>100 %</td><td>4.4 &middot; p99 24 &middot; max 52</td>
-            <td>9.9 &middot; p99 113 &middot; max 350</td><td>&mdash;</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>
-    Read the two columns against distance. The mollified one is <b>flat</b>:
-    five or six MPa within an <i>eps</i> of an edge, two in the cores, nothing
-    larger than 52 anywhere &mdash; bounded, as the kernel is. The classical
-    one rises <b>fifteenfold</b> from the cores to the nearest cells, which is
-    what 1/<i>d</i> sampled at 0.29&nbsp;<i>eps</i> looks like, and would rise
-    further on a finer lattice. In the cores, where neither kernel is near an
-    edge, the two agree to 0.35&nbsp;MPa on a 2&nbsp;MPa residual: the same
-    staircase, integrated by two kernels that agree where the geometry lets
-    them. At the opening window the classical map saturates <b>26&nbsp;%</b> of
-    the slipping area and the mollified map <b>0.9&nbsp;%</b>; move the mask
-    to one <i>eps</i> and the classical figure falls to 1.8&nbsp;%, because
-    every cell it was saturating was within an <i>eps</i> of an edge. The
-    locked facets saturate blue under both kernels &mdash; a median of 21&nbsp;MPa
-    below strength, which is the correct reading of them &mdash; and they are
-    the rest of the 10&nbsp;% and 30&nbsp;% the legend reports.
+    The page opens on the Coulomb excess
+    <i>S</i>&nbsp;=&nbsp;<i>&tau;<sub>s</sub></i>&nbsp;&minus;&nbsp;<i>&mu;&sigma;<sub>n</sub>&prime;</i>
+    at a window of &plusmn;79&nbsp;MPa, the 99th percentile of |<i>S</i>|
+    over all elements. On a slipping element <i>S</i> is exactly zero &mdash;
+    it is &minus;<i>w</i>, the solver&rsquo;s own margin, zero to
+    10<sup>&minus;9</sup>&nbsp;GPa &mdash; and those are 66&nbsp;% of the area
+    under both kernels, painted white. On a locked element it is the deficit
+    below strength, painted blue: a median of 25&nbsp;MPa, a tenth of the
+    locked elements more than 56, and 92 at the most, on the steepest facets
+    of C, which under this load are the farthest from what it would take to
+    move them.
   </p>
   <p>
-    One more thing the maps show that a table of centroids cannot: a facet
-    the solve holds <i>locked</i> can read above strength between its
-    centroids &mdash; by up to 11&nbsp;MPa under the mollified kernel and
-    59&nbsp;MPa under the classical one. That is the staircase again, and it
-    is where a finer density or a smaller element would go to work.
+    Switch the metric to the normal-stress change to see what the coupling
+    would have fed back: slip on A clamps and unclamps its own rough surface by
+    &minus;9 to +11&nbsp;MPa under the classical kernel, B by &minus;10 to +5,
+    C by &minus;6 to +4; the window is &plusmn;7.7&nbsp;MPa. The shear change
+    along the slip direction runs &minus;9 to +16&nbsp;MPa on A and &minus;9
+    to +13 on B at a window of &plusmn;9. On a slipping element that shear is
+    pinned by the friction law, <i>&tau;<sub>s</sub></i>&nbsp;=&nbsp;<i>&mu;&sigma;<sub>n</sub>&prime;</i>,
+    so there the map is the remote deficit made up by slip; on a locked one it
+    is what the neighbours transferred. The slip itself peaks at 0.78&nbsp;m
+    on A, 0.92 on B and 0.21 on C under the mollified kernel.
   </p>
 
-  <h2>Both kernels are staircases; only one is bounded</h2>
+  <h2>Where the two kernels differ</h2>
   <p>
-    A piecewise-constant slip is a staircase, and two neighbouring facets that
-    slip by different amounts leave a residual dislocation on the edge they
-    share &mdash; the vector difference of the two slips, which on a rough mesh
-    includes the rotation of the slip direction across the kink. So <b>both</b>
-    kernels carry a stripe at every interior edge with a slip mismatch, and the
-    page does not pretend otherwise. What differs is what the stripe is. For
-    the mollified kernel it is a bounded bump of order
-    <i>&mu;</i>&Delta;<i>b</i>/<i>eps</i>: measured at the worst edge of the
-    published crack, 6&nbsp;MPa, against the classical 3.95&nbsp;GPa at 5&nbsp;cm
-    from the same edge. Measured on this system, cell by cell: within an
-    <i>eps</i> of an edge the mollified residual is two and a half times its
-    value in the facet cores and never exceeds 52&nbsp;MPa; the classical one is
-    fifteen times its core value at the nearest cells and reaches 350.
+    On a slipping element the shear change is fixed by the friction law and
+    the solve pins the slip to make it so, so on 66&nbsp;% of the area the two
+    kernels&rsquo; shear maps are identical by construction. What is free to
+    differ is the active set, the slip, the shear on locked elements and the
+    normal-stress change everywhere. The active sets differ on 34 of the 7058
+    elements. On locked elements the shear change differs by a median of
+    0.08&nbsp;MPa and the normal-stress change by 0.07, with nothing above
+    4&nbsp;MPa; below the first three rows of elements the normal-stress
+    change agrees to 0.1&nbsp;MPa in the median on every fault.
   </p>
   <p>
-    The <b>mask</b> is how the reader separates the two statements. Blank every
-    cell within one <i>eps</i> of a facet edge and what remains is the facet
-    cores &mdash; where a bounded kernel and an unbounded one must agree if
-    they are integrating the same slip. They do, to 0.35&nbsp;MPa, and at a
-    mask of 1.5&nbsp;<i>eps</i> the two maps are the same map. A P1 density
-    would shrink the mollified staircase; the classical one is unbounded at
-    any order.
+    The row of elements that touch the surface is different. On A and B, the
+    two 30&deg; faults, the mollified normal-stress change on that row reads
+    up to +48&nbsp;MPa where the classical kernel reads &minus;5, a median
+    difference of 6 and 8&nbsp;MPa on the two rows; on C, whose trace row is
+    locked, the two agree to 0.2&nbsp;MPa. The same row slips about 40&nbsp;%
+    less under the mollified kernel and the two rows below it a quarter to a
+    third less, and on B, 4&nbsp;km across and 3.5&nbsp;km deep, that stiffer
+    top carries through to a tenth less slip at depth and a classical moment
+    17&nbsp;% larger than the mollified one, which is the 1.12&nbsp;m against
+    0.92.
   </p>
-
-  <h2>Calibration on the one crack with a closed form</h2>
   <p>
-    A frictionless penny crack under a uniform stress drop has an exact
-    answer on the fault: the induced shear along the slip direction is
-    &minus;&Delta;<i>&tau;</i> everywhere inside. So the selfcheck solves
-    one &mdash; radius 1&nbsp;km, <i>h</i>&nbsp;=&nbsp;<i>a</i>/8,
-    <i>eps</i>&nbsp;=&nbsp;0.1&nbsp;<i>h</i>, dipping 30&deg; so that neither
-    kernel sits in its degenerate frame &mdash; with each kernel, reads both
-    densely, and bins the departure from that answer by distance to the
-    nearest facet edge and to the rim. Medians of
-    |residual|/&Delta;<i>&tau;</i>:
-  </p>
-  <div class="wide">
-    <table>
-      <thead>
-        <tr><th>kernel</th><th>from the nearest edge</th>
-            <th>&lt; 2 <i>eps</i> from the rim</th><th>2&ndash;10 <i>eps</i></th>
-            <th>&ge; 10 <i>eps</i></th></tr>
-      </thead>
-      <tbody>
-        <tr><td rowspan="3">mollified</td><td>&lt; 1 <i>eps</i></td>
-            <td>1.70</td><td>1.06</td><td>0.35</td></tr>
-        <tr><td>1&ndash;2 <i>eps</i></td><td>1.66</td><td>0.98</td><td>0.30</td></tr>
-        <tr><td>&ge; 2 <i>eps</i> (the cores)</td><td>0.57</td><td>0.28</td><td><b>0.084</b></td></tr>
-        <tr><td rowspan="3">classical</td><td>&lt; 1 <i>eps</i></td>
-            <td>7.48</td><td>3.15</td><td>0.96</td></tr>
-        <tr><td>1&ndash;2 <i>eps</i></td><td>2.96</td><td>1.48</td><td>0.44</td></tr>
-        <tr><td>&ge; 2 <i>eps</i> (the cores)</td><td>0.67</td><td>0.34</td><td><b>0.097</b></td></tr>
-      </tbody>
-    </table>
-  </div>
-  <p>
-    Three things are in that table. In the facet cores, away from the rim,
-    <b>both kernels see the same staircase</b> &mdash; 8.4&nbsp;% and
-    9.7&nbsp;% of the drop &mdash; and that number is the discretisation&rsquo;s,
-    not either kernel&rsquo;s: impose a <i>uniform</i> slip, which leaves no
-    residual on any interior edge, and the two kernels agree to <b>1.2&nbsp;%</b>
-    at every distance from an edge, the nearest cells included. Within an
-    <i>eps</i> of an edge the mollified residual is 35&nbsp;% of the drop and
-    bounded; the classical one is 96&nbsp;% there and still rising as
-    1/<i>d</i>, the nearest cell on this mesh being 0.58&nbsp;<i>eps</i> out.
-    And at the rim, which <i>is</i> a dislocation line and a physical one, the
-    mollified residual is 1.7 times the drop against 7.5 for the classical
-    kernel. Each of those is a gate in the selfcheck, pinned at 1.5 times the
-    value measured.
+    The cause is where the smeared slip goes. A mollified element spreads its
+    slip over <i>eps</i> on either side of its plane, and for an element that
+    touches the surface that band straddles <i>z</i>&nbsp;=&nbsp;0: above the
+    surface the image construction continues analytically, but there is no
+    longer a free surface to enforce. The trace-row centroids sit
+    2.5&nbsp;<i>eps</i> below the surface on B, and the error is
+    <i>eps</i>&rsquo;s. The selfcheck solves B alone with the mollified
+    matrix at <i>eps</i>/<i>h</i>&nbsp;=&nbsp;0.1, 0.05 and 0.025 against the
+    classical one: the classical-to-mollified slip ratio on the trace row
+    falls <b>1.60, 1.20, 1.05</b>, and the whole fault&rsquo;s moment ratio
+    1.17, 1.07, 1.02. Reading one fixed slip on that row with both kernels,
+    the median normal-stress difference falls 7.3, 2.0, 0.5, 0.1&nbsp;MPa
+    down to <i>eps</i>/<i>h</i>&nbsp;=&nbsp;0.0125, while three rows down it
+    is 0.36&nbsp;MPa at the production <i>eps</i> already. First order in
+    <i>eps</i>, as a smeared edge should be. So what the maps show for the
+    mollified kernel at <i>eps</i>&nbsp;=&nbsp;0.1&nbsp;<i>h</i> is the kernel
+    at its resolution floor: <i>eps</i> is the length it cannot see below,
+    and at a surface-breaking trace the free surface is inside that length.
+    Solved at <i>eps</i>&nbsp;=&nbsp;0.025&nbsp;<i>h</i>, B&rsquo;s trace row
+    agrees with the classical one to 5&nbsp;%.
   </p>
 
-  <h2>Signs, windows, and what is not shown</h2>
+  <h2>Signs and windows</h2>
   <p>
     Traction is <i>&sigma;</i>&middot;<i>n</i> with each facet&rsquo;s upward
     normal, so its normal component is tension positive; the normal stress in
     the Coulomb strength is compression positive, which is the sign the
     friction module uses, and the two are pinned against each other rather
-    than reasoned about. The window is symmetric, &plusmn;<i>W</i>, with
+    than reasoned about. Every window is symmetric, &plusmn;<i>W</i>, with
     <i>W</i> the area-weighted 99th percentile of the <i>mollified</i> map
-    &mdash; over slipping facets for the Coulomb excess, so that locked facets
-    saturate blue, which is the correct reading of them &mdash; and it is the
-    same window for both kernels. The slider moves it; the legend counts what
-    saturates.
+    rounded to two figures, and it is the same window for both kernels; the
+    slider moves it and the legend counts what saturates. Nothing is smoothed,
+    decimated or interpolated: each element carries the sample taken at its
+    centroid, 0.29&nbsp;<i>h</i> from its edges on an equilateral element and
+    never nearer than 1.3&nbsp;<i>eps</i> on this mesh.
   </p>
   <p>
-    Nothing here is smoothed, decimated or interpolated: the cells are
-    coloured with the sample taken at their centroid, the nearest of which sits
-    0.29&nbsp;<i>eps</i> from a facet edge. The classical values are
-    therefore as large as that spacing lets them be, exactly as the grid
-    spacing set them on the isosurface page, and the stated cell size is the
-    one number a reader needs to scale them.
+    Until 16 October 2026 this page sampled 100 cells per facet to read the
+    condition <i>between</i> the centroids, where the classical element
+    diverges as 1/<i>d</i> and the mollified one stays bounded. That readout
+    is still what <code>onfault.py field --k 10</code> produces; it is not
+    what is shipped here.
   </p>
   <p class="cap">
     Every array ships with its byte count and sha256 in
     <a href={`${base}data/onfault_manifest.json`}>onfault_manifest.json</a>,
-    with the load, the ladder it was chosen from, the window rule and both
-    kernels&rsquo; definiteness, sweep counts and residuals. See
-    <a href={`${base}roughness/`}>Rough crack</a> for the kernel head-to-head at
-    the centroids, <a href={`${base}isosurface/`}>Isosurfaces</a> for the same
-    disagreement off the fault, and <a href={`${base}concepts/`}>Concepts</a> for
-    what <i>eps</i> is.
+    with the geometry of the junction, the load, the ladder it was chosen from,
+    the window rule and both kernels&rsquo; definiteness, sweep counts and
+    residuals. See <a href={`${base}roughness/`}>Rough crack</a> for the kernel
+    head-to-head at the centroids of a buried crack,
+    <a href={`${base}isosurface/`}>Isosurfaces</a> for the same disagreement
+    off the fault, and <a href={`${base}concepts/`}>Concepts</a> for what
+    <i>eps</i> is.
   </p>
 
   <script>

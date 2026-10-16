@@ -41,7 +41,7 @@ build machine (`studies/active_fractal/roughvol.py` says why):
 ```sh
 python studies/active_fractal/roughvol.py solve && ... volume     # /roughness/
 python studies/active_fractal/isosurf.py field ... && ... mesh    # /isosurface/
-python studies/active_fractal/onfault.py solve && ... field --probe && ... field && ... payload   # /onfault/
+python studies/active_fractal/onfault.py solve && ... field --k 1 && ... payload   # /onfault/
 ```
 
 `fault` builds the home page's clickable interaction matrix: 256 triangles,

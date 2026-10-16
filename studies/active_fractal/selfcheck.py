@@ -2157,6 +2157,120 @@ def c_iso() -> None:
               float(np.abs(back["NORMAL"] - nrm.astype(np.float32)).max()), 1e-12)
 
 
+# ---------------------------------------------------------------- [system] ---
+def c_system() -> None:
+    """The on-fault page's mesher: rim vertices on their curve, traces on the
+    surface, a junction shared bit for bit and carried by the host as edges,
+    roughness zero on every line, and k = 1 cells that are the facets."""
+    print("\n[system] surface-breaking rough faults, smooth rims, a conformal "
+          "junction")
+    import onfault as OF                                       # noqa: PLC0415
+    import system as Sy                                        # noqa: PLC0415
+    h = 0.125
+    spec = (dict(name="A", a=1.5, dip=30.0, seed=1, trace=(0.0, 0.0), v_c=1.0),
+            dict(name="B", a=1.0, dip=30.0, seed=2, trace=(1.5, 0.75), v_c=0.75),
+            dict(name="C", a=1.0, dip=50.0, seed=3, trace=(1.0, 0.0), attach="A"))
+    rec, net = Sy.build_system(spec, h, rms_slope=0.25, corr=8 * h)
+    A, _, C = rec
+    print(f"       {net.n_elements} elements: "
+          + ", ".join(f"{r['name']} {r['n']}" for r in rec)
+          + f"; C comes within {net.meta['contact']['C']['min_distance_km']:.3f} km"
+          f" of A off the junction")
+    worst = 0.0
+    for r in rec:
+        o = r["outline"]
+        ai = o.vertices_on("arc")
+        rr = np.linalg.norm(o.verts[ai] - np.array([0.0, o.v_c]), axis=1)
+        worst = max(worst, float(np.abs(rr - o.a).max()))
+    check("every arc vertex lies on its circle (km)", worst, 1e-9 * h)
+    check_true("every trace vertex has z = 0 exactly",
+               all(r["trace_idx"].size > 0
+                   and bool(np.all(r["xyz"][r["trace_idx"], 2] == 0.0))
+                   for r in rec), "")
+    check_true("no vertex is above the surface",
+               bool(np.all(net.tris[:, :, 2] <= 0.0)),
+               f"max z {net.tris[:, :, 2].max():+.3e}")
+    for r, f in zip(rec, spec):
+        tl = r["xyz"][r["trace_idx"], 1]
+        want = 2.0 * math.sqrt(f["a"] ** 2 - r["v_c"] ** 2)
+        check(f"{r['name']}: the trace is the chord the surface cuts",
+              abs(float(tl.max() - tl.min()) / want - 1.0), 1e-9)
+    j = C["junction"]
+    check("the junction line lies on A's plane",
+          abs(j["z"] + j["x"] * math.tan(math.radians(30.0))), 1e-12)
+    check("and on C's plane",
+          abs(j["z"] + (j["x"] - 1.0) * math.tan(math.radians(50.0))), 1e-12)
+    hidx = dict(A["host_of"])["C"]
+    check_true("C's junction vertices are A's, bit for bit",
+               np.array_equal(A["xyz"][hidx], C["xyz"][C["junction_outline_idx"]]),
+               f"{hidx.size} vertices")
+
+    def edges(idx):
+        e = np.concatenate([idx[:, [0, 1]], idx[:, [1, 2]], idx[:, [2, 0]]])
+        return np.sort(e, axis=1)
+
+    def chord_edges(xyz, e, members):
+        m = np.isin(e, members).all(axis=1)
+        return {frozenset((tuple(np.round(p[0], 12)), tuple(np.round(p[1], 12))))
+                for p in xyz[e[m]]}
+
+    sA = chord_edges(A["xyz"], edges(A["idx"]), hidx)
+    sC = chord_edges(C["xyz"], edges(C["idx"]), C["junction_outline_idx"])
+    check_true("A carries the junction chord as edges, the edges C bounds",
+               sA == sC and len(sA) == hidx.size - 1,
+               f"{len(sA)} of {hidx.size - 1}")
+    for r in rec:
+        share = N.edge_sharing(r["idx"])
+        check_true(f"{r['name']} is a manifold tiling",
+                   share.size == 3 and share[0] == 0, f"{share}")
+        check_true(f"{r['name']}: zero displacement on its outline",
+                   bool(np.all(r["w"][r["boundary_idx"]] == 0.0)), "")
+        check(f"{r['name']}: median edge within 15 % of h",
+              abs(r["median_edge"] / h - 1.0), 0.15)
+    check_true("A's displacement is zero along the junction too",
+               bool(np.all(A["w"][hidx] == 0.0)), "")
+    check_true("and nonzero inside", bool(np.abs(A["w"]).max() > 0.0),
+               f"max {np.abs(A['w']).max():.3f} km")
+    e = net.tris - np.roll(net.tris, 1, axis=1)
+    L = np.linalg.norm(e, axis=2)
+    cosang = [(L[:, 1] ** 2 + L[:, 2] ** 2 - L[:, 0] ** 2) / (2 * L[:, 1] * L[:, 2]),
+              (L[:, 2] ** 2 + L[:, 0] ** 2 - L[:, 1] ** 2) / (2 * L[:, 2] * L[:, 0]),
+              (L[:, 0] ** 2 + L[:, 1] ** 2 - L[:, 2] ** 2) / (2 * L[:, 0] * L[:, 1])]
+    amin = float(np.degrees(np.arccos(np.clip(np.max(cosang), -1.0, 1.0))))
+    check("smallest angle in the system (deg)", -amin, -25.0)
+    c = OF.cells(net.tris, 1, eps=0.1 * h)
+    check_true("k = 1 is one cell per facet",
+               c["corners"].shape == (1, 3, 3)
+               and c["pts"].shape[0] == net.n_elements, "")
+    check("sampled at the centroid",
+          float(np.abs(c["pts"] - net.tris.mean(axis=1)).max()), 1e-12)
+    rb, _ = Sy.build_system(
+        (dict(name="D", a=1.0, dip=30.0, seed=1, centre=(0.0, 0.0, -20.0)),),
+        h, rms_slope=0.25, corr=8 * h)
+    check_true("a disc given by its centre, buried, is a full circle",
+               all(t == "arc" for t in rb[0]["outline"].tags)
+               and rb[0]["trace_idx"].size == 0, f"{rb[0]['n']} elements")
+    check("placed where centre= said",
+          float(np.abs(Sy.place(np.array([[0.0, rb[0]["v_c"]]]), rb[0]["trace"],
+                                30.0)[0] - np.array([0.0, 0.0, -20.0])).max()),
+          1e-12)
+
+    def refused(fn, exc) -> bool:
+        try:
+            fn()
+        except exc:
+            return True
+        return False
+
+    check_true("REFUSES a splay whose junction is above the surface",
+               refused(lambda: Sy.junction_line(
+                   spec[0], dict(name="X", dip=50.0, trace=(-1.0, 0.0))),
+                   ValueError), "")
+    check_true("REFUSES a correlation length longer than the disc",
+               refused(lambda: Sy.build_system(spec[:1], h, rms_slope=0.25,
+                                               corr=4.0), ValueError), "")
+
+
 # --------------------------------------------------------------- [onfault] ---
 def c_onfault() -> None:
     """The dense on-fault readout IS the solve's own condition, and both
@@ -2232,7 +2346,7 @@ def c_onfault() -> None:
               dict(name="B", a=0.8, dip=30.0, seed=2,
                    centre=(0.8 * s30 - 0.2 * c30, 0.4,
                            -20.0 + 0.8 * c30 + 0.2 * s30)))
-    discs, net = OF.build(faults, h=h)
+    discs, net = OF.build(faults, h=h, corr_km=8 * h)
     n, fid = net.n_elements, net.fault_id
     print(f"       two rough discs: {n} elements, clearance "
           f"{net.meta['clearance_km']:.3f} km, min n_z {net.meta['min_nz']:.3f}")
@@ -2249,7 +2363,10 @@ def c_onfault() -> None:
                all(o["mineig"] > 0 for o in ops.values()),
                " ".join(f"{k} {o['mineig']:+.3f}" for k, o in ops.items()))
     lam0 = float(np.nanmin(fric.first_failure_lambda()))
-    lam = 1.2 * lam0
+    # 1.05 lam0 leaves the fixture about three-quarters active (measured
+    # 0.74; at 1.2 the smooth-rimmed discs slip everywhere and the locked
+    # population below would be empty)
+    lam = 1.05 * lam0
     z = dict(tris=net.tris, lam=lam, slip_dir=fric.slip_dir,
              tau_load_mag=fric.tau_load_mag, sigma_eff_0=fric.sigma_eff_0,
              sigma_n_load=fric.sigma_n_load, mu=fric.mu)
@@ -2260,6 +2377,8 @@ def c_onfault() -> None:
         sol = St.solve(o["P_eff"], o["d"], o["g"], lam)
         check_true(f"{kern}: the coupled LCP converged", sol.converged,
                    f"{sol.sweeps} sweeps, {int(sol.active.sum())}/{n} active")
+        check_true(f"{kern}: both slipping and locked elements exist",
+                   bool(sol.active.any() and (~sol.active).any()), "")
         w = o["g"] - (lam * o["d"] + o["P_eff"].T @ sol.delta)
         slip = Fr.slip_cartesian(net.tris, fric.slip_dir, sol.delta)
         if kern == "mollified":
@@ -2277,7 +2396,8 @@ def c_onfault() -> None:
               float(np.abs(m["S"][sol.active]).max()), 1e-9)
         check_true(f"{kern}: locked centroids sit below it",
                    bool(np.all(m["S"][~sol.active] < 0.0)),
-                   f"max {m['S'][~sol.active].max():.3e}")
+                   f"max {m['S'][~sol.active].max():.3e}"
+                   if (~sol.active).any() else "no locked elements")
     check_true("the remote load drives every facet",
                bool(np.all(lam * fric.tau_load_mag > 0.0)), "")
     # The load tensors are TENSION positive and k is compression on every
@@ -2399,13 +2519,102 @@ def c_onfault() -> None:
     check("  and in the nearest-edge bin as well", worst_bin, 2e-2)
 
 
+# ------------------------------------------------------------------ [trace] ---
+def c_trace() -> None:
+    """Where the two kernels part, and why: a slipping element that touches
+    the free surface. Its smeared slip straddles z = 0, and the mollified
+    kernel reads it at a resolution floor the classical element does not
+    have. Pinned as a CONVERGENCE, on the page's own fault B alone: as eps
+    falls the mollified solve approaches the classical one, and so does the
+    mollified readout of one fixed slip on the trace row, while three rows
+    down the two agree at the production eps already. The numbers printed
+    here are the ones the page quotes.
+    """
+    print("\n[trace] the trace row: the mollified kernel against the classical "
+          "one as eps falls")
+    import onfault as OF                                       # noqa: PLC0415
+    from mhs import tdcs                                       # noqa: PLC0415
+    _, net = OF.build()
+    m = net.fault_id == 1
+    tris = np.ascontiguousarray(net.tris[m])
+    n = tris.shape[0]
+    netB = N.Network(tris=tris, fault_id=np.zeros(n, np.int64),
+                     length=np.array([8.0]), width=np.array([8.0]),
+                     azimuth=np.zeros(1), dip=np.array([30.0]),
+                     center=tris.reshape(-1, 3).mean(0)[None],
+                     h=OF.H_KM, eps=OF.EPS, meta={})
+    fric = Fr.build_friction(netB, regime=OF.REGIME, drop_ratio=OF.DROP_RATIO,
+                             mean_stress_ratio=OF.MEAN_STRESS)
+    d, g, _ = Csc.coefficients(fric)
+    lam = 1.10 * float(np.nanmin(fric.first_failure_lambda()))
+    Pc = Kmod.project(OF.classical_matrix(tris), fric.slip_dir, fric.slip_dir)
+    solc = St.solve(Pc, d, g, lam)
+    check_true("B alone, classical: the uncoupled LCP converged", solc.converged,
+               f"{solc.sweeps} sweeps, {solc.active.mean():.3f} active")
+    depth = -tris.mean(axis=1)[:, 2]
+    first = tris[:, :, 2].max(axis=1) > -1e-9
+    d1 = depth[first].max()
+    below = ~first & (depth < 3.0 * d1)                       # rows 2-3
+    area = netB.areas()
+    print(f"       B: {n} elements, {int(first.sum())} on the trace row, whose "
+          f"centroids sit {depth[first].mean() / OF.EPS:.1f} eps below the "
+          f"surface at eps = 0.1 h")
+    ratio, deltas = {}, {}
+    for eoh in (0.1, 0.05, 0.025):
+        with tempfile.TemporaryDirectory() as tmp:
+            Km, _ = Kmod.assemble(netB, mu=OF.MU, lam=OF.LAM, eps=eoh * OF.H_KM,
+                                  workers=1, cache_dir=pathlib.Path(tmp),
+                                  verbose=False)
+        P = Kmod.project(Km, fric.slip_dir, fric.slip_dir)
+        sol = St.solve(P, d, g, lam)
+        check_true(f"eps/h = {eoh:g}: the mollified LCP converged", sol.converged,
+                   f"{sol.sweeps} sweeps, {sol.active.mean():.3f} active")
+        r_t = float((solc.delta * area)[first].sum() / (sol.delta * area)[first].sum())
+        r_a = float((solc.delta * area).sum() / (sol.delta * area).sum())
+        ratio[eoh] = (r_t, r_a)
+        deltas[eoh] = sol.delta
+        print(f"       eps/h {eoh:5.3f}: slip classical/mollified by moment, "
+              f"trace row {r_t:.3f}, whole fault {r_a:.3f}")
+    ex = {k: abs(v[0] - 1.0) for k, v in ratio.items()}
+    check_true("the trace row's excess slip falls as eps falls",
+               ex[0.1] > ex[0.05] > ex[0.025],
+               " -> ".join(f"{ex[k]:.3f}" for k in (0.1, 0.05, 0.025)))
+    check("and is under 10 % at eps/h = 0.025", ex[0.025], 0.10)
+    check("where the whole fault's moment agrees to 5 %",
+          abs(ratio[0.025][1] - 1.0), 0.05)
+    # one slip, two kernels: the trace-row normal stress read by the classical
+    # kernel and by the mollified one down the same ladder
+    slip = Fr.slip_cartesian(tris, fric.slip_dir, deltas[0.1])
+    cen, nrm = tris.mean(axis=1), tdcs.unit_normals(tris)
+    dev = {}
+    for sel, label in ((first, "trace row"), (below, "rows 2-3")):
+        idx = np.flatnonzero(sel)
+        tc = OF.classical_traction(cen[idx], nrm[idx], tris, slip)
+        dsn_c = -np.einsum("oi,oi->o", tc, nrm[idx])
+        for eoh in (0.1, 0.05, 0.025, 0.0125):
+            tm = OF.mollified_traction(cen[idx], nrm[idx], tris, slip, 1,
+                                       eps=eoh * OF.H_KM)
+            dsn_m = -np.einsum("oi,oi->o", tm, nrm[idx])
+            dev[(label, eoh)] = float(np.median(np.abs(dsn_m - dsn_c))) * 1e3
+        print(f"       {label}: median |mollified - classical| normal-stress "
+              f"change " + ", ".join(f"{dev[(label, e)]:.2f}" for e in
+                                     (0.1, 0.05, 0.025, 0.0125))
+              + " MPa at eps/h = 0.1, 0.05, 0.025, 0.0125")
+    t = [dev[("trace row", e)] for e in (0.1, 0.05, 0.025, 0.0125)]
+    check_true("the trace-row readout approaches the classical one as eps falls",
+               t[0] > t[1] > t[2] > t[3], " -> ".join(f"{v:.2f}" for v in t))
+    check("  to under 1 MPa at eps/h = 0.0125", t[3], 1.0)
+    check("three rows down the two agree at eps = 0.1 h already (MPa)",
+          dev[("rows 2-3", 0.1)], 1.0)
+
+
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,
            "kernel": c_kernel, "crack": c_crack, "load": c_load,
            "static": c_static,
            "spectrum": c_spectrum, "slip": c_slip, "align": c_align,
            "cloud": c_cloud, "rough": c_rough, "iso": c_iso,
-           "onfault": c_onfault}
+           "system": c_system, "onfault": c_onfault, "trace": c_trace}
 
 
 def main() -> bool:
