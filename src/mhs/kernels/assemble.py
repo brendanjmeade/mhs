@@ -20,6 +20,16 @@ shaped so those calls can be replaced by numba kernels one at a time behind the
 parity gate, which is why the per-source body is a single function call rather
 than inlined arithmetic.
 
+**Columns may be SHARED.** Every assembler takes ``ids=None``: with it,
+``ids[s, k]`` names the column that element ``s``'s node ``k`` writes into,
+and the write becomes a scatter-ADD, so several elements accumulate into one
+column. That is the whole of the continuous layout on the assembly side
+(:mod:`mhs.shared`): the kernels never learn that a node is shared, the
+element-major ``(n_obs, ..., n_src * K, 3)`` transient is never allocated,
+and a buffer written this way must start at zero. Without ``ids`` the write
+is the disjoint column slice it always was, so the discontinuous path is the
+original code and not a special case of the new one.
+
 **The (mu, lam) seam.** ``mhs`` carries ``(mu, lam)`` everywhere, because
 ``1/(1 - 2 nu)`` diverges toward incompressibility and a lam/mu swap is invisible
 at ``nu = 1/4``. The vendored full-space engine takes ``(mu, nu)`` and derives
@@ -32,6 +42,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from . import fold as _fold
 from .image import image_total
 
 from ..fullspace import kernels as _fs_kernels
@@ -55,6 +66,33 @@ def _nu_from(mu: float, lam: float) -> float:
     return 0.5 * lam / (lam + mu)
 
 
+def _put(out: np.ndarray, s: int, K: int, block: np.ndarray, ids,
+         axis: int) -> None:
+    """Write one source's ``K`` node columns, at ``axis`` of ``out``.
+
+    Disjoint slice when ``ids`` is None, scatter-add into ``ids[s]`` when
+    given. The six nodes of one element are distinct columns, so a fancy
+    ``+=`` is exact there; what accumulates is the SAME column written by
+    different elements, in the source loop's order.
+    """
+    sl = [slice(None)] * out.ndim
+    if ids is None:
+        sl[axis] = slice(s * K, (s + 1) * K)
+        out[tuple(sl)] = block
+    else:
+        sl[axis] = ids[s]
+        out[tuple(sl)] += block
+
+
+def _add(out: np.ndarray, s: int, K: int, block: np.ndarray, ids,
+         axis: int) -> None:
+    """Add one source's ``K`` node columns: the image half on top of the
+    direct half, whichever way the latter was written."""
+    sl = [slice(None)] * out.ndim
+    sl[axis] = slice(s * K, (s + 1) * K) if ids is None else ids[s]
+    out[tuple(sl)] += block
+
+
 def fullspace_blocks(obs: np.ndarray, tri: np.ndarray, mu: float, lam: float,
                      eps: float, want=("U",), order: int = 0) -> dict:
     """The vendored full-space nodal tensors of ONE triangle at every ``obs``.
@@ -67,9 +105,54 @@ def fullspace_blocks(obs: np.ndarray, tri: np.ndarray, mu: float, lam: float,
                                        want=tuple(want))
 
 
+def _image(obs, tri, mu, lam, eps, order, want, fold) -> dict:
+    """The image half of ONE source at every observer: the lift, replaced in
+    the band of a straddling source by the folded image (mirror element plus
+    Boussinesq, :mod:`mhs.kernels.fold`). ``fold=False`` is the lift alone."""
+    img = image_total(obs, tri, order, float(mu), float(lam), float(eps),
+                      want=tuple(want))
+    if fold and _fold.straddles(tri, eps):
+        sel = _fold.band(obs, tri, eps)
+        if sel.size:
+            fb = _fold.image(obs[sel], tri, mu, lam, eps, order, tuple(want))
+            for key in want:
+                img[key][sel] = fb[key]
+    return img
+
+
+def _hooke_normal(n, mu: float, lam: float) -> np.ndarray:
+    """``C:sym(slip (x) n)`` per unit slip component ``k``, as ``(3, 3, 3)``."""
+    eye = np.eye(3)
+    return (lam * np.einsum("mn,k->mnk", eye, n)
+            + mu * (np.einsum("mk,n->mnk", eye, n)
+                    + np.einsum("nk,m->mnk", eye, n)))
+
+
+def _eigen_terms(obs, tri, mu, lam, eps, order, phi, fold) -> list:
+    """The eigenstress of ONE source as ``[(phi (n_obs, K), C (3, 3, 3))]``:
+    the blob weight times a constant tensor. One term for a buried source;
+    a folded one adds its mirror blob, which reaches into the body within a
+    few eps of the surface, with the mirror's normal and signed slip -- at
+    the band receivers only, so that outside the band the source is exactly
+    what the lift makes it, image and eigenstress alike."""
+    phi = np.asarray(phi)
+    terms = [(phi, _hooke_normal(_unit_normal(tri), mu, lam))]
+    if fold and _fold.straddles(tri, eps):
+        sel = _fold.band(obs, tri, eps)
+        if sel.size:
+            trim = _fold.mirror(tri)
+            phi_m = np.zeros_like(phi)       # outside the band the source is
+            phi_m[sel] = fullspace_blocks(   # the lift's, eigenstress included
+                obs[sel], trim, mu, lam, eps, want=("E",), order=order)["E"]
+            terms.append((phi_m, _hooke_normal(_unit_normal(trim), mu, lam)
+                          * _fold.MIRROR_SLIP_SIGN[None, None, :]))
+    return terms
+
+
 def assemble_fullspace_disp(obs: np.ndarray, tris: np.ndarray, mu: float,
                             lam: float, eps_arr: np.ndarray,
-                            out: np.ndarray, order: int = 0) -> np.ndarray:
+                            out: np.ndarray, order: int = 0,
+                            ids=None) -> np.ndarray:
     """FULL-SPACE displacement matrix into ``out`` (n_obs, 3, n_src, 3).
 
     This is the direct (Kelvin) half of the half-space kernel. It is *not* the
@@ -83,14 +166,14 @@ def assemble_fullspace_disp(obs: np.ndarray, tris: np.ndarray, mu: float,
         # (n_obs, K, 3, 3): [obs, node, i, slip]
         U = np.asarray(fullspace_blocks(obs, tris[s], mu, lam, eps_arr[s],
                                         want=("U",), order=order)["U"])
-        out[:, :, s * K:(s + 1) * K, :] = np.moveaxis(U, 1, 2)
+        _put(out, s, K, np.moveaxis(U, 1, 2), ids, 2)
     return out
 
 
 def assemble_fullspace_total_stress(obs: np.ndarray, tris: np.ndarray,
                                     mu: float, lam: float,
                                     eps_arr: np.ndarray, out: np.ndarray,
-                                    order: int = 0) -> np.ndarray:
+                                    order: int = 0, ids=None) -> np.ndarray:
     """FULL-SPACE **total** stress matrix into ``out`` (n_obs, 3, 3, n_src, 3).
 
     Total, not elastic: within ~3 eps of the element this is dominated by the
@@ -100,13 +183,14 @@ def assemble_fullspace_total_stress(obs: np.ndarray, tris: np.ndarray,
     for s in range(tris.shape[0]):
         H = np.asarray(fullspace_blocks(obs, tris[s], mu, lam, eps_arr[s],
                                         want=("H",), order=order)["H"])
-        out[:, :, :, s * K:(s + 1) * K, :] = np.moveaxis(H, 1, 3)
+        _put(out, s, K, np.moveaxis(H, 1, 3), ids, 3)
     return out
 
 
 def assemble_halfspace_disp(obs: np.ndarray, tris: np.ndarray, mu: float,
                             lam: float, eps_arr: np.ndarray,
-                            out: np.ndarray, order: int = 0) -> np.ndarray:
+                            out: np.ndarray, order: int = 0,
+                            ids=None, fold: bool = True) -> np.ndarray:
     """HALF-SPACE displacement matrix into ``out`` (n_obs, 3, n_src, 3).
 
     Direct (Kelvin, closed form) plus the image correction -- closed-form
@@ -116,19 +200,19 @@ def assemble_halfspace_disp(obs: np.ndarray, tris: np.ndarray, mu: float,
     direct term, which is checked rather than assumed because a relative sign
     error between them would be invisible at a symmetric configuration.
     """
-    assemble_fullspace_disp(obs, tris, mu, lam, eps_arr, out, order)
+    assemble_fullspace_disp(obs, tris, mu, lam, eps_arr, out, order, ids)
     K = n_nodes(order)
     for s in range(tris.shape[0]):
-        img = image_total(obs, tris[s], order, float(mu), float(lam),
-                          float(eps_arr[s]), want=("U",))
-        out[:, :, s * K:(s + 1) * K, :] += np.moveaxis(img["U"], 1, 2)
+        img = _image(obs, tris[s], mu, lam, eps_arr[s], order, ("U",), fold)
+        _add(out, s, K, np.moveaxis(img["U"], 1, 2), ids, 2)
     return out
 
 
 def assemble_halfspace_total_stress(obs: np.ndarray, tris: np.ndarray,
                                     mu: float, lam: float,
                                     eps_arr: np.ndarray, out: np.ndarray,
-                                    order: int = 0) -> np.ndarray:
+                                    order: int = 0, ids=None,
+                                    fold: bool = True) -> np.ndarray:
     """HALF-SPACE **total** stress matrix into ``out`` (n_obs, 3, 3, n_src, 3).
 
     Total, not elastic: within ~3 eps of the element the eigenstress the
@@ -137,49 +221,53 @@ def assemble_halfspace_total_stress(obs: np.ndarray, tris: np.ndarray,
     ``mhs.stress_matrix`` returns, and what any stress presented as elastic
     must have had removed.
     """
-    assemble_fullspace_total_stress(obs, tris, mu, lam, eps_arr, out, order)
+    assemble_fullspace_total_stress(obs, tris, mu, lam, eps_arr, out, order,
+                                    ids)
     K = n_nodes(order)
     for s in range(tris.shape[0]):
-        img = image_total(obs, tris[s], order, float(mu), float(lam),
-                          float(eps_arr[s]), want=("H",))
-        out[:, :, :, s * K:(s + 1) * K, :] += np.moveaxis(img["H"], 1, 3)
+        img = _image(obs, tris[s], mu, lam, eps_arr[s], order, ("H",), fold)
+        _add(out, s, K, np.moveaxis(img["H"], 1, 3), ids, 3)
     return out
 
 
-def _eigenstress_traction(blk, tri, nrm, mu: float, lam: float) -> np.ndarray:
-    """``C:eps*`` contracted onto the receiver planes, ``(n_obs, K, 3, 3)``.
+def _eigenstress_traction(terms, nrm) -> np.ndarray:
+    """``C:eps*`` contracted onto the receiver planes, ``(n_obs, K, 3, 3)``,
+    summed over a source's :func:`_eigen_terms`.
 
     The same tensor :func:`assemble_eigenstress` writes, but never materialised
     as ``(3, 3)`` per pair -- which is the only reason the contracted forms cost
     less than contracting their output afterwards would.
     """
-    eye = np.eye(3)
-    phi = np.asarray(blk["E"])                             # (n_obs, K)
-    n = _unit_normal(tri)
-    C = (lam * np.einsum("mn,k->mnk", eye, n)
-         + mu * (np.einsum("mk,n->mnk", eye, n)
-                 + np.einsum("nk,m->mnk", eye, n)))
-    return (phi[:, :, None, None]
-            * np.einsum("ijk,oj->oik", C, nrm)[:, None, :, :])
+    out = None
+    for phi, C in terms:
+        t = (phi[:, :, None, None]
+             * np.einsum("ijk,oj->oik", C, nrm)[:, None, :, :])
+        out = t if out is None else out + t
+    return out
 
 
-def _halfspace_stress_block(obs, tri, mu, lam, eps, want, order=0) -> dict:
-    """Total stress of ONE source at every observer: direct PLUS image.
+def _halfspace_stress_block(obs, tri, mu, lam, eps, want, order=0,
+                            fold: bool = True) -> dict:
+    """Total stress of ONE source at every observer, direct PLUS image, and
+    its eigenstress terms (None unless ``"E"`` is wanted).
 
     Stated once, so the contracted paths cannot drift from
-    :func:`assemble_halfspace_total_stress` in which halves they add.
+    :func:`assemble_halfspace_total_stress` and :func:`assemble_eigenstress`
+    in which halves they add.
     """
     blk = fullspace_blocks(obs, tri, mu, lam, eps, want=want, order=order)
-    img = image_total(obs, tri, order, float(mu), float(lam), float(eps),
-                      want=("H",))
-    return {"H": np.asarray(blk["H"]) + img["H"], "E": blk.get("E")}
+    img = _image(obs, tri, mu, lam, eps, order, ("H",), fold)
+    terms = (_eigen_terms(obs, tri, mu, lam, eps, order, blk["E"], fold)
+             if "E" in want else None)
+    return {"H": np.asarray(blk["H"]) + img["H"], "E": terms}
 
 
 def assemble_halfspace_traction(obs: np.ndarray, nrm: np.ndarray,
                                 tris: np.ndarray, mu: float, lam: float,
                                 eps_arr: np.ndarray, out: np.ndarray,
                                 subtract_eigenstress: bool = True,
-                                order: int = 0) -> np.ndarray:
+                                order: int = 0, ids=None,
+                                fold: bool = True) -> np.ndarray:
     """Cartesian traction into ``out`` (n_obs, 3, n_src, 3).
 
     ``out[o, i, s, k]`` is traction component ``i`` on the plane whose normal is
@@ -196,11 +284,11 @@ def assemble_halfspace_traction(obs: np.ndarray, nrm: np.ndarray,
     K = n_nodes(order)
     for s in range(tris.shape[0]):
         blk = _halfspace_stress_block(obs, tris[s], mu, lam, eps_arr[s], want,
-                                      order)
+                                      order, fold)
         t = np.einsum("okijm,oj->okim", blk["H"], nrm)      # (n_obs, K, 3, 3)
         if subtract_eigenstress:
-            t = t - _eigenstress_traction(blk, tris[s], nrm, mu, lam)
-        out[:, :, s * K:(s + 1) * K, :] = np.moveaxis(t, 1, 2)
+            t = t - _eigenstress_traction(blk["E"], nrm)
+        _put(out, s, K, np.moveaxis(t, 1, 2), ids, 2)
     return out
 
 
@@ -209,13 +297,18 @@ def assemble_interaction(obs: np.ndarray, nrm: np.ndarray,
                          src_basis: np.ndarray, mu: float, lam: float,
                          eps_arr: np.ndarray, out: np.ndarray,
                          subtract_eigenstress: bool = True,
-                         order: int = 0) -> np.ndarray:
+                         order: int = 0, ids=None,
+                         fold: bool = True) -> np.ndarray:
     """Frame-resolved interaction into ``out`` (n_obs, n_src, n_rec, n_slip).
 
     ``out[o, s, a, b]`` is traction resolved along ``rec_basis[o, a]`` on the
     plane ``nrm[o]``, from unit slip along ``src_basis[s, b]`` on ``tris[s]``.
     Both bases are Cartesian rows, so this function states no convention of its
     own -- ``mhs.tdcs`` does, in one place, and the caller passes the result.
+
+    With ``ids`` the source basis is PER COLUMN, ``(n_cols, n_slip, 3)``: a
+    shared node has one tangent plane, and the slip along ``src_basis[g, b]``
+    at node ``g`` is what every element touching ``g`` radiates.
 
     Contracts in the source loop for the same reason as above, and here it
     matters more: the full ``(n, 3, 3, n, 3)`` stress is 20.1 GiB at 10k where
@@ -225,18 +318,23 @@ def assemble_interaction(obs: np.ndarray, nrm: np.ndarray,
     K = n_nodes(order)
     for s in range(tris.shape[0]):
         blk = _halfspace_stress_block(obs, tris[s], mu, lam, eps_arr[s], want,
-                                      order)
+                                      order, fold)
         t = np.einsum("okijm,oj->okim", blk["H"], nrm)     # (n_obs, K, 3, slip)
         if subtract_eigenstress:
-            t = t - _eigenstress_traction(blk, tris[s], nrm, mu, lam)
-        out[:, s * K:(s + 1) * K, :, :] = np.einsum(
-            "oai,okim,bm->okab", rec_basis, t, src_basis[s])
+            t = t - _eigenstress_traction(blk["E"], nrm)
+        if ids is None:
+            out[:, s * K:(s + 1) * K, :, :] = np.einsum(
+                "oai,okim,bm->okab", rec_basis, t, src_basis[s])
+        else:
+            out[:, ids[s], :, :] += np.einsum(
+                "oai,okim,kbm->okab", rec_basis, t, src_basis[ids[s]])
     return out
 
 
 def assemble_eigenstress(obs: np.ndarray, tris: np.ndarray, mu: float,
                          lam: float, eps_arr: np.ndarray, out: np.ndarray,
-                         order: int = 0) -> np.ndarray:
+                         order: int = 0, ids=None,
+                         fold: bool = True) -> np.ndarray:
     """The eigenstress matrix ``C:eps*`` into ``out`` (n_obs, 3, 3, n_src, 3).
 
     ``H*[m,n,k] = Phi_eps (lam d_mn n_k + mu (d_mk n_n + d_nk n_m))``, with
@@ -250,20 +348,21 @@ def assemble_eigenstress(obs: np.ndarray, tris: np.ndarray, mu: float,
     term; the half-space image correction depends only on the distance to the
     *image*, which never vanishes inside the body, so it is smooth there and
     carries none. The deep-source gate proves that rather than assuming it.
+    A FOLDED source (:mod:`mhs.kernels.fold`) is the one exception, by
+    construction: its eigenstrain is the element's plus its mirror's, so the
+    mirror blob's weight is added here, with the mirror's normal and signed
+    slip, wherever it reaches into the body.
     """
-    eye = np.eye(3)
     K = n_nodes(order)
     for s in range(tris.shape[0]):
         blk = fullspace_blocks(obs, tris[s], mu, lam, eps_arr[s], want=("E",),
                                order=order)
-        phi = np.asarray(blk["E"])                       # (n_obs, K)
-        n = _unit_normal(tris[s])
-        # C:sym(slip (x) n) per unit slip component k, as a (3,3,3) constant
-        C = (lam * np.einsum("mn,k->mnk", eye, n)
-             + mu * (np.einsum("mk,n->mnk", eye, n)
-                     + np.einsum("nk,m->mnk", eye, n)))
-        out[:, :, :, s * K:(s + 1) * K, :] = (phi[:, None, None, :, None]
-                                              * C[None, :, :, None, :])
+        block = None
+        for phi, C in _eigen_terms(obs, tris[s], mu, lam, eps_arr[s], order,
+                                   blk["E"], fold):
+            term = phi[:, None, None, :, None] * C[None, :, :, None, :]
+            block = term if block is None else block + term
+        _put(out, s, K, block, ids, 3)
     return out
 
 

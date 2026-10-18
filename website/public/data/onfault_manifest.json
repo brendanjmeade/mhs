@@ -40,6 +40,38 @@
     7058
    ]
   },
+  "onfault.continuous.S": {
+   "bytes": 28232,
+   "dtype": "float32",
+   "sha256": "298badc745caddc3",
+   "shape": [
+    7058
+   ]
+  },
+  "onfault.continuous.dsn": {
+   "bytes": 28232,
+   "dtype": "float32",
+   "sha256": "00bf9fb76bc31db5",
+   "shape": [
+    7058
+   ]
+  },
+  "onfault.continuous.dts": {
+   "bytes": 28232,
+   "dtype": "float32",
+   "sha256": "8a3bc0ea0ed8cd90",
+   "shape": [
+    7058
+   ]
+  },
+  "onfault.continuous.slip": {
+   "bytes": 28232,
+   "dtype": "float32",
+   "sha256": "28da2c999120eddb",
+   "shape": [
+    7058
+   ]
+  },
   "onfault.corners": {
    "bytes": 36,
    "dtype": "float32",
@@ -129,6 +161,14 @@
     "name": "A",
     "shadow_GPa": -0.00010347875531165385
    },
+   "continuous": {
+    "active_alone": 0.8363395225464191,
+    "active_system": 0.8305039787798408,
+    "max_slip_m": 0.8240169700321336,
+    "moment_ratio": 0.974921218287924,
+    "name": "A",
+    "shadow_GPa": -0.00011401757754669291
+   },
    "dip_deg": 30.0,
    "height_rms_km": 0.32816605251991443,
    "junction": null,
@@ -166,6 +206,14 @@
     "name": "B",
     "shadow_GPa": -0.00011597118827363062
    },
+   "continuous": {
+    "active_alone": 0.8543352601156069,
+    "active_system": 0.8491329479768787,
+    "max_slip_m": 3.552608520399464,
+    "moment_ratio": 0.9658911974277784,
+    "name": "B",
+    "shadow_GPa": -0.00011347776767433932
+   },
    "dip_deg": 30.0,
    "height_rms_km": 0.22150352768955692,
    "junction": null,
@@ -202,6 +250,14 @@
     "moment_ratio": 0.8846366345176504,
     "name": "C",
     "shadow_GPa": -0.0012398060804375752
+   },
+   "continuous": {
+    "active_alone": 0.12387676508344031,
+    "active_system": 0.11553273427471117,
+    "max_slip_m": 0.2293456089472455,
+    "moment_ratio": 0.8917093902559449,
+    "name": "C",
+    "shadow_GPa": -0.0012349359447443764
    },
    "dip_deg": 50.0,
    "height_rms_km": 0.12376332212933257,
@@ -245,7 +301,7 @@
   "regime": "thrust",
   "sigma_eff_GPa": 0.14999999999999997
  },
- "git": "09e05fb",
+ "git": "023c857",
  "h_km": 0.25,
  "k": 1,
  "kernels": {
@@ -254,14 +310,29 @@
    "active_fraction": 0.6653442901671862,
    "min_eig_sym_negP": -2.7079978942597336,
    "residual": 9.724947513944926e-10,
-   "sweeps": 253
+   "sweeps": 253,
+   "unknowns": "elements, P0"
+  },
+  "continuous": {
+   "B": 1.0533202461905609,
+   "active_fraction": 0.6772456786625106,
+   "active_node_fraction": 0.6325472024344699,
+   "eps_km": 0.05,
+   "min_eig_sym_negP": -1.2561428843653077,
+   "min_eig_sym_negP_uncoupled": -6.558681415877261,
+   "n_free": 13940,
+   "n_nodes": 14459,
+   "residual": 1.8735013540549517e-15,
+   "sweeps": 6,
+   "unknowns": "shared nodes, P2 continuous"
   },
   "mollified": {
    "B": 1.0009150347378561,
    "active_fraction": 0.6605270614905072,
    "min_eig_sym_negP": -1.3611008937130151,
    "residual": 9.407826601082192e-10,
-   "sweeps": 207
+   "sweeps": 207,
+   "unknowns": "elements, P0"
   }
  },
  "ladder": [
@@ -332,7 +403,7 @@
  "n_cells": 7058,
  "n_facets": 7058,
  "nearest_edge_eps": 1.2881162299548494,
- "schema": 2,
+ "schema": 3,
  "source": "onfault.py",
  "stats": {
   "classical": {
@@ -362,6 +433,35 @@
     "p50": -0.0014118388365952144,
     "p99": 0.009384768828637022,
     "saturated_area_fraction": 0.01361700643474229
+   }
+  },
+  "continuous": {
+   "S": {
+    "max": 0.044500723435387926,
+    "min": -0.09755019359113178,
+    "nonfinite": 0,
+    "p01": -0.08089197099000163,
+    "p50": -0.0002795205955492333,
+    "p99": 0.0059184812908509524,
+    "saturated_area_fraction": 0.011438766800270265
+   },
+   "dsn": {
+    "max": 0.1432943537823965,
+    "min": -0.008956652162922019,
+    "nonfinite": 0,
+    "p01": -0.004964952550953482,
+    "p50": -0.00044088258584585466,
+    "p99": 0.014564737763830764,
+    "saturated_area_fraction": 0.014475316584591344
+   },
+   "dts": {
+    "max": 0.037537159892026405,
+    "min": -0.104122392545365,
+    "nonfinite": 0,
+    "p01": -0.011532201806938668,
+    "p50": -0.001372899192143646,
+    "p99": 0.00896325680471893,
+    "saturated_area_fraction": 0.04335338535078901
    }
   },
   "mollified": {

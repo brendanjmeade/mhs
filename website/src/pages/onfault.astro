@@ -4,7 +4,7 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
 ---
 <Base
   title="mhs — On the fault"
-  description="On-fault Coulomb excess, stress changes and slip on three rough faults that break the free surface, one of them a splay rooted on another, one value per element, with a mollified kernel and with a classical triangular dislocation element."
+  description="On-fault Coulomb excess, stress changes and slip on three rough faults that break the free surface, one of them a splay rooted on another, one value per element, with a mollified kernel, with a classical triangular dislocation element, and with the mollified kernel carrying slip that is continuous across the elements."
   current="onfault"
 >
   <Fragment slot="sidebar">
@@ -17,11 +17,13 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
       the frictional solve enforced its condition.
     </p>
     <p>
-      Two kernels, one solve, one window: the mollified kernel of this package
-      and the classical triangular dislocation element. Both are finite at a
-      centroid, and away from the surface they give the same solve to a per
-      cent. Where they part is the row of elements that touch the surface
-      &mdash; the last section below.
+      Three kernels, one solve, one window: the mollified kernel of this
+      package with one slip per element, the classical triangular dislocation
+      element, and the mollified kernel with slip that is <i>continuous</i>
+      across the elements, one vector per shared node. All are finite at a
+      centroid, and away from the surface they give the same solve to a few
+      per cent. Where they part is the row of elements that touch the surface
+      &mdash; the last two sections below.
     </p>
     <div class="note">
       Colour is <b>data</b>: one value per element, nothing interpolated, no
@@ -251,6 +253,100 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     agrees with the classical one to 5&nbsp;%.
   </p>
 
+  <h2>A third kernel: slip continuous across the elements</h2>
+  <p>
+    The two kernels above carry one slip per element, so between the
+    centroids the slip is a staircase and every riser is a line dislocation.
+    That is why both read the Coulomb condition at the centroid only: on a
+    frictionless penny crack the residual between the centroids is a quarter
+    of the stress drop in the facet cores at <i>h</i>&nbsp;=&nbsp;<i>a</i>/8,
+    the same for both kernels, and refinement does not move it. The third
+    kernel is the mollified one with <b>continuous quadratic slip</b>: one
+    slip vector at every vertex and every edge midpoint of a fault, shared by
+    the elements that meet there, the condition enforced at those 14,459
+    nodes and the rim of each fault held at zero. On the same penny the
+    residual between the nodes is 0.2&nbsp;% of the drop in the cores and
+    0.05&nbsp;% next to the element edges, and the crack&rsquo;s moment comes
+    out 1&nbsp;% from Eshelby&rsquo;s where one slip per element gives
+    7&nbsp;%.
+  </p>
+  <p>
+    It runs here at <i>eps</i>&nbsp;=&nbsp;0.2&nbsp;<i>h</i>, twice the
+    others&rsquo;, and the reason is the operator. At
+    <i>eps</i>&nbsp;=&nbsp;0.1&nbsp;<i>h</i> the nodal interaction matrix of
+    this system has 37 negative eigenvalues in its symmetric part among
+    13,940, down to &minus;52 against a median of +240, and they are smooth
+    modes of two kinds. Twenty-three go with the 207 nodes within two
+    <i>eps</i> of the free surface, where a smeared source straddles
+    <i>z</i>&nbsp;=&nbsp;0 &mdash; the effect that also makes the trace nodes
+    too soft, below &mdash; and fourteen are broad body modes on each fault
+    alone (A six, B three, C two, down to &minus;13), the asymmetry of
+    collocation at a small <i>eps</i>/<i>h</i> on a large rough fault. The
+    complementarity problem on that operator has no stable solution &mdash;
+    projected Gauss-Seidel overflows and an active-set Newton method thrashes
+    &mdash; where the same operator on the selfcheck&rsquo;s smaller discs is
+    positive definite and both solvers agree. Doubling <i>eps</i> removes the
+    body modes and leaves four: three on C&rsquo;s nodes within two
+    <i>eps</i> of the surface, at &minus;6.6, &minus;3.8 and &minus;0.4, and
+    one long-wavelength mode spanning A and C at &minus;0.85, of the kind the
+    two P0 operators carry on this system as well (&minus;1.2 and &minus;2.5
+    against a median of +200); the Newton solve then converges in six
+    iterations. The price is the
+    readout&rsquo;s: at the nodes the error of the elastic traction is
+    1.7&nbsp;<i>eps</i>/<i>a</i>, so on A it is now the size of the centroid
+    readout of the other two.
+  </p>
+  <p>
+    What it gives, read at the centroids from the nodal slip &mdash; which
+    for this kernel is a readout <i>between</i> its collocation points, not
+    the solver&rsquo;s margin:
+  </p>
+  <div class="wide">
+    <table>
+      <thead>
+        <tr><th>fault</th><th>active</th><th>moment / classical</th>
+            <th>one slip per element, mollified</th><th>max slip</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><b>A</b></td><td>0.83</td><td>0.99</td><td>0.95</td><td>0.82 m</td></tr>
+        <tr><td><b>B</b></td><td>0.85</td><td>1.07</td><td>0.86</td><td>1.19 m below the trace row</td></tr>
+        <tr><td><b>C</b></td><td>0.12</td><td>1.11</td><td>1.03</td><td>0.23 m</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Below the trace rows the Coulomb excess on a slipping element is
+    0.25&nbsp;% of its strength in the median and 1.6&nbsp;% at the 90th
+    percentile, where the condition was never enforced; the active set
+    differs from the classical one on 88 elements against 34 for the P0
+    mollified kernel; on locked elements the excess differs from the
+    classical by 0.10&nbsp;MPa in the median, the normal-stress change below
+    the third row by 0.17 and the shear change by 0.17. B&rsquo;s moment is
+    7&nbsp;% above the classical where one slip per element put it
+    14&nbsp;% below, and its body peaks at 1.19&nbsp;m against the classical
+    1.12 and the P0 mollified 0.92.
+  </p>
+  <p>
+    The trace rows are where this kernel fails, and in the opposite sense to
+    the P0 one. A node that sits on the free surface reads the traction of its
+    own smeared slip, half of which lies above <i>z</i>&nbsp;=&nbsp;0 where
+    there is no free surface to enforce, and that node is too <i>soft</i>:
+    on B the 43 trace nodes slip 2.1&nbsp;m in the median against 0.85 in the
+    row below and 0.94 for the classical trace row, and 3.6&nbsp;m at the
+    most; on A, 0.52 against 0.29 below. The P0 mollified row, collocated
+    2.5&nbsp;<i>eps</i> below the surface, is too <i>stiff</i> by the same
+    mechanism (0.55&nbsp;m on B). The maps show it: on the trace rows the
+    continuous kernel&rsquo;s normal-stress change reads +25&nbsp;MPa in the
+    median on B and +12 on A where the classical reads &minus;5 and
+    &minus;4, with a maximum of +143, and the Coulomb excess there runs from
+    &minus;98 to +44&nbsp;MPa; three rows down the three kernels agree to a
+    fraction of a megapascal. Nearly half of the area where this kernel
+    reads an excess above 5&nbsp;MPa is trace row, and it is 1.6&nbsp;% of
+    the total. Everything in this section is in <code>selfcheck.py -k
+    nodal</code> and <code>onfault.py solve</code>&rsquo;s log; the readout
+    at the nodes is the package&rsquo;s <code>layout="continuous"</code>.
+  </p>
+
   <h2>Signs and windows</h2>
   <p>
     Traction is <i>&sigma;</i>&middot;<i>n</i> with each facet&rsquo;s upward
@@ -258,8 +354,8 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     the Coulomb strength is compression positive, which is the sign the
     friction module uses, and the two are pinned against each other rather
     than reasoned about. Every window is symmetric, &plusmn;<i>W</i>, with
-    <i>W</i> the area-weighted 99th percentile of the <i>mollified</i> map
-    rounded to two figures, and it is the same window for both kernels; the
+    <i>W</i> the area-weighted 99th percentile of the P0 <i>mollified</i> map
+    rounded to two figures, and it is the same window for every kernel; the
     slider moves it and the legend counts what saturates. Nothing is smoothed,
     decimated or interpolated: each element carries the sample taken at its
     centroid, 0.29&nbsp;<i>h</i> from its edges on an equilateral element and
@@ -276,8 +372,9 @@ const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
     Every array ships with its byte count and sha256 in
     <a href={`${base}data/onfault_manifest.json`}>onfault_manifest.json</a>,
     with the geometry of the junction, the load, the ladder it was chosen from,
-    the window rule and both kernels&rsquo; definiteness, sweep counts and
-    residuals. See <a href={`${base}roughness/`}>Rough crack</a> for the kernel
+    the window rule and every kernel&rsquo;s definiteness, sweep counts and
+    residuals, the continuous one with its node count and its own
+    <i>eps</i>. See <a href={`${base}roughness/`}>Rough crack</a> for the kernel
     head-to-head at the centroids of a buried crack,
     <a href={`${base}isosurface/`}>Isosurfaces</a> for the same disagreement
     off the fault, and <a href={`${base}concepts/`}>Concepts</a> for what

@@ -32,6 +32,10 @@ K = mhs.interaction_matrix(tris, mat, eps=0.1,          # (n, n, 1, 1), 0.75 GiB
                            receiver="strike", source="strike")  # at n = 10k
 
 T = mhs.traction_matrix(obs, normals, tris, mat, eps=0.1)   # (n_obs, 3, n_src, 3)
+
+K = mhs.interaction_matrix(tris, mat, eps=0.1, order=2,  # (V+E, V+E, 3, 2)
+                           layout="continuous",          # slip C0 across edges,
+                           source=("strike", "dip"))     # collocated AT the nodes
 ```
 
 Both contract **inside** the assembly loop, so the stress tensor of one source
@@ -67,8 +71,10 @@ carries is subtracted in the readout.
 
 ## Conventions
 
-- **Half space `z <= 0`**, free surface at `z = 0`, sources buried. The wrapper
-  refuses an observer or a vertex above the surface.
+- **Half space `z <= 0`**, free surface at `z = 0`. A source may reach the
+  surface: one whose smeared slip reaches above `z = 0` is FOLDED back into
+  the body (`mhs.kernels.fold`, below). The wrapper refuses an observer or a
+  vertex above the surface.
 - **`(mu, lam)`, never `nu`.** `1/(1 - 2 nu)` diverges toward incompressibility,
   and a `lam`/`mu` swap is invisible at `nu = 1/4`. `Material.from_mu_nu` is the
   one boundary adapter. See `src/mhs/materials.py`.
@@ -88,6 +94,13 @@ carries is subtracted in the readout.
   identity, which is also what catches a partial write into the wider buffer.
 - **`eps > 0`, scalar or one per source triangle.** There is no `"auto"`: that
   rule needs a mesh spacing, and these functions take a vertex array.
+- **`layout` in {`"discontinuous"`, `"continuous"`}** says what the source axis
+  is. The default is the element-major axis above. `"continuous"` (P2 only)
+  makes it the SHARED nodes of the mesh -- welded vertices, then edge
+  midpoints, `n_dof = V + E`, one Cartesian slip vector each, the slip C0
+  across every edge -- built by `mhs.shared_nodes(tris)`, which a network
+  passes with `groups=fault_id` so that two faults meeting along a line keep
+  separate nodes there. See **Continuous slip** below.
 
 ## Elastic, total, eigenstress
 
@@ -108,6 +121,83 @@ There is deliberately **no** bare `strain_matrix`. cutde's idiom is
 silently returns the total stress — the single failure this package exists to
 prevent. `elastic_strain_matrix` is the strain readout, named so the elastic
 choice is visible.
+
+## Continuous slip
+
+A P0 slip is a staircase, and every riser is a line dislocation. The elastic
+traction read *between* the centroids therefore has a floor set by the
+staircase and not by `eps`: on a penny crack at `h = a/8` the on-fault page
+measures 8 % of the stress drop in the facet cores, the same for the mollified
+and the classical kernel, and refinement does not move it, because the
+centroid readout of a prescribed slip does not converge either (2.2 % at
+`a/h = 6`, 2.5 % with `eps` halved).
+
+`layout="continuous"` is quadratic slip that is continuous across every
+element edge: one vector per shared node, collocated at the nodes themselves,
+unshrunk. A kink is what is left at an edge, and a kink is admissible at a
+mollified collocation point where a jump is not. Nothing in the kernels
+changes -- a continuous field is a discontinuous one whose shared nodes agree,
+so the assembler scatters each element's six P2 columns into the shared ones
+and the element-major transient is never built. Measured on the penny crack
+20 radii deep, dipping, rim exactly on the circle, nu = 0.30, locked rim
+(`tests/gates/mhs/verify_shared_nodes.py`):
+
+| a/h = 6, eps/h | readout of Eshelby's slip, median error | stress-drop solve, rms / peak slip | moment | tensile (Sneddon), rms / peak |
+|---|---|---|---|---|
+| **continuous P2**, 0.1 | 1.67 eps/a = 2.8 % | **1.6 %** | +0.8 % | **2.4 %** |
+| continuous P2, 0.05 | 1.70 eps/a = 1.4 % | **1.1 %** | -1.9 % | 2.7 % |
+| P0 centroids, 0.1 | 2.2 % | 6.4 % | +10 % | 4.3 % |
+| P0 centroids, 0.05 | 2.5 % | 5.8 % | +9 % | 5.1 % |
+
+The nodal readout error is `eps`'s -- it halves when `eps` halves, the same at
+vertices and midpoints, the same at `a/h = 8` (1.68, 1.71) -- where the P0
+one is the staircase's. Continuous P1 is refused: measured 15-22 % too stiff,
+its kink sits at the collocation vertex with no node to carry the curvature.
+
+Three things the layout does not do. `sym(-K)` loses positive definiteness
+as `eps/h` falls and the mesh grows: +13 at `eps = 0.1 h`, -33 at `0.05 h`
+on the gate's a/h = 6 disc, and on a production system (three rough faults at
+a/h = 16-24, 7058 elements, 14,459 nodes) 37 negative modes out of 13,940 at
+`0.1 h` -- 23 of them went with the 207 nodes within `2 eps` of the free
+surface, where the smeared source straddles it (the fold removes those: the
+kernel error, not the layout, was the cause), and 14 are broad body modes on
+the faults themselves -- and at `0.2 h` three on one fault's near-surface
+nodes plus a single long-wavelength mode at -0.7 % of the median, of the kind
+the P0 operators carry on that system too. An LU does not care, a
+complementarity solver must be told: projected Gauss-Seidel overflows on that
+system at `0.1 h`, and an active-set Newton method thrashes there too. The
+cure is the symmetric Galerkin form of the same kernel (test and trial both
+P2), positive definite at every eps, which with the fold matches classical
+P0 on a surface-breaking dipping fault to 1 % (Status). A crack front is still located to the node spacing,
+so a Coulomb solve with a free front gains nothing without a front-conforming
+mesh. And on a faceted
+fault the nodal unknown is a VECTOR by construction -- a continuous magnitude
+times a per-facet direction leaves a line dislocation at every crease with a
+`1/eps` core at its irregular vertices, which the vector removes -- but a
+log-type crease term remains; read the normal traction within a facet of a
+crease at scales of two elements or more.
+
+What it costs: the P2 kernels are ~110 us per observer-source pair serially
+against ~40 at P0, and a disc has about twice as many nodes as elements, so
+the matrix is some six times the P0 one. It parallelises by RECEIVER rows
+(`mhs.parallel.by_rows`), not by source chunks, because a shared node's
+column is written by every element touching it:
+
+```python
+sn = mhs.shared_nodes(tris, groups=fault_id)
+call = functools.partial(mhs.interaction_matrix, tris, mat, 0.1, order=2,
+                         layout="continuous", shared=sn,
+                         receiver=("strike", "dip", "normal"),
+                         source=("strike", "dip"))
+K = mp.by_rows(call, sn.n, workers=12)             # (V+E, V+E, 3, 2), bitwise serial
+u = mhs.disp_matrix(obs, tris, mat, 0.1, order=2,  # any entry point takes the
+                    layout="continuous", shared=sn)  # nodal slip the same way
+```
+
+`sn.expand(slip)` is the element-major density the `order=2` entry points
+consume, `sn.integrate(slip)` the moment (exact for a quadratic), `sn.front`
+the boundary nodes inside the body a solve locks, `sn.trace` the ones on
+`z = 0` it leaves free.
 
 ## Memory
 
@@ -218,17 +308,49 @@ the new code and its oracle would make the parity check a tautology.
 Usable, with a known cost ceiling.
 
 Working and gated: the full half-space kernel (closed-form direct and image
-R-family, adaptive quadrature for the image Q-family), all seven matrix entry
-points, the eigenstress split, and the cutde anchor. **On-fault stress is at
-machine precision** (1e-15) at every realistic collocation point, including the
-top element of a surface-breaking fault.
+R-family, adaptive quadrature for the image Q-family), the folded image of a
+surface-reaching source, all seven matrix entry points in both layouts, the
+continuous P2 layout against the penny crack, the eigenstress split, and the
+cutde anchor. **On-fault stress is at machine precision** (1e-15) at every
+realistic collocation point, including the top element of a surface-breaking
+fault.
+
+**A source that reaches the free surface is folded.** The lifted Mindlin
+image is right to O(eps^2) for a BURIED source; continued above `z = 0` it
+puts its image point and Boussinesq branch line inside the body, O(1/eps)
+within eps of the trace. On a surface-breaking fault with continuous
+quadratic slip that moved the whole fault's moment by 10-20 % and left the
+collocation form's Coulomb solve divergent. The regularised problem must take
+the smeared slip folded back into the body (the part above the surface
+replaced by its mirror image: mass-preserving, exact in antiplane strain),
+whose image is the mirror element's own full-space field plus the Boussinesq
+field of the normal traction the symmetric pair leaves on `z = 0` -- zero for
+antiplane strain, O(1) for dip slip. `mhs.kernels.fold` does this for every
+source within 3 eps of the surface, at receivers within 10 eps of it (one
+element height at eps = 0.1 h: deeper, the lift is as good, measured) and
+within 60 eps of the source's crease. Gated by the seam -- for a buried
+element the fold reproduces the lift to 9e-3 of the image at 12 eps and 6e-4
+at 40 eps, where the mirror alone misses by 1.3 -- and by the free-surface
+condition the lift fails by 43x within 10 eps of a trace. Measured on a
+rough, surface-breaking, 33-degree dip-slip fault of 1730 elements at
+eps = 0.1 h against classical P0 (cutde): the uniform-drop moment goes from
+0.95 (collocation P2) and 0.90 (Galerkin P2) of classical to 1.013 for
+both; the Coulomb solve from divergent (collocation) and 0.82 (Galerkin) to
+1.02 and 1.01 with every depth bin within 3 %; the Galerkin form stays
+positive definite. On a vertical strike-slip fault against the antiplane
+solution: the trace row from 5.0x exact (collocation) and 3.3x (Galerkin) to
+0.978 and 0.984 at every depth. The Boussinesq term is a surface quadrature,
+about 0.2 s per straddling-source/band-receiver pair on one core, and
+`fold=False` on every entry point keeps the lift for comparison.
 
 The honest limits:
 
-- **The free-surface condition is satisfied to O(eps^2), not exactly.** A
-  property of the mollified *kernel*, not of the integration: an exact free
-  surface via the potential-convolution route is foreclosed, because the Cortez
-  blob has algebraic tails. `docs/derivation.md` has the proof.
+- **The free-surface condition is satisfied to O(eps^2), not exactly, for a
+  buried source.** A property of the mollified *kernel*, not of the
+  integration: an exact free surface via the potential-convolution route is
+  foreclosed, because the Cortez blob has algebraic tails. `docs/derivation.md`
+  has the proof. (A folded source satisfies it exactly, by construction: its
+  surface load is cancelled, and the trade is a surface quadrature.)
 
   **It is the one free-surface number that can be stated without a reference
   solution**, and that is why it is the number to quote. Traction-free at

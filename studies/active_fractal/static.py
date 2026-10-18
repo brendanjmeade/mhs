@@ -173,6 +173,93 @@ def solve(P: np.ndarray, d: np.ndarray, g: np.ndarray, lam: float, *,
     return Solution(delta, lam, max_sweeps, res, False, order.size)
 
 
+#: Active-set Newton iterations before a solve is declared non-convergent.
+#: Measured: a few on a penny crack, tens on the on-fault page's system.
+MAX_NEWTON = 200
+
+
+def solve_newton(P: np.ndarray, d: np.ndarray, g: np.ndarray, lam: float, *,
+                 include: np.ndarray | None = None,
+                 warm: np.ndarray | None = None,
+                 tol: float = TOL, max_iter: int = MAX_NEWTON,
+                 verbose: bool = False) -> Solution:
+    """The same LCP as :func:`solve`, by an ACTIVE-SET NEWTON method.
+
+    WHY A SECOND SOLVER. Projected Gauss-Seidel is guaranteed to converge
+    when ``sym(-P)`` is positive definite and nothing promises it otherwise;
+    on the continuous-P2 operator of the on-fault page's system (14k nodes,
+    a/h = 24, eps = 0.1 h) that symmetric part has eigenvalues down to -52
+    -- the nodes within 2 eps of the free surface, and the body modes of a
+    large rough fault at that eps/h (``onfault.EPS_CONTINUOUS``) -- and PGS
+    overflows within a few hundred sweeps. The LCP's
+    uniqueness needs ``-P^T`` to be a P-matrix, a weaker thing than a
+    definite symmetric part, and this method needs no definiteness at all:
+    it guesses the active set, solves the LINEAR system on it exactly, moves
+    every node that violates a complementarity condition to the other set,
+    and repeats. On a P-matrix each guess is corrected toward the unique
+    answer; measured, it takes a few iterations on a penny crack and agrees
+    with PGS to the solver tolerance wherever PGS converges (selfcheck
+    [nodal]).
+
+    Each iteration is one dense solve on the active block, O(n_active^3):
+    seconds at 10k unknowns with a threaded BLAS, which PGS's hundreds of
+    sweeps of O(n^2) also cost. ``include`` and ``warm`` mean what they mean
+    in :func:`solve`; the starting active set is the warm start's, else the
+    nodes the load alone drives past strength.
+
+    CYCLING is the one failure mode of block pivoting: a swap that undoes
+    the previous one. It is detected (the active set repeats) and the
+    method then moves only the single worst violator per iteration, which
+    is Murty's least-index rule in spirit and cannot cycle on a P-matrix.
+    """
+    n = P.shape[0]
+    free = np.ones(n, bool) if include is None else np.asarray(include, bool)
+    q = g - lam * d                            # w = q - P^T delta
+    if warm is not None:
+        S = (np.asarray(warm, float) > 0.0) & free
+    else:
+        S = (q < 0.0) & free
+    delta = np.zeros(n)
+    seen: set[bytes] = set()
+    single = False
+    scale = float(np.abs(q[free]).max()) if free.any() else 1.0
+    for it in range(1, max_iter + 1):
+        idx = np.flatnonzero(S)
+        delta[:] = 0.0
+        if idx.size:
+            M = -P[np.ix_(idx, idx)].T          # (-P^T) on the active block
+            delta[idx] = np.linalg.solve(M, -q[idx])
+        w = q - P.T @ delta
+        viol_d = S & (delta < -tol)             # slipping backwards
+        viol_w = free & ~S & (w < -tol)         # locked but past strength
+        res = float(np.abs(np.minimum(delta[free], w[free])).max()) \
+            if free.any() else 0.0
+        if verbose and (it <= 3 or it % 10 == 0):
+            print(f"      newton {it:4d}  residual {res:.3e}  active "
+                  f"{int(S.sum())}  swaps {int(viol_d.sum())}+"
+                  f"{int(viol_w.sum())}")
+        if res <= tol or not (viol_d.any() or viol_w.any()):
+            np.maximum(delta, 0.0, out=delta)
+            return Solution(delta, lam, it, res, res <= tol, int(free.sum()))
+        key = S.tobytes()
+        if key in seen:
+            single = True
+        seen.add(key)
+        if single:
+            # the single worst violator, in units of the problem's scale
+            cand_d = np.where(viol_d, -delta, -np.inf)
+            cand_w = np.where(viol_w, -w / scale * float(np.abs(delta).max()
+                                                        or 1.0), -np.inf)
+            if cand_d.max() >= cand_w.max():
+                S[int(np.argmax(cand_d))] = False
+            else:
+                S[int(np.argmax(cand_w))] = True
+        else:
+            S = (S & ~viol_d) | viol_w
+    np.maximum(delta, 0.0, out=delta)
+    return Solution(delta, lam, max_iter, res, False, int(free.sum()))
+
+
 def released_energy(P: np.ndarray, delta: np.ndarray,
                     areas: np.ndarray) -> float:
     """Energy released from the elastic field, net of frictional dissipation.

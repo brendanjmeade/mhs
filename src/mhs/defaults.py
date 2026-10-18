@@ -80,3 +80,69 @@ IMAGE_Q_BLOCK_BYTES = 64 << 20
 #: term instead of letting it scale with the worker count -- with one chunk per
 #: worker it would be the whole output a second time.
 PARALLEL_INFLIGHT_BYTES = 512 << 20
+
+# ---------------------------------------------------------- shared nodes ----
+#: Weld tolerance for the continuous layout's shared-node table, as a fraction
+#: of the mesh's shortest edge. A tiling reaches one geometric vertex by
+#: different arithmetic paths (``i*h + h`` against ``(i+1)*h``), so the last
+#: bits differ and an exact comparison is simply wrong; the welded count is
+#: the same at 1e-12, 1e-9 and 1e-6 h on a lattice disc, so the value is not
+#: delicate. 1e-9 is far under any mesh feature and far over round-off.
+WELD_TOL_OVER_H = 1.0e-9
+
+# ------------------------------------------------------------------ fold ----
+#: THE FOLD. mhs's image is Mindlin's, "lifted" to the smeared source (S -> S
+#: + eps^2 under the non-integer powers), which is right to O(eps^2) for a
+#: BURIED source. A source whose smeared slip reaches above z = 0 is a
+#: different problem: continued above the surface, the lifted formula puts
+#: its image point and its Boussinesq branch line INSIDE the body, O(1/eps)
+#: within eps of the trace. The regularised problem must instead take the
+#: smeared slip FOLDED back into the body (the part above z = 0 replaced by
+#: its mirror image: mass-preserving, the even extension, exact in antiplane
+#: strain). Its image is the mirror element's own full-space field plus the
+#: Boussinesq field of the normal traction the symmetric pair leaves on z = 0
+#: (``mhs.kernels.fold``). A source is folded when its shallowest vertex is
+#: within this many eps of the surface: beyond 3 eps the blob's algebraic
+#: tails carry (eps/depth)^4 of its mass above z = 0 and the lift's error is
+#: O(eps^2/depth^2) -- measured 1.9e-2 of the image at 12 eps, 1.6e-3 at 40.
+FOLD_SOURCE_DEPTH_EPS = 3.0
+#: Receivers deeper than this many eps keep the lift for a folded source.
+#: Measured on a vertical strike-slip fault against the antiplane solution at
+#: eps = 0.1 h: folding only receivers within 10 eps (one element height)
+#: gives the same slip as folding every receiver -- collocation 0.977-0.980,
+#: Galerkin 0.984-0.987 of exact -- because the lift's far-field error is
+#: O(eps/D) on an entry that is itself O(1/D^2).
+FOLD_BAND_DEPTH_EPS = 10.0
+#: ... and so do receivers whose surface projection lies farther than this
+#: many eps from the source's crease (the correction there is O(eps/D) of a
+#: 1/D^2 entry: 1e-4 of the row at 60 eps, measured on fault B of the
+#: on-fault study at 1.5 km = 60 eps).
+FOLD_REACH_EPS = 60.0
+#: The Boussinesq term is a surface integral of the pair's normal traction
+#: against the point-load stress, on a polar grid centred under the receiver:
+#: geometric radial panels from eps/2 (plus breakpoints at the receiver's own
+#: depth when that is under eps/2, where the kernel's width is the depth),
+#: Gauss points per panel below; the singular part is subtracted at the
+#: receiver's foot point and restored by Love's closed-form uniform-disk field.
+FOLD_N_RADIAL = 6
+FOLD_N_ANGULAR = 4
+#: The source's sharp surface features -- the smeared crease line along its
+#: surface edge (a line of vertical Burgers vector, 1/rho for rho > eps) and
+#: its surface vertices -- lie in the disk around its surface vertices of
+#: radius (their spread) + this many eps.
+FOLD_CREASE_MARGIN_EPS = 5.0
+#: Angular spacing, in eps, where the circle crosses that disk (the crease
+#: profile has width eps) ...
+FOLD_FINE_SPACING_EPS = 0.25
+#: ... and in the flanks out to four disk radii, where the crease field decays
+#: as 1/rho; FOLD_N_COARSE points around the rest of the circle.
+FOLD_MEDIUM_SPACING_EPS = 2.0
+FOLD_N_COARSE = 24
+#: Radial sub-panel widths, in eps, across the crease annulus and its flanks.
+FOLD_FINE_SUBPANEL_EPS = 6.0
+FOLD_MEDIUM_SUBPANEL_EPS = 16.0
+#: The grid ends at R1 = (distance to the crease) + 4 (disk radius) + this
+#: many source diameters, beyond which the pair's surface load is < 0.2 % of
+#: its near value (it decays as 1/R^3). Doubling the whole grid moves a
+#: straddling element's correction by 5.5e-3.
+FOLD_R1_MARGIN_DIAM = 8.0

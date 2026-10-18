@@ -73,7 +73,22 @@ def slip_frame(tris: np.ndarray) -> np.ndarray:
     Cartesian vector, and ``frame[s].T @ v_sdt`` goes the other way -- the rows
     are orthonormal, so the transpose IS the inverse and no solve is needed.
     """
-    n = unit_normals(tris)
+    return frame_from_normals(unit_normals(tris))
+
+
+def frame_from_normals(normals: np.ndarray) -> np.ndarray:
+    """The same frame on a given set of UPWARD unit normals, ``(n, 3, 3)``.
+
+    What :func:`slip_frame` is built from, exposed because the continuous
+    layout's nodes have normals but no element of their own: a shared node's
+    frame is this recipe on its area-weighted normal, so the one convention
+    serves both layouts. The normals must already point up (``n_z >= 0``)
+    and be unit; they are not flipped or rescaled here.
+    """
+    n = np.asarray(normals, float).reshape(-1, 3)
+    if np.any(n[:, 2] < 0.0):
+        raise ValueError("frame_from_normals takes UPWARD normals (n_z >= 0); "
+                         "use unit_normals for a mesh's")
     strike = np.stack([-n[:, 1], n[:, 0], np.zeros(len(n))], axis=1)
     mag = np.linalg.norm(strike, axis=1, keepdims=True)
     flat = mag[:, 0] <= FLAT_TOL

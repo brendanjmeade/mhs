@@ -14,6 +14,11 @@ fault**, because the eigenstress ``C:eps*`` that every mollified double layer
 carries is subtracted in the readout. ``stress_matrix`` returns the elastic
 stress by default for that reason.
 
+A source that reaches the free surface is folded back into the body
+(``mhs.kernels.fold``): the lifted Mindlin image is for buried sources, and
+a surface-breaking fault's top row gets its mirror element plus a Boussinesq
+term instead, at the receivers within a band below the surface.
+
 Import is deliberately cheap -- numpy and numba only, no sympy -- and a gate
 enforces it.
 
@@ -28,9 +33,15 @@ cannot be allocated at production size:
 
     K = mhs.interaction_matrix(tris, mat, eps=0.1,
                                receiver="strike", source="strike")   # (n, n)
+
+and the same with ``order=2, layout="continuous"`` for a slip that is
+continuous across the elements, collocated at the shared nodes, which is what
+makes the on-fault stress converge rather than floor at the P0 staircase
+(``mhs.shared``).
 """
 from . import chunking, defaults, parallel, tdcs
 from .materials import Material
+from .shared import SharedNodes, shared_nodes
 from .matrices import (
     collocation_points,
     disp_matrix,
@@ -52,6 +63,8 @@ __all__ = [
     "eigenstress_matrix",
     "elastic_strain_matrix",
     "collocation_points",
+    "shared_nodes",
+    "SharedNodes",
     "chunking",
     "defaults",
     "parallel",

@@ -208,8 +208,9 @@ def rotate_about_vertical(sigma: np.ndarray, deg: float) -> np.ndarray:
     return R @ np.asarray(sigma, float) @ R.T
 
 
-def resolve_tensor(tris: np.ndarray,
-                   sigma: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def resolve_tensor(tris: np.ndarray, sigma: np.ndarray, *,
+                   planes: np.ndarray | None = None
+                   ) -> tuple[np.ndarray, np.ndarray]:
     """Resolve a stress tensor onto every element's own frame.
 
     Returns ``(tau, sigma_n)`` with ``tau`` shaped ``(n, 2)`` -- the shear
@@ -221,8 +222,13 @@ def resolve_tensor(tris: np.ndarray,
     and the sibling project's only ``resolved_shear`` is a one-liner in a figure
     module with no normal component. Written once, here, and used by both
     friction variants so the convention cannot be restated differently twice.
+
+    ``planes`` ``(n, 3)`` upward unit normals resolve onto those planes
+    instead of the elements' -- the continuous layout's nodes, whose frame
+    is the same recipe on the node normal (``tdcs.frame_from_normals``).
     """
-    frame = tdcs.slip_frame(tris)            # rows [strike, dip, tensile]
+    frame = (tdcs.slip_frame(tris) if planes is None
+             else tdcs.frame_from_normals(planes))   # rows [strike, dip, tensile]
     n_hat = frame[:, 2, :]
     t = np.einsum("ij,sj->si", np.asarray(sigma, float), n_hat)
     tau = np.stack([np.einsum("si,si->s", t, frame[:, 0, :]),
@@ -231,14 +237,17 @@ def resolve_tensor(tris: np.ndarray,
 
 
 def slip_cartesian(tris: np.ndarray, slip_dir: np.ndarray,
-                   slip: np.ndarray) -> np.ndarray:
+                   slip: np.ndarray, *,
+                   planes: np.ndarray | None = None) -> np.ndarray:
     """``(n, 3)`` slip as a Cartesian vector, from ``(strike, dip)`` parts.
 
     The inverse of what :func:`resolve_tensor` does to a traction, and needed
     wherever a solved slip has to leave the per-element frame -- evaluating
-    the field it radiates, for instance.
+    the field it radiates, for instance. ``planes`` as in
+    :func:`resolve_tensor`: the nodes' frames rather than the elements'.
     """
-    frame = tdcs.slip_frame(np.asarray(tris, float).reshape(-1, 3, 3))
+    frame = (tdcs.slip_frame(np.asarray(tris, float).reshape(-1, 3, 3))
+             if planes is None else tdcs.frame_from_normals(planes))
     d = np.asarray(slip, float)[:, None]
     sd = np.asarray(slip_dir, float)
     return d * (sd[:, 0:1] * frame[:, 0, :] + sd[:, 1:2] * frame[:, 1, :])
@@ -385,8 +394,15 @@ def build_friction(net, *, regime: str = "strike_slip",
                    pore_ratio: float = RHO_W_G / RHO_G,
                    mean_stress_ratio: float = 0.0,
                    azimuth_deg: float = 0.0,
-                   seed: int = 0) -> Friction:
+                   seed: int = 0, nodes=None) -> Friction:
     """Strength and resolved load for a network.
+
+    ``nodes`` -- an ``mhs.SharedNodes`` table of ``net.tris`` -- builds the
+    same thing AT THE NODES of the continuous layout: the load resolved on
+    each node's own plane, the strength from its depth, ``per_fault``
+    friction from the group it was welded in. Every array is then one per
+    node rather than one per element, and nothing downstream changes, since
+    the LCP never asks what an unknown is.
 
     ``mu_mode``:
       ``uniform``    one coefficient everywhere -- the control.
@@ -403,7 +419,10 @@ def build_friction(net, *, regime: str = "strike_slip",
     own centroid depth.
     """
     tris = net.tris
-    n = tris.shape[0]
+    planes = None if nodes is None else nodes.normals
+    points = tris.mean(axis=1) if nodes is None else nodes.coords
+    fault_id = net.fault_id if nodes is None else nodes.group
+    n = points.shape[0]
     rng = np.random.default_rng(seed)
 
     if not (0.0 < drop_ratio < 1.0):
@@ -421,7 +440,8 @@ def build_friction(net, *, regime: str = "strike_slip",
             f"negative value would make the loading path REDUCE the mean "
             f"stress, driving every plane toward tension at once.")
     tau_load, sigma_n_load = resolve_tensor(
-        tris, rotate_about_vertical(LOAD_TENSORS[regime], azimuth_deg))
+        tris, rotate_about_vertical(LOAD_TENSORS[regime], azimuth_deg),
+        planes=planes)
     # The isotropic part of the loading path. It resolves the same normal
     # stress onto every plane and no shear onto any, so folding it in here
     # leaves every downstream formula untouched. See the module docstring.
@@ -432,7 +452,7 @@ def build_friction(net, *, regime: str = "strike_slip",
     elif mu_mode == "per_fault":
         per = np.clip(rng.normal(mu_mean, mu_spread * mu_mean, net.n_faults),
                       0.05, 2.0)
-        mu = per[net.fault_id]
+        mu = per[fault_id]
     elif mu_mode == "per_element":
         mu = np.clip(rng.normal(mu_mean, mu_spread * mu_mean, n), 0.05, 2.0)
     else:
@@ -442,7 +462,7 @@ def build_friction(net, *, regime: str = "strike_slip",
     if sigma_n_mode == "uniform":
         sig0 = np.full(n, float(sigma_eff))
     elif sigma_n_mode == "lithostatic":
-        depth = np.abs(tris.mean(axis=1)[:, 2])
+        depth = np.abs(points[:, 2])
         sig0 = RHO_G * depth * (1.0 - float(pore_ratio))
     else:
         raise ValueError(f"sigma_n_mode must be 'uniform' or 'lithostatic', "
@@ -468,6 +488,7 @@ def build_friction(net, *, regime: str = "strike_slip",
             "sigma_n_mode": sigma_n_mode,
             "sigma_eff_GPa": sigma_eff, "pore_ratio": pore_ratio,
             "seed": seed, "n_elements": n,
+            "unknowns": "elements" if nodes is None else "shared nodes",
             "mu_range": [float(mu.min()), float(mu.max())],
             "sigma_eff_range_GPa": [float(sig0.min()), float(sig0.max())],
             "tau_load_mag_range": [float(mag.min()), float(mag.max())],

@@ -1,9 +1,22 @@
 """On-fault stress on a system of three surface-breaking rough faults, one
-value per element, both kernels, for the site.
+value per element, three kernels, for the site.
 
     python onfault.py solve   [--out out/onfault_state.npz] [--workers 12]
     python onfault.py field   --state out/onfault_state.npz [--k 1] [--probe]
     python onfault.py payload --field out/onfault_field.npz
+
+THE THIRD KERNEL is the mollified one again, with CONTINUOUS quadratic slip
+(``nodal``): one slip vector per shared node of each fault, C0 across every
+edge, the condition enforced AT the nodes and the rim held at zero. Its
+per-element maps are read at the centroids from the nodal slip -- a readout
+between collocation points, which is exactly what the staircase of a P0 slip
+cannot do and a continuous one can -- and its per-element slip is the mean of
+the nodal slip over the element. The same friction (resolved on each node's
+own plane), the same load, the same LCP -- solved by ``static.solve_newton``
+rather than by projected Gauss-Seidel, which diverges on this operator: its
+symmetric part is indefinite on this system (37 negative modes at eps =
+0.1 h, four at 0.2 h, against +4.8 on the selfcheck's a/h = 8 discs; where
+they live is measured under ``EPS_CONTINUOUS``).
 
 THE SYSTEM. Three rough discs cut by the free surface, meshed by ``system``:
 rims sampled on the circle, traces exactly on z = 0, and C a splay whose
@@ -27,11 +40,14 @@ a dense readout between the centroids (the page shipped one at k = 10 until
 2026-10-16; the machinery and the edge-distance byte are kept for it), and
 k = 1 is the facet itself with its sample at the centroid.
 
-THREE COMMANDS, for the reason roughvol.py gives: a second spawn pool raised
-after the first has closed deadlocks on this machine. ``solve`` runs the
-assembly pool and saves; ``field`` runs the readout pool and saves; ``payload``
-only reads. The probe runs each pool configuration in a subprocess of its own
-for the same reason.
+ONE SPAWN POOL PER PROCESS, for the reason roughvol.py gives: a second spawn
+pool raised after the first has closed deadlocks on this machine. ``solve``
+runs the P0 assembly pool and saves, and the nodal matrix is assembled by
+``onfault.py assemble`` in a subprocess of its own (cached beside the P0 one,
+so a second ``solve`` finds it); ``field`` runs each pool pass -- the P0
+readout and the nodal one -- in a subprocess (``--pass``) and merges them;
+``payload`` only reads. The probe runs each pool configuration in a
+subprocess for the same reason.
 
 THE READOUT POOL IS PINNED IN THE PARENT, before the children import numpy.
 OpenBLAS here is the OpenMP build at 16 threads, and libomp reads its thread
@@ -63,6 +79,7 @@ import cascade as C                                          # noqa: E402
 import friction as Fr                                        # noqa: E402
 import kernel as K                                           # noqa: E402
 import network                                               # noqa: E402
+import nodal as Nd                                           # noqa: E402
 import roughvol as R                                         # noqa: E402
 import static as St                                          # noqa: E402
 import system as Sy                                          # noqa: E402
@@ -73,7 +90,7 @@ EPS = 0.1 * H_KM
 SLOPE = R.SLOPE
 CORR_KM = R.CORR_OVER_H * R.H_KM # the published correlation length, in km (4)
 REGIME, DROP_RATIO, MEAN_STRESS = R.REGIME, R.DROP_RATIO, R.MEAN_STRESS
-SCHEMA = 2
+SCHEMA = 3
 
 #: The system. Every fault strikes along y and dips toward +x, with no
 #: azimuth because the thrust load ``diag(-1, 0, 1)`` compresses along x and
@@ -130,7 +147,53 @@ CHUNK_CUTDE = 2000
 
 METRICS = ("S", "dsn", "dts")
 EDGE_STEP = 0.02                 # eps per byte of the shipped edge distance
-KERNELS = ("mollified", "classical")
+KERNELS = ("mollified", "classical", "continuous")
+#: The passes of ``field`` that need a pool of their own.
+POOL_PASSES = ("mollified", "continuous")
+
+#: The continuous kernel's mollification width, TWICE the P0 kernels'.
+#: Measured on this system at eps = 0.1 h: the nodal operator's symmetric part
+#: has 37 negative eigenvalues out of 13,940 (fault A alone -13, B -34, C
+#: -52, against a median of +240), smooth modes (vertex and midpoint values
+#: correlate +0.99) of two kinds. Dropping the 207 nodes within 2 eps of the
+#: free surface leaves 14: that band is a smeared source straddling z = 0,
+#: the effect that makes the trace nodes too soft (B's band alone has 4
+#: modes at -19 while its 43 trace nodes alone are definite at +17). The 14
+#: that remain are broad body modes on each fault alone below 4 eps (A 6,
+#: B 3, C 2, down to -13, spread over thousands of nodes), the small-eps/h
+#: collocation asymmetry the full-space work found above a/h = 16. The
+#: Coulomb LCP on it has no stable solution: projected Gauss-Seidel overflows
+#: and the active-set Newton method thrashes with thousands of swaps per
+#: iteration. At eps = 0.2 h the body modes are gone (every fault alone is
+#: definite below 4 eps) and four remain: three on C's nodes within 2 eps of
+#: the surface (-6.6, -3.8, -0.4) and one long-wavelength mode spanning A
+#: and C at -0.85 of a median +128 -- the kind the P0 operators carry on this
+#: system too (mollified -1.2, classical -2.5 of +200, one mode each, and
+#: PGS converges on them regardless). The Newton solve converges in six
+#: iterations. The price is the readout's: the nodal readout error is
+#: 1.7 eps/a, so at this eps it is the P0 centroid readout's size on A, while
+#: the staircase between the collocation points is gone either way
+#: (selfcheck [nodal]). The trace nodes are the other price: a node ON the
+#: free surface reads its own smeared slip, half of it above z = 0, and is too
+#: SOFT (B's trace nodes slip 2.1 m in the median against 0.85 in the row
+#: below and 0.94 for the classical trace row) where the P0 row 2.5 eps below
+#: the surface is too stiff.
+#: MEASURED AFTERWARDS on fault B alone (``nodal`` docstring): the too-soft
+#: trace is the mollified half-space kernel's O(1) error within ~eps of the
+#: free surface for a blob straddling it, which no form of the continuous
+#: layout escapes (the energy form has it with the opposite sign, its trace
+#: at half the row below), and it is not local: it moves the moment of the
+#: whole fault by ~20 % (B alone: this kernel 1.07 of classical P0 at 0.2 h,
+#: the energy form 0.82 at 0.1 h, and every form within 3 % of classical
+#: once the same fault is buried 3 km). The P0 centroid, 2.5 eps deep, feels
+#: it only as O(eps/depth), so the P0 kernels converge to classical and the
+#: continuous layout does not until the kernel folds the part of the
+#: smeared source above z = 0 back into the body (the mirror image plus a
+#: Boussinesq surface term, now the kernel's default, ``mhs.kernels.fold``;
+#: measured: the vertical strike-slip reference from 5x to 0.98 of exact,
+#: B's Galerkin moment from 0.82 to 1.01 of classical -- ``nodal``
+#: docstring). The page's numbers quoted here predate it; a rerun folds.
+EPS_CONTINUOUS = 0.2 * H_KM
 
 _W: dict = {}
 
@@ -244,6 +307,30 @@ def operators(Kmat: np.ndarray, fric) -> dict:
                 B=float(K.branching_ratio(P).mean()))
 
 
+def nodal_matrix(net, workers: int, *, verbose: bool = True):
+    """The continuous matrix from the cache, assembled in a SUBPROCESS when
+    it is not there yet: ``solve`` already owns this process's one pool."""
+    sn = Nd.table(net)
+    key = Nd.cache_key(net.tris, net.fault_id, MU, LAM, EPS_CONTINUOUS)
+    cache = pathlib.Path(__file__).resolve().parent / "cache"
+    if not (cache / f"N_{key}.npy").exists():
+        if verbose:
+            print(f"  nodal matrix: assembling in a subprocess on {workers} "
+                  f"workers ({sn.n} nodes, eps {EPS_CONTINUOUS} km)", flush=True)
+        subprocess.run([sys.executable, __file__, "assemble", "--workers",
+                        str(workers)], check=True)
+    return Nd.assemble(net, sn, mu=MU, lam=LAM, eps=EPS_CONTINUOUS,
+                       workers=workers, verbose=verbose)
+
+
+def cmd_assemble(a) -> int:
+    """The nodal matrix into the cache, in its own process (its own pool)."""
+    _, net = build()
+    Nd.assemble(net, mu=MU, lam=LAM, eps=EPS_CONTINUOUS, workers=a.workers,
+                verbose=True)
+    return 0
+
+
 def fractions(delta: np.ndarray, fault_id: np.ndarray) -> np.ndarray:
     return np.array([float((delta[fault_id == i] > 0).mean())
                      for i in range(fault_id.max() + 1)])
@@ -267,28 +354,52 @@ def cmd_solve(a) -> int:
 
     fric = Fr.build_friction(net, regime=REGIME, drop_ratio=DROP_RATIO,
                              mean_stress_ratio=MEAN_STRESS)
+    # the nodal matrix first, in its own process, before this one's pool
+    t0 = time.time()
+    Kn, sn, _ = nodal_matrix(net, a.workers)
+    tn = time.time() - t0
+    free = Nd.free_mask(sn)
+    fric_n = Fr.build_friction(net, regime=REGIME, drop_ratio=DROP_RATIO,
+                               mean_stress_ratio=MEAN_STRESS, nodes=sn)
+    print(f"  continuous: {sn.n} nodes on {n} elements, {int(sn.front.sum())} "
+          f"on the fronts (locked), {int(sn.trace.sum())} on the traces (free), "
+          f"eps {EPS_CONTINUOUS} km")
     t0 = time.time()
     Km, info = K.assemble(net, mu=MU, lam=LAM, workers=a.workers, verbose=True)
     t1 = time.time()
     Kc = classical_matrix(net.tris)
     print(f"  classical matrix in {time.time() - t1:.1f} s "
-          f"(mollified {t1 - t0:.1f} s); both diagonals negative")
-    ops = {"mollified": operators(Km, fric), "classical": operators(Kc, fric)}
-    del Km, Kc
+          f"(mollified {t1 - t0:.1f} s, continuous {tn:.1f} s); all "
+          f"diagonals negative")
+    ops = {"mollified": operators(Km, fric), "classical": operators(Kc, fric),
+           "continuous": Nd.operators(Kn, fric_n, free)}
+    del Km, Kc, Kn
     for k in KERNELS:
-        print(f"    {k:9s} min eig sym(-P_eff) {ops[k]['mineig']:+.4f}  "
-              f"B {ops[k]['B']:.4f}")
+        print(f"    {k:10s} min eig sym(-P_eff) {ops[k]['mineig']:+.4f}  "
+              f"B {ops[k]['B']:.4f}"
+              + (f"  (uncoupled {ops[k]['mineig_uncoupled']:+.4f}, on the free "
+                 f"nodes)" if k == "continuous" else ""))
 
-    # Coupled unless the coupling costs definiteness for EITHER kernel; then
-    # both fall back to the uncoupled form, so that whatever S means, it means
-    # the same thing in both maps.
+    # Coupled unless the coupling costs definiteness for ANY kernel; then all
+    # fall back to the uncoupled form, so that whatever S means, it means the
+    # same thing in every map.
     coupled = all(ops[k]["mineig"] > 0.0 for k in KERNELS)
     if not coupled:
         print("  coupling loses positive definiteness: falling back to the "
-              "uncoupled LCP for both kernels")
-        d, g, _ = C.coefficients(fric)
-        for k in KERNELS:
+              "uncoupled LCP for every kernel")
+        for k, fr in (("mollified", fric), ("classical", fric),
+                      ("continuous", fric_n)):
+            d, g, _ = C.coefficients(fr)
             ops[k]["P_eff"], ops[k]["d"], ops[k]["g"] = ops[k]["P"], d, g
+    include = {"mollified": None, "classical": None, "continuous": free}
+    # The nodal operator's symmetric part is indefinite on this system (the
+    # near-surface band and, at eps = 0.1 h, the body modes of each fault --
+    # see EPS_CONTINUOUS) and projected Gauss-Seidel diverges on it; the
+    # active-set Newton method needs no
+    # definiteness and agrees with PGS wherever PGS converges (selfcheck
+    # [nodal]). The P0 kernels keep PGS, so their maps are the published ones.
+    solver = {"mollified": St.solve, "classical": St.solve,
+              "continuous": St.solve_newton}
 
     # The load, by rule. Walked on the mollified operator and then applied to
     # the classical one unchanged.
@@ -319,48 +430,78 @@ def cmd_solve(a) -> int:
                          f"{fric.max_lambda_compressive()}")
     print(f"  lam = {chosen:.2f} lam0 = {lam:.5f} GPa (lam0 {lam0:.5f})")
 
-    # Both kernels at the one load, plus each fault ALONE on the same matrix:
+    # Every kernel at the one load, plus each fault ALONE on the same matrix:
     # the interaction pre-flight, in seconds, before the hours.
     state: dict = dict(tris=net.tris, fault_id=fid, lam=lam, lam0=lam0,
                        ladder=json.dumps(ladder), coupled=coupled, eps=EPS,
                        h=H_KM, mu=fric.mu, sigma_eff_0=fric.sigma_eff_0,
                        tau_load_mag=fric.tau_load_mag,
                        sigma_n_load=fric.sigma_n_load, slip_dir=fric.slip_dir,
-                       meta=json.dumps(net.meta, default=str))
+                       meta=json.dumps(net.meta, default=str),
+                       eps_continuous=EPS_CONTINUOUS,
+                       node_coords=sn.coords, node_group=sn.group,
+                       node_free=free, node_ids=sn.ids,
+                       node_tau_load_mag=fric_n.tau_load_mag,
+                       node_sigma_n_load=fric_n.sigma_n_load,
+                       node_slip_dir=fric_n.slip_dir)
     table = {}
+    areas = net.areas()
     for k in KERNELS:
         o = ops[k]
-        sol = St.solve(o["P_eff"], o["d"], o["g"], lam)
+        nodal = k == "continuous"
+        inc = include[k]
+        sol = solver[k](o["P_eff"], o["d"], o["g"], lam, include=inc)
         if not sol.converged:
             raise SystemExit(f"{k}: the LCP did not converge in {sol.sweeps}")
         w = o["g"] - (lam * o["d"] + o["P_eff"].T @ sol.delta)
-        slip = Fr.slip_cartesian(net.tris, fric.slip_dir, sol.delta)
-        areas = net.areas()
+        if nodal:
+            slip_nodes = Fr.slip_cartesian(net.tris, fric_n.slip_dir, sol.delta,
+                                           planes=sn.normals)
+            slip = sn.element_mean(slip_nodes)              # one per ELEMENT
+            delta_el = sn.element_mean(sol.delta)
+            active_el = delta_el > 0.0
+            weight = sn.weights * sol.delta
+            group = sn.group
+        else:
+            slip = Fr.slip_cartesian(net.tris, fric.slip_dir, sol.delta)
+            delta_el, active_el = sol.delta, sol.active
+            weight = areas * sol.delta
+            group = fid
         rows = []
         for i, f in enumerate(FAULTS):
             m = fid == i
-            alone = St.solve(o["P_eff"], o["d"], o["g"], lam, include=m)
+            mg = group == i
+            alone = solver[k](o["P_eff"], o["d"], o["g"], lam,
+                              include=mg if inc is None else (mg & inc))
             others = sol.delta.copy()
-            others[m] = 0.0
-            shadow = float((o["P_eff"].T @ others)[m].mean())
-            mom_sys = float((sol.delta[m] * areas[m]).sum())
-            mom_alone = float((alone.delta[m] * areas[m]).sum())
+            others[mg] = 0.0
+            on = mg if inc is None else (mg & inc)
+            shadow = float((o["P_eff"].T @ others)[on].mean())
+            mom_sys = float(weight[mg].sum())
+            w_alone = (sn.weights * alone.delta if nodal else areas * alone.delta)
+            mom_alone = float(w_alone[mg].sum())
             rows.append(dict(
-                name=f["name"], active_alone=float((alone.delta[m] > 0).mean()),
-                active_system=float((sol.delta[m] > 0).mean()),
+                name=f["name"],
+                active_alone=float(((sn.element_mean(alone.delta) if nodal
+                                     else alone.delta)[m] > 0).mean()),
+                active_system=float(active_el[m].mean()),
                 moment_ratio=(mom_sys / mom_alone if mom_alone > 0 else
                               float("inf") if mom_sys > 0 else 1.0),
-                shadow_GPa=shadow, max_slip_m=float(sol.delta[m].max() * 1e3)))
-            print(f"    {k:9s} {f['name']}: active alone {rows[-1]['active_alone']:.2f}"
+                shadow_GPa=shadow, max_slip_m=float(sol.delta[mg].max() * 1e3)))
+            print(f"    {k:10s} {f['name']}: active alone {rows[-1]['active_alone']:.2f}"
                   f" -> system {rows[-1]['active_system']:.2f}, moment x"
                   f"{rows[-1]['moment_ratio']:.3f}, shadow "
                   f"{shadow * 1e3:+.2f} MPa, max slip "
                   f"{rows[-1]['max_slip_m']:.3f} m")
         table[k] = rows
         state.update({f"delta_{k}": sol.delta, f"w_{k}": w, f"slip_{k}": slip,
-                      f"active_{k}": sol.active, f"mineig_{k}": o["mineig"],
+                      f"active_{k}": active_el, f"mineig_{k}": o["mineig"],
                       f"B_{k}": o["B"], f"sweeps_{k}": sol.sweeps,
                       f"residual_{k}": sol.residual})
+        if nodal:
+            state.update(slip_continuous_nodes=slip_nodes,
+                         active_continuous_nodes=sol.active,
+                         mineig_continuous_uncoupled=o["mineig_uncoupled"])
     moved = any(abs(r["active_system"] - r["active_alone"]) >= 0.05
                 or abs(r["moment_ratio"] - 1.0) >= 0.10
                 for r in table["mollified"][1:])
@@ -586,6 +727,19 @@ def probe_run(z, c, cfg: str) -> int:
     return 0
 
 
+def field_pass(name: str, z: dict, c: dict, tris: np.ndarray, workers: int,
+               sn=None) -> np.ndarray:
+    """One kernel's traction on every cell: the pool pass of ``field``."""
+    if name == "mollified":
+        return mollified_traction(c["pts"], c["nrm"], tris, z["slip_mollified"],
+                                  workers)
+    if name == "continuous":
+        return Nd.traction(c["pts"], c["nrm"], tris, sn,
+                           z["slip_continuous_nodes"], workers,
+                           eps=float(z["eps_continuous"]), mu=MU, lam=LAM)
+    raise ValueError(name)
+
+
 def cmd_field(a) -> int:
     z = dict(np.load(a.state, allow_pickle=False))
     _, net = build()
@@ -598,6 +752,13 @@ def cmd_field(a) -> int:
     npt, nsrc = c["pts"].shape[0], tris.shape[0]
     if a.probe_run:
         return probe_run(z, c, a.probe_run)
+    if a.pass_:
+        # one pool pass in a process of its own; the parent merges it
+        sn = Nd.table(net) if a.pass_ == "continuous" else None
+        t = field_pass(a.pass_, z, c, tris, a.workers, sn)
+        np.savez_compressed(a.out, **{f"t_{a.pass_}": t}, k=a.k, tris=tris)
+        print(f"  pass {a.pass_}: saved {a.out}")
+        return 0
     print(f"  k = {a.k}: {a.k * a.k} cells per facet, {npt} cells x {nsrc} "
           f"sources = {npt * nsrc / 1e6:.1f} M pairs; nearest cell to an edge "
           f"{c['edge_eps'].min():.3f} eps; {'coupled' if coupled else 'uncoupled'}"
@@ -611,35 +772,46 @@ def cmd_field(a) -> int:
             edge_eps=c["edge_eps"], area=c["area"], facet_area=c["facet_area"],
             pts=c["pts"], lam=z["lam"], coupled=coupled, state=str(a.state),
             **extra)
-        print(f"  saved {a.out}" + (" (mollified only, classical to come)"
+        print(f"  saved {a.out}" + (" (pool passes only, classical to come)"
                                     if "t_classical" not in extra else ""))
 
     # Banked before the cheap pass is attempted, and reloaded when the cells
-    # match: the lesson of isosurf's lost 2.2 h.
-    done = None
+    # match: the lesson of isosurf's lost 2.2 h. Each pool pass runs in a
+    # subprocess of its own and is merged here.
+    banked: dict = {}
     if pathlib.Path(a.out).exists():
         with np.load(a.out, allow_pickle=False) as z0:
-            if (int(z0["k"]) == a.k and np.array_equal(z0["tris"], tris)
-                    and "t_mollified" in z0
-                    and z0["t_mollified"].shape == (npt, 3)):
-                done = z0["t_mollified"]
-                print(f"  reusing the mollified pass already in {a.out}")
-    t_m = done if done is not None else mollified_traction(
-        c["pts"], c["nrm"], tris, z["slip_mollified"], a.workers)
-    if done is None:
-        save(t_mollified=t_m)
+            if int(z0["k"]) == a.k and np.array_equal(z0["tris"], tris):
+                for name in POOL_PASSES:
+                    if f"t_{name}" in z0 and z0[f"t_{name}"].shape == (npt, 3):
+                        banked[name] = z0[f"t_{name}"]
+                        print(f"  reusing the {name} pass already in {a.out}")
+    for name in POOL_PASSES:
+        if name in banked:
+            continue
+        side = pathlib.Path(a.out).with_suffix(f".{name}.npz")
+        subprocess.run([sys.executable, __file__, "field", "--state",
+                        str(a.state), "--k", str(a.k), "--out", str(side),
+                        "--workers", str(a.workers), "--pass", name],
+                       check=True)
+        with np.load(side, allow_pickle=False) as zs:
+            banked[name] = zs[f"t_{name}"]
+        side.unlink()
+        save(**{f"t_{n}": t for n, t in banked.items()})
     t_c = classical_traction(c["pts"], c["nrm"], tris, z["slip_classical"])
+    tr = dict(banked, classical=t_c)
     got = {}
-    for k, t in (("mollified", t_m), ("classical", t_c)):
+    for k in KERNELS:
+        t = tr[k]
         bad = int((~np.isfinite(t)).any(axis=1).sum())
         print(f"    {k}: {bad} non-finite cells of {npt}")
         got.update({f"{k}_{m}": v for m, v in
                     metrics(t, c["facet"], z, coupled).items()})
-    save(t_mollified=t_m, t_classical=t_c, **got)
+    save(**{f"t_{k}": tr[k] for k in KERNELS}, **got)
     for m in METRICS:
         for k in KERNELS:
             v = got[f"{k}_{m}"]
-            print(f"    {m:4s} {k:9s} [{np.nanmin(v) * 1e3:+9.3f}, "
+            print(f"    {m:4s} {k:10s} [{np.nanmin(v) * 1e3:+9.3f}, "
                   f"{np.nanmax(v) * 1e3:+9.3f}] MPa  p50 |.| "
                   f"{np.nanmedian(np.abs(v)) * 1e3:7.3f}")
     return 0
@@ -769,7 +941,17 @@ def cmd_payload(a) -> int:
         kernels={kern: dict(min_eig_sym_negP=float(z[f"mineig_{kern}"]),
                             B=float(z[f"B_{kern}"]), sweeps=int(z[f"sweeps_{kern}"]),
                             residual=float(z[f"residual_{kern}"]),
-                            active_fraction=float(z[f"active_{kern}"].mean()))
+                            active_fraction=float(z[f"active_{kern}"].mean()),
+                            **({"unknowns": "shared nodes, P2 continuous",
+                                "eps_km": float(z["eps_continuous"]),
+                                "n_nodes": int(z["node_coords"].shape[0]),
+                                "n_free": int(z["node_free"].sum()),
+                                "min_eig_sym_negP_uncoupled":
+                                    float(z["mineig_continuous_uncoupled"]),
+                                "active_node_fraction":
+                                    float(z["active_continuous_nodes"].mean())}
+                               if kern == "continuous" else
+                               {"unknowns": "elements, P0"}))
                  for kern in KERNELS},
         window=dict(rule="symmetric; half-width = area-weighted p99 of the "
                          "mollified |metric| over all facets, rounded to 2 "
@@ -796,16 +978,21 @@ def main(argv=None) -> int:
     here = pathlib.Path(__file__).resolve().parent
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("solve", help="system + both matrices + both LCPs")
+    s = sub.add_parser("solve", help="system + three matrices + three LCPs")
     s.add_argument("--out", default=str(here / "out" / "onfault_state.npz"))
     s.add_argument("--workers", type=int, default=12)
-    f = sub.add_parser("field", help="dense on-fault readout, both kernels")
+    n_ = sub.add_parser("assemble", help="the nodal matrix into the cache, in "
+                                         "its own process")
+    n_.add_argument("--workers", type=int, default=12)
+    f = sub.add_parser("field", help="dense on-fault readout, three kernels")
     f.add_argument("--state", default=str(here / "out" / "onfault_state.npz"))
     f.add_argument("--k", type=int, default=K_DEFAULT)
     f.add_argument("--out", default=None)
     f.add_argument("--workers", type=int, default=12)
     f.add_argument("--probe", action="store_true")
     f.add_argument("--probe-run", default=None, help=argparse.SUPPRESS)
+    f.add_argument("--pass", dest="pass_", default=None, choices=POOL_PASSES,
+                   help=argparse.SUPPRESS)
     p = sub.add_parser("payload", help="field -> website/public/data")
     p.add_argument("--field", default=str(here / "out" / "onfault_field.npz"))
     p.add_argument("--out", default=str(here.parents[1] / "website" / "public"
@@ -813,6 +1000,8 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     if a.cmd == "solve":
         return cmd_solve(a)
+    if a.cmd == "assemble":
+        return cmd_assemble(a)
     if a.cmd == "field":
         a.out = a.out or str(here / "out" / "onfault_field.npz")
         return cmd_field(a)

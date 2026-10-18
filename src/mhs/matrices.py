@@ -28,8 +28,29 @@ because cutde's dip direction points *up* rather than down-dip and restating tha
 convention is how it would eventually be restated wrongly. The caller composes
 the rotation explicitly; the gate that checks it is ``verify_cutde_limit``.
 
+**Sources may reach the free surface.** A source whose smeared slip reaches
+above ``z = 0`` is FOLDED back into the body: its image, at receivers within
+a band below the surface, is its mirror element plus a Boussinesq term rather
+than the lifted Mindlin image, which is right only for a buried source
+(:mod:`mhs.kernels.fold`). ``fold=False`` keeps the lift everywhere -- the
+comparison, never the model. The fold is exact up to a surface quadrature,
+costs about 0.2 s per straddling-source/band-receiver pair, and touches only
+the surface-touching row of a mesh.
+
 **There is no ``eps="auto"``.** That rule needs a mesh spacing ``h``, and these
 functions take a vertex array.
+
+**Two layouts of the source axis.** ``layout="discontinuous"`` (the default)
+is the element-major axis above. ``layout="continuous"`` is quadratic slip
+that is C0 across every element edge: the source axis is then the SHARED
+nodes of the mesh -- welded vertices, then edge midpoints -- one Cartesian
+slip vector each, ``n_dof = V + E``, built by :func:`mhs.shared_nodes`. The
+same kernels serve both, because a continuous field is a discontinuous one
+whose shared nodes agree: the assembler scatters each element's six columns
+into the shared ones. ``interaction_matrix`` then collocates AT the nodes,
+unshrunk -- a kink is admissible at a mollified collocation point where a
+jump is not -- and resolves on each NODE's own frame. See :mod:`mhs.shared`
+for what the layout buys and what it refuses.
 """
 from __future__ import annotations
 
@@ -39,6 +60,7 @@ from . import chunking
 from .fullspace.shape import n_nodes
 from .kernels import assemble as _asm
 from .materials import Material
+from .shared import CONTINUOUS_ORDER, SharedNodes, check_layout, shared_nodes
 
 __all__ = [
     "disp_matrix",
@@ -57,10 +79,10 @@ def _coerce(obs_pts, tris, material, eps):
     float64, so no kernel has to defend itself.
 
     The half-space convention is checked HERE rather than in a kernel: the free
-    surface is ``z = 0``, the body is ``z <= 0``, and a source at or above the
-    surface is a different problem (the Mindlin construction continues
-    analytically there, but a triangle that straddles the surface is almost
-    always a sign error in the caller's mesh, not an intention).
+    surface is ``z = 0``, the body is ``z <= 0``. A vertex ON the surface is a
+    surface-breaking fault and is folded (:mod:`mhs.kernels.fold`); a vertex
+    ABOVE it is refused, because a triangle poking out of the body is almost
+    always a sign error in the caller's mesh, not an intention.
     """
     if not isinstance(material, Material):
         raise TypeError(
@@ -167,24 +189,68 @@ def _prepare_out(out, shape, n_obs, n_src, kind, parts):
     return arr
 
 
+def _columns(tri, p, layout, shared):
+    """``(ids, n_dof, shared)`` for the source axis of one call.
+
+    The discontinuous layout is the original code path: ``ids`` is None and
+    the assembler writes disjoint column slices. The continuous one needs
+    ``order == 2`` and a :class:`SharedNodes` table of exactly these
+    triangles -- built here when the caller has none, reused when it has
+    (a table built with ``groups`` is the one a network must pass, so that
+    faults meeting along a line keep separate nodes there).
+    """
+    check_layout(layout)
+    if layout == "discontinuous":
+        if shared is not None:
+            raise ValueError("shared= is the continuous layout's table; pass "
+                             "layout='continuous' with it")
+        return None, tri.shape[0] * n_nodes(p), None
+    if p != CONTINUOUS_ORDER:
+        raise ValueError(
+            f"layout='continuous' is quadratic only (order={CONTINUOUS_ORDER}), "
+            f"got order={p}. Continuous P1 is 15-22 % too stiff on the penny "
+            f"crack and P0 has no shared nodes.")
+    sn = shared_nodes(tri) if shared is None else shared
+    if not isinstance(sn, SharedNodes):
+        raise TypeError(f"shared must be a SharedNodes from mhs.shared_nodes, "
+                        f"got {type(sn).__name__}")
+    if sn.n_tri != tri.shape[0]:
+        raise ValueError(f"shared describes {sn.n_tri} triangles, tris has "
+                         f"{tri.shape[0]}")
+    return sn.ids, sn.n, sn
+
+
+def _zero_if_scattered(buf, ids):
+    """A scatter-add accumulates, so a caller-supplied ``out`` must start at
+    zero; a fresh one already does."""
+    if ids is not None:
+        buf[...] = 0.0
+
+
 # ----------------------------------------------------------------- public ----
-def disp_matrix(obs_pts, tris, material, eps, *, order=0, out=None):
+def disp_matrix(obs_pts, tris, material, eps, *, order=0,
+                layout="discontinuous", shared=None, out=None, fold=True):
     """Displacement Green's function matrix.
 
-    Returns ``(n_obs, 3, n_src, 3)`` where ``[o, i, s, k]`` is the ``i``-th
+    Returns ``(n_obs, 3, n_dof, 3)`` where ``[o, i, s, k]`` is the ``i``-th
     displacement component at ``obs_pts[o]`` produced by a unit **Cartesian**
-    slip component ``k`` on ``tris[s]``, so ``u = einsum("oisk,sk->oi", G, slip)``.
+    slip component ``k`` on source DOF ``s`` -- ``tris[s]`` at P0 -- so
+    ``u = einsum("oisk,sk->oi", G, slip)``.
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
     p = _order(order)
-    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
+    ids, n_dof, _ = _columns(tri, p, layout, shared)
+    n_obs = obs.shape[0]
     buf = _prepare_out(out, (n_obs, 3, n_dof, 3), n_obs, n_dof, "disp", False)
-    _asm.assemble_halfspace_disp(obs, tri, mu, lam, eps_arr, buf, p)
+    _zero_if_scattered(buf, ids)
+    _asm.assemble_halfspace_disp(obs, tri, mu, lam, eps_arr, buf, p, ids,
+                                 fold)
     return buf
 
 
 def stress_matrix(obs_pts, tris, material, eps, *,
-                  subtract_eigenstress=True, parts=False, order=0, out=None):
+                  subtract_eigenstress=True, parts=False, order=0,
+                  layout="discontinuous", shared=None, out=None, fold=True):
     """ELASTIC stress Green's function matrix, eigenstress removed by default.
 
     Returns ``(n_obs, 3, 3, n_src, 3)``; ``[o, m, n, s, k]`` is ``sigma_mn`` from
@@ -203,7 +269,8 @@ def stress_matrix(obs_pts, tris, material, eps, *,
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
     p = _order(order)
-    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
+    ids, n_dof, _ = _columns(tri, p, layout, shared)
+    n_obs = obs.shape[0]
     shape = (n_obs, 3, 3, n_dof, 3)
     buf = _prepare_out(out, shape, n_obs, n_dof, "stress", parts)
     if parts and out is not None:
@@ -215,19 +282,24 @@ def stress_matrix(obs_pts, tris, material, eps, *,
     # first draft unpacked `buf` into two names and silently sliced its leading
     # axis instead.
     sig = buf
+    _zero_if_scattered(sig, ids)
     eig = np.zeros(shape, dtype=np.float64) if parts else None
-    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, sig, p)
+    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, sig, p,
+                                         ids, fold)
     if subtract_eigenstress or parts:
-        star = eig if parts else np.empty(shape, dtype=np.float64)
-        _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, star, p)
+        star = eig if parts else np.zeros(shape, dtype=np.float64)
+        _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, star, p, ids,
+                                  fold)
         if subtract_eigenstress:
             sig -= star
     return (sig, eig) if parts else sig
 
 
 def traction_matrix(obs_pts, obs_normals, tris, material, eps, *,
-                    subtract_eigenstress=True, order=0, out=None):
-    """ELASTIC traction on a given plane, ``(n_obs, 3, n_src, 3)``.
+                    subtract_eigenstress=True, order=0,
+                    layout="discontinuous", shared=None, out=None,
+                    fold=True):
+    """ELASTIC traction on a given plane, ``(n_obs, 3, n_dof, 3)``.
 
     ``[o, i, s, k]`` is Cartesian traction component ``i`` on the plane through
     ``obs_pts[o]`` with normal ``obs_normals[o]``, from unit Cartesian slip
@@ -246,12 +318,14 @@ def traction_matrix(obs_pts, obs_normals, tris, material, eps, *,
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
     p = _order(order)
-    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
+    ids, n_dof, _ = _columns(tri, p, layout, shared)
+    n_obs = obs.shape[0]
     nrm = _coerce_normals(obs_normals, n_obs)
     buf = _prepare_out(out, (n_obs, 3, n_dof, 3), n_obs, n_dof, "traction",
                        False)
+    _zero_if_scattered(buf, ids)
     _asm.assemble_halfspace_traction(obs, nrm, tri, mu, lam, eps_arr, buf,
-                                     subtract_eigenstress, p)
+                                     subtract_eigenstress, p, ids, fold)
     return buf
 
 
@@ -272,17 +346,29 @@ COLLOCATION_SHRINK = 0.5
 
 
 def collocation_points(tris, order: int = 0,
-                       shrink: float = COLLOCATION_SHRINK) -> np.ndarray:
-    """``(n_src * K, 3)`` nodal collocation points, element-major like the DOFs.
+                       shrink: float = COLLOCATION_SHRINK,
+                       layout: str = "discontinuous",
+                       shared=None) -> np.ndarray:
+    """``(n_dof, 3)`` collocation points, in the order of the source DOFs.
 
     What ``interaction_matrix`` uses when ``obs_pts`` is None. Public because a
     caller who parallelises over source chunks must compute these ONCE from the
     whole mesh and pass them in -- each chunk would otherwise collocate on its
     own elements alone, which is a different (and much smaller) matrix.
+
+    In the continuous layout they are the shared nodes themselves, unshrunk:
+    ``shrink`` does not apply, and a value other than the default is refused
+    rather than ignored.
     """
     from .fullspace.shape import lattice
     tri = np.asarray(tris, float).reshape(-1, 3, 3)
     p = _order(order)
+    ids, _, sn = _columns(tri, p, layout, shared)
+    if sn is not None:
+        if shrink != COLLOCATION_SHRINK:
+            raise ValueError("shrink does not apply to the continuous layout: "
+                             "its collocation points are the shared nodes")
+        return sn.coords.copy()
     bary = (np.full((1, 3), 1.0 / 3.0) if p == 0
             else lattice(p) / p)                        # (K, 3)
     bary = bary + float(shrink) * (1.0 / 3.0 - bary)    # toward the centroid
@@ -294,7 +380,8 @@ def interaction_matrix(tris, material, eps, *, receiver=("strike", "dip",
                        source=("strike", "dip", "tensile"),
                        obs_tris=None, obs_pts=None, order=0,
                        shrink=COLLOCATION_SHRINK,
-                       subtract_eigenstress=True, out=None):
+                       subtract_eigenstress=True, layout="discontinuous",
+                       shared=None, rows=None, out=None, fold=True):
     """The on-fault interaction matrix, ``(n_rec_dof, n_src_dof, n_a, n_b)``.
 
     ``[i, j, a, b]`` is the traction on receiver DOF ``i``'s own plane, resolved
@@ -326,41 +413,87 @@ def interaction_matrix(tris, material, eps, *, receiver=("strike", "dip",
     there. ``obs_pts`` overrides them and must supply ``K`` per receiver
     element, grouped element-major, because each one is paired with its
     element's plane and frame.
+
+    ``layout="continuous"`` (P2 only) makes both axes the SHARED nodes of
+    ``tris``: receivers AT the nodes, each on its own node's plane and frame,
+    sources the nodal slip vectors, ``(V + E, V + E, n_a, n_b)``. The nodes
+    are unshrunk by definition -- the kink of a continuous slip is admissible
+    at a mollified collocation point -- so ``shrink`` does not apply, and
+    ``obs_tris``/``obs_pts`` cannot be given: the receivers ARE the nodes. A
+    table from :func:`mhs.shared_nodes` may be passed as ``shared`` (a
+    network passes one built with its ``fault_id`` as ``groups``).
+
+    ``rows=(lo, hi)`` assembles that block of receiver rows only, with the
+    full source axis -- the cut ``mhs.parallel.by_rows`` makes, because in
+    the continuous layout a source chunk does not own a column slice.
     """
     from . import tdcs
     tri = np.asarray(tris, float).reshape(-1, 3, 3)
-    rec_tri = tri if obs_tris is None else np.asarray(
-        obs_tris, float).reshape(-1, 3, 3)
     p = _order(order)
     K = n_nodes(p)
-    pts = collocation_points(rec_tri, p, shrink) if obs_pts is None else obs_pts
-    obs, tri, mu, lam, eps_arr = _coerce(pts, tri, material, eps)
-    rec_tri = np.ascontiguousarray(rec_tri)
-    n_src_dof = tri.shape[0] * K
-    n_rec_dof = rec_tri.shape[0] * K
-    if obs.shape[0] != n_rec_dof:
-        raise ValueError(
-            f"interaction_matrix pairs observers with RECEIVER slip DOFs row by "
-            f"row, so at order {p} it needs {K} per receiver element: got "
-            f"{obs.shape[0]} observers for {rec_tri.shape[0]} receiver "
-            f"triangles ({n_rec_dof} DOFs). For traction at unrelated points "
-            f"use traction_matrix(obs_pts, obs_normals, ...).")
-    # One frame per ELEMENT, repeated across its nodes: the frame is a property
-    # of the plane, and every node of an element shares that plane.
-    rec_frame = np.repeat(tdcs.slip_frame(rec_tri), K, axis=0)
-    src_frame = tdcs.slip_frame(tri)                    # one row per element
+    ids, n_src_dof, sn = _columns(tri, p, layout, shared)
+    if sn is not None:
+        if obs_tris is not None or obs_pts is not None:
+            raise ValueError("layout='continuous' collocates at the shared "
+                             "nodes of tris: obs_tris and obs_pts cannot be "
+                             "given. For traction at other points use "
+                             "traction_matrix(..., layout='continuous').")
+        if shrink != COLLOCATION_SHRINK:
+            raise ValueError("shrink does not apply to the continuous layout: "
+                             "its collocation points are the shared nodes")
+        pts = sn.coords
+        rec_frame = sn.frames                           # one per NODE
+        src_frame = sn.frames
+        n_rec_dof = sn.n
+    else:
+        rec_tri = tri if obs_tris is None else np.asarray(
+            obs_tris, float).reshape(-1, 3, 3)
+        pts = (collocation_points(rec_tri, p, shrink) if obs_pts is None
+               else obs_pts)
+        rec_tri = np.ascontiguousarray(rec_tri)
+        n_rec_dof = rec_tri.shape[0] * K
+        if np.asarray(pts).shape[0] != n_rec_dof:
+            raise ValueError(
+                f"interaction_matrix pairs observers with RECEIVER slip DOFs "
+                f"row by row, so at order {p} it needs {K} per receiver "
+                f"element: got {np.asarray(pts).shape[0]} observers for "
+                f"{rec_tri.shape[0]} receiver triangles ({n_rec_dof} DOFs). "
+                f"For traction at unrelated points use "
+                f"traction_matrix(obs_pts, obs_normals, ...).")
+        # One frame per ELEMENT, repeated across its nodes: the frame is a
+        # property of the plane, and every node of an element shares it.
+        rec_frame = np.repeat(tdcs.slip_frame(rec_tri), K, axis=0)
+        src_frame = tdcs.slip_frame(tri)                # one row per element
+    lo, hi = _rows(rows, n_rec_dof)
+    obs, tri, mu, lam, eps_arr = _coerce(np.asarray(pts, float)[lo:hi], tri,
+                                         material, eps)
     rec = tdcs.component_index(receiver)
     src = tdcs.component_index(source)
-    shape = (n_rec_dof, n_src_dof, len(rec), len(src))
-    buf = _prepare_out(out, shape, n_rec_dof, n_src_dof,
+    shape = (hi - lo, n_src_dof, len(rec), len(src))
+    buf = _prepare_out(out, shape, hi - lo, n_src_dof,
                        (len(rec), len(src)), False)
-    _asm.assemble_interaction(obs, rec_frame[:, 2, :], rec_frame[:, rec, :],
-                              tri, src_frame[:, src, :], mu, lam, eps_arr, buf,
-                              subtract_eigenstress, p)
+    _zero_if_scattered(buf, ids)
+    _asm.assemble_interaction(obs, rec_frame[lo:hi, 2, :],
+                              rec_frame[lo:hi][:, rec, :], tri,
+                              src_frame[:, src, :], mu, lam, eps_arr, buf,
+                              subtract_eigenstress, p, ids, fold)
     return buf
 
 
-def total_stress_matrix(obs_pts, tris, material, eps, *, order=0, out=None):
+def _rows(rows, n_rec: int) -> tuple[int, int]:
+    """``(lo, hi)`` of a receiver-row block, the whole axis when None."""
+    if rows is None:
+        return 0, n_rec
+    lo, hi = (int(rows[0]), int(rows[1]))
+    if not (0 <= lo < hi <= n_rec):
+        raise ValueError(f"rows={rows!r} is not a block of the {n_rec} "
+                         f"receiver rows")
+    return lo, hi
+
+
+def total_stress_matrix(obs_pts, tris, material, eps, *, order=0,
+                        layout="discontinuous", shared=None, out=None,
+                        fold=True):
     """RAW mollified stress: the elastic field PLUS the eigenstress ``C:eps*``.
 
     This is not the stress of a physical elastic medium near the element. It
@@ -372,14 +505,19 @@ def total_stress_matrix(obs_pts, tris, material, eps, *, order=0, out=None):
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
     p = _order(order)
-    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
+    ids, n_dof, _ = _columns(tri, p, layout, shared)
+    n_obs = obs.shape[0]
     buf = _prepare_out(out, (n_obs, 3, 3, n_dof, 3), n_obs, n_dof,
                        "stress", False)
-    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, buf, p)
+    _zero_if_scattered(buf, ids)
+    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, buf, p,
+                                         ids, fold)
     return buf
 
 
-def eigenstress_matrix(obs_pts, tris, material, eps, *, order=0, out=None):
+def eigenstress_matrix(obs_pts, tris, material, eps, *, order=0,
+                       layout="discontinuous", shared=None, out=None,
+                       fold=True):
     """The eigenstress term ``C:eps*`` alone, as a matrix.
 
     ``H*[m,n,k] = Phi_eps (lam d_mn n_k + mu (d_mk n_n + d_nk n_m))`` with
@@ -396,15 +534,19 @@ def eigenstress_matrix(obs_pts, tris, material, eps, *, order=0, out=None):
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
     p = _order(order)
-    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
+    ids, n_dof, _ = _columns(tri, p, layout, shared)
+    n_obs = obs.shape[0]
     buf = _prepare_out(out, (n_obs, 3, 3, n_dof, 3), n_obs, n_dof,
                        "eigenstress", False)
-    _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, buf, p)
+    _zero_if_scattered(buf, ids)
+    _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, buf, p, ids, fold)
     return buf
 
 
 def elastic_strain_matrix(obs_pts, tris, material, eps, *,
-                          subtract_eigenstress=True, order=0, out=None):
+                          subtract_eigenstress=True, order=0,
+                          layout="discontinuous", shared=None, out=None,
+                          fold=True):
     """ELASTIC strain Green's function matrix, as a full ``(3, 3)`` tensor.
 
     Named ``elastic_`` rather than ``strain_`` on purpose. cutde's idiom is
@@ -415,13 +557,17 @@ def elastic_strain_matrix(obs_pts, tris, material, eps, *,
     """
     obs, tri, mu, lam, eps_arr = _coerce(obs_pts, tris, material, eps)
     p = _order(order)
-    n_obs, n_dof = obs.shape[0], tri.shape[0] * n_nodes(p)
+    ids, n_dof, _ = _columns(tri, p, layout, shared)
+    n_obs = obs.shape[0]
     buf = _prepare_out(out, (n_obs, 3, 3, n_dof, 3), n_obs, n_dof,
                        "strain", False)
-    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, buf, p)
+    _zero_if_scattered(buf, ids)
+    _asm.assemble_halfspace_total_stress(obs, tri, mu, lam, eps_arr, buf, p,
+                                         ids, fold)
     if subtract_eigenstress:
-        star = np.empty_like(buf)
-        _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, star, p)
+        star = np.zeros_like(buf)
+        _asm.assemble_eigenstress(obs, tri, mu, lam, eps_arr, star, p, ids,
+                                  fold)
         buf -= star
     # strain from stress, inverting Hooke with (mu, lam) and never through a
     # 1/(1-2nu) intermediate: tr(e) = tr(sig)/(3 lam + 2 mu), then

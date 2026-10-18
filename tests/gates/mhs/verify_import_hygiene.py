@@ -157,20 +157,26 @@ def b_cost(info: dict) -> None:
 
 # --------------------------------------------------------------------- [c] ---
 EXPECTED = {
-    "disp_matrix": ["obs_pts", "tris", "material", "eps", "order", "out"],
+    "disp_matrix": ["obs_pts", "tris", "material", "eps", "order", "layout",
+                    "shared", "out", "fold"],
     "stress_matrix": ["obs_pts", "tris", "material", "eps",
-                      "subtract_eigenstress", "parts", "order", "out"],
+                      "subtract_eigenstress", "parts", "order", "layout",
+                      "shared", "out", "fold"],
     "total_stress_matrix": ["obs_pts", "tris", "material", "eps", "order",
-                            "out"],
+                            "layout", "shared", "out", "fold"],
     "eigenstress_matrix": ["obs_pts", "tris", "material", "eps", "order",
-                           "out"],
+                           "layout", "shared", "out", "fold"],
     "elastic_strain_matrix": ["obs_pts", "tris", "material", "eps",
-                              "subtract_eigenstress", "order", "out"],
+                              "subtract_eigenstress", "order", "layout",
+                              "shared", "out", "fold"],
     "traction_matrix": ["obs_pts", "obs_normals", "tris", "material", "eps",
-                        "subtract_eigenstress", "order", "out"],
+                        "subtract_eigenstress", "order", "layout", "shared",
+                        "out", "fold"],
     "interaction_matrix": ["tris", "material", "eps", "receiver", "source",
                            "obs_tris", "obs_pts", "order", "shrink",
-                           "subtract_eigenstress", "out"],
+                           "subtract_eigenstress", "layout", "shared", "rows",
+                           "out", "fold"],
+    "shared_nodes": ["tris", "groups", "tol_over_h"],
 }
 
 
@@ -191,6 +197,10 @@ def c_surface() -> None:
               .default == 0,
               "P0 is the default, so n_dof == n_src and nothing written for "
               "elements changes when the argument is ignored")
+        check(f"c {name} defaults to the discontinuous layout",
+              inspect.signature(getattr(mhs, name)).parameters["layout"]
+              .default == "discontinuous",
+              "the element-major axis every caller was written for")
     check("c stress default subtracts the eigenstress",
           inspect.signature(mhs.stress_matrix)
           .parameters["subtract_eigenstress"].default is True,

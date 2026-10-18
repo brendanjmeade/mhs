@@ -1,5 +1,5 @@
 // On-fault stress on a system of three surface-breaking rough faults: one
-// scalar per element, both kernels, one window.
+// scalar per element, three kernels, one window.
 //
 // COLOUR IS DATA HERE, so this scene is unlit and flat: no light, no relief
 // shading, nothing that would modulate a Coulomb excess by where a lamp is.
@@ -16,7 +16,7 @@
 // Here the value rides as a float attribute, the window is a uniform, and the
 // table's bytes are written straight to the fragment.
 //
-// ONE WINDOW FOR BOTH KERNELS, by construction. The whole point is that the two
+// ONE WINDOW FOR EVERY KERNEL, by construction. The whole point is that the
 // maps are the same quantity at the same scale; an array windowed over its own
 // range would hide any difference by rescaling.
 
@@ -88,7 +88,8 @@ export const METRICS: Record<string, { label: string; signed: boolean; map: MapN
 };
 
 export const KERNELS: Record<string, string> = {
-  mollified: "mollified (mhs)", classical: "classical TDE (cutde)",
+  mollified: "mollified P0 (mhs)", classical: "classical TDE (cutde)",
+  continuous: "mollified, continuous P2 (mhs)",
 };
 
 export class OnFaultScene {
@@ -456,16 +457,17 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
     const mine = ++seq;
     status.textContent = "loading…";
     try {
-      // Both kernels of the chosen metric, so the legend can state both
+      // Every kernel of the chosen metric, so the legend can state all the
       // saturated fractions without a toggle.
-      const [vm, vc] = await Promise.all([values("mollified", metric),
-                                          values("classical", metric)]);
+      const names = Object.keys(KERNELS);
+      const loaded = await Promise.all(names.map((k) => values(k, metric)));
       if (mine !== seq) return;
-      current = { mollified: vm, classical: vc };
+      current = {};
+      names.forEach((k, i) => { current[k] = loaded[i]; });
       const m = METRICS[metric];
       if (metric === "slip" && winMPa === 0) {
         let mx = 0;
-        for (const v of [vm, vc]) for (let i = 0; i < v.length; i++) mx = Math.max(mx, v[i]);
+        for (const v of loaded) for (let i = 0; i < v.length; i++) mx = Math.max(mx, v[i]);
         winMPa = mx;
       }
       view.setMap(m.map);

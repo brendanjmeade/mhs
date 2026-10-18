@@ -2348,8 +2348,11 @@ def c_onfault() -> None:
                            -20.0 + 0.8 * c30 + 0.2 * s30)))
     discs, net = OF.build(faults, h=h, corr_km=8 * h)
     n, fid = net.n_elements, net.fault_id
+    cl = net.meta["clearance_km"]            # None: beyond the reach
     print(f"       two rough discs: {n} elements, clearance "
-          f"{net.meta['clearance_km']:.3f} km, min n_z {net.meta['min_nz']:.3f}")
+          + (f"{cl:.3f} km" if cl is not None else
+             f"beyond {net.meta['clearance_reach_km']:.2f} km")
+          + f", min n_z {net.meta['min_nz']:.3f}")
     fric = Fr.build_friction(net, regime=OF.REGIME, drop_ratio=OF.DROP_RATIO,
                              mean_stress_ratio=OF.MEAN_STRESS)
     with tempfile.TemporaryDirectory() as tmp:
@@ -2608,13 +2611,296 @@ def c_trace() -> None:
           dev[("rows 2-3", 0.1)], 1.0)
 
 
+# ------------------------------------------------------------------ [nodal] ---
+#: The penny calibration's residual between the collocation points, median
+#: |residual| / d_tau in the facet cores (more than 2 eps from a facet edge,
+#: more than 10 eps from the rim) at k = 3 cells per facet on a QUALITY disc
+#: at h = a/8, eps = 0.1 h. Measured 0.0022 for the continuous layout against
+#: 0.29 for the P0 staircase on the same disc -- larger than the 0.084
+#: [onfault] measures on the lattice disc, because a Delaunay disc's
+#: neighbouring elements differ more in area and so in slip. Pinned at twice
+#: the measurement.
+NODAL_CORE_MAX = 0.005
+#: The staircase must be THERE for the contrast to mean anything: a floor on
+#: the P0 core residual, measured 0.29.
+NODAL_P0_CORE_MIN = 0.1
+#: ... and nearest the facet edges (under 1 eps), where the staircase's line
+#: dislocations sit and the continuous layout's nodes do: measured 0.0005
+#: against 0.31.
+NODAL_EDGE_MAX = 0.002
+#: Eshelby's moment, continuous P2 on the quality disc: measured +1.15 %
+#: against P0's +7.4 % at the same h and eps.
+NODAL_MOMENT_TOL = 0.02
+#: The page's quantity: the Coulomb excess read at the CENTROIDS from the
+#: nodal slip on the slipping facets, where the condition was enforced at the
+#: nodes around it, as a fraction of the median strength. Measured 0.48 %
+#: in the median (p90 1.9 %), against P0's exact zero by construction and
+#: its staircase between the centroids.
+NODAL_CENTROID_S_MAX = 0.02
+
+
+def c_nodal() -> None:
+    """Continuous P2 slip on the fault: the staircase gone between the
+    collocation points, the same Coulomb solve at the nodes, and the one
+    crack with a closed form.
+
+    (a) The table on the page's two-disc fixture: a node per vertex and
+        per edge of each disc, welded within a fault and never across, the
+        rim locked, nothing on a trace (the discs are buried), node frames
+        orthonormal.
+    (b) The penny calibration of [onfault] (c) again, on a quality disc
+        (Triangle, rim on the circle), frictionless, uniform drop, P0 and
+        continuous P2 through the SAME projected Gauss-Seidel -- the
+        continuous one with its rim held at zero through ``include`` --
+        against Eshelby's moment, and the residual read BETWEEN the
+        collocation points, binned by edge and rim distance as [onfault]
+        does. The P0 residual in the facet cores is the staircase's, 29 %
+        of the drop on this disc; the continuous one is 0.2 %, and 0.05 %
+        next to the facet edges where its nodes sit. That difference is what
+        the layout exists for. Within two eps of the rim both read O(1): the
+        smeared front, which no layout removes.
+    (c) The coupled Coulomb LCP on the two rough discs at the nodes:
+        converges, slipping and locked nodes both, ``S`` at the free nodes
+        is ``-w`` (the identity that makes the readout the solver's own
+        residual, now at the nodes), slipping nodes at strength and locked
+        ones below. ``static.solve_newton``, the page's solver for this
+        kernel, reaches the same active set and slip as PGS here and on
+        the penny. ``min eig sym(-P_eff)`` on the free rows is REPORTED:
+        positive on these a/h = 8 discs, -52 on the page's a/h = 24 system,
+        where PGS diverges and the Newton method is the one that runs.
+    """
+    print("\n[nodal] continuous P2 slip: the table, the penny between the "
+          "nodes, the Coulomb LCP at the nodes")
+    import tempfile                                            # noqa: PLC0415
+    import nodal as Nd                                         # noqa: PLC0415
+    import onfault as OF                                       # noqa: PLC0415
+    import system as Sy                                        # noqa: PLC0415
+    import mhs                                                 # noqa: PLC0415
+    from mhs import tdcs                                       # noqa: PLC0415
+
+    h = 0.125
+    eps = 0.1 * h
+    s30, c30 = math.sin(math.radians(30.0)), math.cos(math.radians(30.0))
+
+    # -- (a) the table on the two rough discs --------------------------------
+    faults = (dict(name="A", a=1.0, dip=30.0, seed=1, centre=(0.0, 0.0, -20.0)),
+              dict(name="B", a=0.8, dip=30.0, seed=2,
+                   centre=(0.8 * s30 - 0.2 * c30, 0.4,
+                           -20.0 + 0.8 * c30 + 0.2 * s30)))
+    discs, net = OF.build(faults, h=h, corr_km=8 * h)
+    sn = Nd.table(net)
+    n = net.n_elements
+    for i, f in enumerate(faults):
+        m = net.fault_id == i
+        idx = net.tris[m]
+        v, e = N.weld_vertices(idx, 1e-9 * h)
+        edges = np.unique(np.sort(np.concatenate([e[:, [0, 1]], e[:, [1, 2]],
+                                                  e[:, [2, 0]]]), axis=1), axis=0)
+        check_true(f"{f['name']}: V + E nodes, welded within the fault",
+                   int((sn.group == i).sum()) == v.shape[0] + edges.shape[0],
+                   f"{int((sn.group == i).sum())} = {v.shape[0]} + {edges.shape[0]}")
+    check_true("no node is shared across the two discs",
+               sn.n == sum(int((sn.group == i).sum()) for i in range(2)), "")
+    check_true("the rims are locked and nothing lies on a trace",
+               int(sn.front.sum()) > 0 and int(sn.trace.sum()) == 0,
+               f"{int(sn.front.sum())} front nodes, {int(sn.trace.sum())} trace")
+    fr = sn.frames
+    check("node frames are orthonormal",
+          float(np.abs(np.einsum("nab,ncb->nac", fr, fr) - np.eye(3)).max()),
+          1e-13)
+    print(f"       two rough discs: {n} elements, {sn.n} nodes, "
+          f"{int(sn.front.sum())} locked")
+
+    # -- (b) the penny between the nodes --------------------------------------
+    a_, dtau = 1.0, 0.01
+    o = Sy.outline(a_, -(-20.0) / s30, h)                     # centre 20 km deep
+    v2, t2 = Sy.cdt(o.verts, o.segments, h)
+    tris = Sy.place(v2, (0.0, 0.0), 30.0)[t2[:, ::-1]]
+    nd = tris.shape[0]
+    sd = np.tile([0.0, 1.0], (nd, 1))                         # along dip
+    frame = tdcs.slip_frame(tris)
+    s_cart = frame[:, 1, :]
+    snp = mhs.shared_nodes(tris)
+    centre = Sy.place(np.array([[0.0, o.v_c]]), (0.0, 0.0), 30.0)[0]
+    n_hat = frame[0, 2, :]
+
+    def radius(p):
+        d = p - centre
+        d = d - np.outer(d @ n_hat, n_hat)
+        return np.linalg.norm(d, axis=1)
+
+    nu_ = mhs.Material(mu=OF.MU, lam=OF.LAM).nu_if_you_must
+    d0 = 8.0 * (1.0 - nu_) / (math.pi * (2.0 - nu_)) * dtau * a_ / OF.MU
+    mom_exact = 2.0 * math.pi * d0 * a_ * a_ / 3.0
+    pen_net = N.Network(tris=tris, fault_id=np.zeros(nd, np.int64),
+                        length=np.array([2.0]), width=np.array([2.0]),
+                        azimuth=np.zeros(1), dip=np.array([30.0]),
+                        center=centre[None], h=h, eps=eps, meta={})
+    with tempfile.TemporaryDirectory() as tmp:
+        Km, _ = Kmod.assemble(pen_net, mu=OF.MU, lam=OF.LAM, workers=1,
+                              cache_dir=pathlib.Path(tmp), verbose=False)
+        Kn, snp, info = Nd.assemble(pen_net, snp, mu=OF.MU, lam=OF.LAM,
+                                    workers=1, cache_dir=pathlib.Path(tmp),
+                                    verbose=False)
+    check_true("the quality disc's rim lies on the circle",
+               float(np.abs(radius(snp.coords[snp.front
+                                              & (np.arange(snp.n) < snp.n_vertices)])
+                            - a_).max()) < 1e-9 * h, "")
+    free = Nd.free_mask(snp)
+    sd_n = np.tile([0.0, 1.0], (snp.n, 1))
+    delta = {}
+    for kern, Kmat, dirs, inc in (("P0", Km, sd, None),
+                                  ("continuous", Kn, sd_n, free)):
+        P = Kmod.project(Kmat, dirs, dirs)
+        nn = P.shape[0]
+        sol = St.solve(P, np.full(nn, dtau), np.zeros(nn), 1.0, include=inc,
+                       max_sweeps=20000)
+        check_true(f"penny {kern}: the frictionless PGS converged",
+                   sol.converged, f"{sol.sweeps} sweeps")
+        f = np.ones(nn, bool) if inc is None else inc
+        sub = P[np.ix_(np.flatnonzero(f), np.flatnonzero(f))]
+        mineig = float(np.linalg.eigvalsh(-0.5 * (sub + sub.T)).min())
+        # P is SOURCE-major, so the traction on the receivers is P^T delta
+        # and the all-active LCP is the linear system P^T delta = -d_tau
+        lin = np.zeros(nn)
+        lin[f] = np.linalg.solve(sub.T, np.full(int(f.sum()), -dtau))
+        check(f"penny {kern}: PGS agrees with the direct solve (/ d0)",
+              float(np.abs(sol.delta - lin).max() / d0), 1e-6)
+        nw = St.solve_newton(P, np.full(nn, dtau), np.zeros(nn), 1.0,
+                             include=inc)
+        check_true(f"penny {kern}: the active-set Newton solve converged",
+                   nw.converged, f"{nw.sweeps} iterations")
+        check(f"penny {kern}: ... and agrees with PGS (/ d0)",
+              float(np.abs(sol.delta - nw.delta).max() / d0), 1e-6)
+        mom = ((pen_net.areas() * sol.delta).sum() if kern == "P0"
+               else snp.integrate(sol.delta))
+        delta[kern] = (sol.delta, mom / mom_exact, mineig)
+        print(f"       penny {kern:10s}: {sol.sweeps} sweeps, moment/Eshelby "
+              f"{mom / mom_exact:.4f}, min eig sym(-P) {mineig:+.2f}, "
+              f"{int(sol.active.sum())}/{int(f.sum())} active")
+    check("penny continuous: Eshelby's moment",
+          abs(delta["continuous"][1] - 1.0), NODAL_MOMENT_TOL)
+    check_true("  -- closer than P0's on the same disc and eps",
+               abs(delta["continuous"][1] - 1.0) < abs(delta["P0"][1] - 1.0),
+               f"P0 {delta['P0'][1]:.4f}")
+    # the readout between the collocation points
+    kp = 3
+    cp = OF.cells(tris, kp, eps=eps)
+    rim_eps = (a_ - radius(cp["pts"])) / eps
+    slip0 = sd[:, 1:2] * delta["P0"][0][:, None] * s_cart
+    t_p0 = OF.mollified_traction(cp["pts"], cp["nrm"], tris, slip0, 1, eps=eps)
+    slip_n = sd_n[:, 1:2] * delta["continuous"][0][:, None] * snp.frames[:, 1, :]
+    t_c0 = Nd.traction(cp["pts"], cp["nrm"], tris, snp, slip_n, 1, eps=eps,
+                       mu=OF.MU, lam=OF.LAM)
+    ebins = ((0.0, 1.0), (1.0, 2.0), (2.0, np.inf))
+    rbins = ((0.0, 2.0), (2.0, 10.0), (10.0, np.inf))
+    print(f"       |residual| / d_tau at k = {kp}, median by distance to the "
+          f"nearest facet edge (rows) and to the rim (columns), in eps:")
+    table = {}
+    for kern, t in (("P0", t_p0), ("continuous", t_c0)):
+        resid = (np.einsum("oi,oi->o", t, s_cart[cp["facet"]]) + dtau) / dtau
+        check_true(f"penny {kern}: every cell is finite",
+                   bool(np.isfinite(resid).all()), "")
+        for elo, ehi in ebins:
+            row = []
+            for rlo, rhi in rbins:
+                m = ((cp["edge_eps"] >= elo) & (cp["edge_eps"] < ehi)
+                     & (rim_eps >= rlo) & (rim_eps < rhi))
+                row.append(float(np.median(np.abs(resid[m]))) if m.any()
+                           else float("nan"))
+            table[(kern, elo)] = row
+            print(f"       {kern[:4]} {elo:3.0f}-{ehi if np.isfinite(ehi) else 9:<3.0f}"
+                  "    " + "".join(f"{v:10.4f}" for v in row))
+    core_0, core_c = table[("P0", 2.0)][2], table[("continuous", 2.0)][2]
+    edge_0, edge_c = table[("P0", 0.0)][2], table[("continuous", 0.0)][2]
+    check_true("TRIPWIRE: the P0 staircase is there to be removed",
+               core_0 > NODAL_P0_CORE_MIN, f"core residual {core_0:.4f}")
+    check("in the facet cores the continuous residual is the kernel's, not "
+          "the staircase's", core_c, NODAL_CORE_MAX)
+    check_true("  -- a twentieth of P0's or less", core_c < 0.05 * core_0,
+               f"{core_c:.4f} against {core_0:.4f}")
+    check("nearest the facet edges as well", edge_c, NODAL_EDGE_MAX)
+    check_true("  -- where the P0 staircase is at its worst",
+               edge_c < 0.05 * edge_0, f"{edge_c:.4f} against {edge_0:.4f}")
+
+    # -- (c) the coupled LCP at the nodes on the two rough discs ---------------
+    fric = Fr.build_friction(net, regime=OF.REGIME, drop_ratio=OF.DROP_RATIO,
+                             mean_stress_ratio=OF.MEAN_STRESS, nodes=sn)
+    fric0 = Fr.build_friction(net, regime=OF.REGIME, drop_ratio=OF.DROP_RATIO,
+                              mean_stress_ratio=OF.MEAN_STRESS)
+    with tempfile.TemporaryDirectory() as tmp:
+        Kn, sn, _ = Nd.assemble(net, sn, mu=OF.MU, lam=OF.LAM, workers=1,
+                                cache_dir=pathlib.Path(tmp), verbose=False)
+    free = Nd.free_mask(sn)
+    o = Nd.operators(Kn, fric, free)
+    del Kn
+    print(f"       coupled operator on the free nodes: min eig sym(-P_eff) "
+          f"{o['mineig']:+.3f} (uncoupled {o['mineig_uncoupled']:+.3f}), "
+          f"B {o['B']:.3f}")
+    lam = 1.05 * float(np.nanmin(fric0.first_failure_lambda()))
+    sol = St.solve(o["P_eff"], o["d"], o["g"], lam, include=free)
+    check_true("the coupled LCP at the nodes converged", sol.converged,
+               f"{sol.sweeps} sweeps, {int(sol.active.sum())}/{int(free.sum())} "
+               f"free nodes active")
+    check_true("both slipping and locked free nodes exist",
+               bool(sol.active.any() and (free & ~sol.active).any()), "")
+    # the page's solver for this kernel, against PGS where PGS converges
+    nw = St.solve_newton(o["P_eff"], o["d"], o["g"], lam, include=free)
+    check_true("the active-set Newton solve converged on the coupled LCP",
+               nw.converged, f"{nw.sweeps} iterations")
+    check_true("  -- to the same active set as PGS",
+               np.array_equal(nw.active, sol.active),
+               f"{int((nw.active != sol.active).sum())} nodes differ")
+    check("  -- and the same slip (/ max slip)",
+          float(np.abs(nw.delta - sol.delta).max() / sol.delta.max()), 1e-6)
+    w = o["g"] - (lam * o["d"] + o["P_eff"].T @ sol.delta)
+    slip = Fr.slip_cartesian(net.tris, fric.slip_dir, sol.delta, planes=sn.normals)
+    t = Nd.traction(sn.coords, sn.normals, net.tris, sn, slip, 1, eps=net.eps,
+                    mu=OF.MU, lam=OF.LAM)
+    z = dict(lam=lam, normals=sn.normals,
+             s_cart=Fr.slip_cartesian(net.tris, fric.slip_dir, np.ones(sn.n),
+                                      planes=sn.normals),
+             tau_load_mag=fric.tau_load_mag, sigma_eff_0=fric.sigma_eff_0,
+             sigma_n_load=fric.sigma_n_load, mu=fric.mu)
+    m = Nd.metrics(t, np.arange(sn.n), z, True)
+    check("S at the free nodes is -w", float(np.abs(m["S"] + w)[free].max()),
+          1e-9)
+    check("dsigma_n at the free nodes is -(N^T delta)",
+          float(np.abs(m["dsn"] + o["Nrm"].T @ sol.delta)[free].max()), 1e-12)
+    check("slipping nodes sit at strength",
+          float(np.abs(m["S"][sol.active]).max()), 1e-9)
+    check_true("locked free nodes sit below it",
+               bool(np.all(m["S"][free & ~sol.active] < 0.0)),
+               f"max {m['S'][free & ~sol.active].max():.3e}")
+    # the page's per-element readout: S at the centroids from the nodal slip,
+    # where it is a readout between collocation points and not the margin
+    cen, nrm = net.tris.mean(axis=1), tdcs.unit_normals(net.tris)
+    tc = Nd.traction(cen, nrm, net.tris, sn, slip, 1, eps=net.eps, mu=OF.MU,
+                     lam=OF.LAM)
+    z0 = dict(tris=net.tris, lam=lam, slip_dir=fric0.slip_dir,
+              tau_load_mag=fric0.tau_load_mag, sigma_eff_0=fric0.sigma_eff_0,
+              sigma_n_load=fric0.sigma_n_load, mu=fric0.mu)
+    mc = OF.metrics(tc, np.arange(n), z0, True)
+    act_el = sn.element_mean(sol.delta) > 0.0
+    strength = float(np.median(fric0.strength()))
+    med = float(np.median(np.abs(mc["S"][act_el])))
+    print(f"       S at the centroids from the nodal slip, slipping facets: "
+          f"median |S| {med * 1e3:.3f} MPa, p90 "
+          f"{np.percentile(np.abs(mc['S'][act_el]), 90) * 1e3:.3f} MPa, "
+          f"against a strength of {strength * 1e3:.0f}")
+    check("the Coulomb condition read at the centroids, between the nodes, "
+          "holds to a fraction of the strength", med / strength,
+          NODAL_CENTROID_S_MAX)
+
+
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,
            "kernel": c_kernel, "crack": c_crack, "load": c_load,
            "static": c_static,
            "spectrum": c_spectrum, "slip": c_slip, "align": c_align,
            "cloud": c_cloud, "rough": c_rough, "iso": c_iso,
-           "system": c_system, "onfault": c_onfault, "trace": c_trace}
+           "system": c_system, "onfault": c_onfault, "trace": c_trace,
+           "nodal": c_nodal}
 
 
 def main() -> bool:

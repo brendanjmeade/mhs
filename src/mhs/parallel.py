@@ -219,3 +219,126 @@ def by_source(call, tris, *, workers: int | None = None, out=None,
             "or a closure. Use workers=1 to run in this process and get the "
             "real traceback.") from exc
     return buf
+
+
+#: Rows in ``by_rows``'s serial probe block: enough to learn the block's
+#: shape and bytes per row, few enough to cost nothing at production size
+#: (a page-sized block of 300 rows against 7000 sources was four minutes of
+#: serial work before the pool even started).
+PROBE_ROWS = 8
+
+#: Fewest receiver rows in one ``by_rows`` block. The per-pair cost of these
+#: kernels is set by the OBSERVER BATCH (README: 166 us/pair at 100
+#: observers per call against 43 at 1000), so a block sized by the in-flight
+#: byte budget alone can land in the overhead-dominated regime: on a
+#: 14k-node, 7k-element matrix the budget gave 61-row blocks and the
+#: assembly ran three times slower than its serial rate predicted. The floor
+#: wins over the budget; at that size it holds 12 x 256 rows x 0.7 MB = 2 GB
+#: in flight, which the budget exists to bound and which is still small
+#: against the 9 GB output.
+ROWS_PER_BLOCK_MIN = 256
+
+
+def plan_row_blocks(n_rows: int, workers: int, bytes_per_row: int,
+                    budget: int | None = None) -> list[tuple[int, int]]:
+    """``[(lo, hi), ...]`` receiver-row blocks for :func:`by_rows`: sized
+    against the in-flight budget like :func:`plan_chunks`, but never under
+    ``ROWS_PER_BLOCK_MIN`` rows, for the reason given there."""
+    n_rows, workers = int(n_rows), max(1, int(workers))
+    if n_rows <= 0:
+        return []
+    cap = int(defaults.PARALLEL_INFLIGHT_BYTES if budget is None else budget)
+    per_block = max(ROWS_PER_BLOCK_MIN,
+                    cap // max(workers * max(bytes_per_row, 1), 1))
+    n_blocks = max(1, -(-n_rows // per_block))
+    if n_blocks < workers and n_rows >= workers * ROWS_PER_BLOCK_MIN:
+        n_blocks = workers
+    n_blocks = min(n_blocks, n_rows)
+    edges = np.linspace(0, n_rows, n_blocks + 1).round().astype(int)
+    return [(int(a), int(b)) for a, b in zip(edges[:-1], edges[1:]) if b > a]
+
+
+def _run_rows(args):
+    """Worker body: call the pickled partial on one row range."""
+    call, lo, hi, rows_kw = args
+    return lo, hi, np.ascontiguousarray(call(**{rows_kw: (lo, hi)}))
+
+
+def by_rows(call, n_rows: int, *, workers: int | None = None, out=None,
+            rows_kw: str = "rows", blas_threads: int = 1):
+    """Evaluate ``call(rows=(lo, hi))`` over row blocks in parallel and stitch.
+
+    THE CUT ``by_source`` CANNOT MAKE. A source chunk owns a disjoint COLUMN
+    slice only in the discontinuous layout; in the continuous one
+    (``layout="continuous"``) a shared node's column is written by every
+    element touching it, so two source chunks would both write it and their
+    blocks would have to be ADDED -- each the size of the whole output. Rows
+    are disjoint in every layout: a receiver belongs to one block. So the
+    continuous interaction matrix is built by RECEIVER blocks, each worker
+    seeing every source, and the parent writes each block into its row slice.
+
+    What it costs is the per-source hoisted work (the local frame, the moment
+    tables) repeated once per block rather than once, which is negligible
+    while a block holds a few hundred receivers or more -- the batched cost
+    the README quotes is already measured per observer batch. Blocks are sized
+    for that: as few as the in-flight budget allows, never fewer than one per
+    worker.
+
+    ``call`` is anything picklable that takes a ``rows=(lo, hi)`` keyword and
+    returns the block with those rows leading; in practice a
+    ``functools.partial`` of ``mhs.interaction_matrix`` with ``layout=
+    "continuous"``, or of ``mhs.traction_matrix`` with its observers bound.
+    The same guard as ``by_source`` applies: the workers are spawned, so the
+    calling script's top level must be under ``if __name__ == "__main__"``.
+    ``workers=1`` runs in this process and is bitwise the parallel result.
+    """
+    n_rows = int(n_rows)
+    if n_rows <= 0:
+        raise ValueError(f"n_rows must be positive, got {n_rows}")
+    if workers is None:
+        workers = max(1, (os.cpu_count() or 1) - 1)
+    workers = max(1, min(int(workers), n_rows))
+
+    # One SMALL probe block, to learn the row shape without assuming it --
+    # computed in this process, so it must be cheap: a few rows, not a
+    # worker's share -- then the rest sized against the in-flight budget,
+    # more blocks than workers.
+    probe_hi = min(n_rows, PROBE_ROWS)
+    _, _, first = _run_rows((call, 0, probe_hi, rows_kw))
+    per_row = int(first.size // max(first.shape[0], 1)) * first.itemsize
+    shape = (n_rows,) + first.shape[1:]
+    if out is None:
+        buf = np.empty(shape, dtype=first.dtype)
+    else:
+        if out.shape != shape:
+            raise ValueError(f"out has shape {out.shape}, expected {shape}")
+        buf = out
+    buf[:probe_hi] = first
+    del first
+    if probe_hi >= n_rows:
+        return buf
+    rest = plan_row_blocks(n_rows - probe_hi, workers, per_row)
+    tasks = [(call, probe_hi + a, probe_hi + b, rows_kw) for a, b in rest]
+    if workers == 1:
+        for t in tasks:
+            lo, hi, block = _run_rows(t)
+            buf[lo:hi] = block
+        return buf
+    try:
+        with pinned_blas(blas_threads):
+            ctx = _mp.get_context("spawn")
+            with _cf.ProcessPoolExecutor(max_workers=workers,
+                                         mp_context=ctx) as pool:
+                futures = [pool.submit(_run_rows, t) for t in tasks]
+                for fut in _cf.as_completed(futures):
+                    lo, hi, block = fut.result()
+                    buf[lo:hi] = block
+    except _cf.process.BrokenProcessPool as exc:
+        raise RuntimeError(
+            "mhs.parallel.by_rows: the worker pool died. See by_source: the "
+            "calling script's top level must be guarded with "
+            "`if __name__ == '__main__':` and `call` must be picklable (a "
+            "module-level function or a functools.partial of one). "
+            "workers=1 runs in this process and gives the real traceback."
+        ) from exc
+    return buf

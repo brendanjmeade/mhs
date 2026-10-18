@@ -119,7 +119,9 @@ def _shipped_stress(obs, tri, slip, mu, lam, eps, *, elastic):
     out = np.einsum("omnsk,sk->omn", tot, np.asarray(slip, float)[None])
     if elastic:
         eig = np.zeros_like(tot)
-        asm.assemble_eigenstress(obs, tris, mu, lam, eps_arr, eig)
+        # fold=False: this is a FULL-SPACE clause whose fixture lies in z = 0,
+        # which the half-space assembler would otherwise fold (and double).
+        asm.assemble_eigenstress(obs, tris, mu, lam, eps_arr, eig, fold=False)
         out = out - np.einsum("omnsk,sk->omn", eig,
                               np.asarray(slip, float)[None])
     return out
@@ -130,7 +132,8 @@ def _shipped_eigenstress(obs, tri, slip, mu, lam, eps):
     obs = np.asarray(obs, float).reshape(-1, 3)
     tris = np.asarray(tri, float)[None]
     eig = np.zeros((obs.shape[0], 3, 3, 1, 3))
-    asm.assemble_eigenstress(obs, tris, mu, lam, np.full(1, float(eps)), eig)
+    asm.assemble_eigenstress(obs, tris, mu, lam, np.full(1, float(eps)), eig,
+                             fold=False)                   # full-space clause
     return np.einsum("omnsk,sk->omn", eig, np.asarray(slip, float)[None])
 
 

@@ -114,6 +114,20 @@ definition, and the exact convolution — if it has a closed form at all — is
 still whatever it is. What has been measured is that *this* way of evaluating it
 is O(ε⁴) on the potentials and O(ε²) on the traction.
 
+Resolved differently for the one case where O(ε²) is not available at all: a
+source whose smeared slip reaches above `z = 0`. There the lift is not an
+approximation but the wrong problem (its image point and Boussinesq branch
+line sit inside the body). The regularised problem must take the smeared
+slip FOLDED back into the body — the part above the surface replaced by its
+mirror image, which is the even extension, mass-preserving and exact in
+antiplane strain — and the folded problem's half-space solution needs no
+convolution of the image at all: the Kelvin part plus the reflected-Kelvin
+part of the image equals the FULL-SPACE field of the element plus its mirror
+element (both closed forms), and what remains is Boussinesq's problem for the
+normal traction the symmetric pair leaves on the surface, a smooth surface
+integral. `src/mhs/kernels/fold.py` states and gates it; the trilemma is
+untouched for a buried source, where the lift stays.
+
 ## Bearing on the rest of the plan
 
 The honest claim for a half-space kernel built this way is now:
