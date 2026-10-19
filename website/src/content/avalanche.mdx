@@ -2,6 +2,7 @@ import thresholdsFig from "../figures/onfault_thresholds.png";
 import statsFig from "../figures/avalanche_stats.png";
 import resolutionFig from "../figures/avalanche_resolution.png";
 import mapsFig from "../figures/avalanche_maps.png";
+import lcpFig from "../figures/avalanche_lcp.png";
 
 ## A shadow, not a trigger
 
@@ -178,6 +179,58 @@ largest events are not the first-failing regions; they are the ones that
 have re-locked and been re-loaded by the slip around them, and on every
 variant they overlap the same part of the fault.
 
+## The same map without the drop
+
+The history has two strengths per element: it fails at the static one and
+stops at the dynamic one, and that overshoot is what the neighbours feel.
+The static LCP of the thresholds scan has one. Its solution at a load is
+unique and path-free: every slipping element sits exactly at strength,
+every other below it, and the slip is a continuous function of the load,
+so there are no events to outline. What it does have is an activation
+load per element, the smallest load at which its slip becomes positive on
+a scan, and that is the counterpart of the first-failure map. Solved at
+the static strength and at the dynamic strength, the two LCPs bracket the
+history element by element: on A every one of the 3748 elements first
+fails no later than it activates in the LCP at static strength and no
+earlier than in the LCP at dynamic strength, and at twice λ₀ its slip lies
+between the two LCPs' slips on every element.
+
+<figure class="panels">
+  <img src={lcpFig.src}
+       alt="Three columns, the static LCP at static strength, the stick-slip history and the static LCP at dynamic strength: maps of the activation load of every element on A, maps of the slip at twice the first-failure load, and below them the active fraction and the cumulative moment against load for the three, with the per-element gaps between the history and each LCP." />
+  <figcaption>
+    <b>The history between the two LCPs, on A.</b> <b>a</b>–<b>c</b>,
+    the load at which each element first slips: in the static LCP at
+    static strength, in the stick-slip history, and in the static LCP at
+    dynamic strength. <b>d</b>–<b>f</b>, the slip at 2 λ₀ for the same
+    three. <b>g</b>, the active fraction and <b>h</b> the cumulative
+    moment against the load. <b>i</b>, per element, how much later the
+    static-strength LCP activates it than the history does, and how much
+    earlier the dynamic-strength LCP does.
+  </figcaption>
+</figure>
+
+| on A, to 2 λ₀ | LCP at μ<sub>s</sub> | history | LCP at μ<sub>d</sub> |
+|---|---|---|---|
+| activation load, median | 1.060 λ₀ | 1.021 λ₀ | 1.000 λ₀ |
+| activation load, 90th percentile | 1.138 λ₀ | 1.090 λ₀ | 1.025 λ₀ |
+| half the fault active | 1.060 λ₀ | 1.021 λ₀ | 1.000 λ₀ |
+| 90 % of the fault active | 1.137 λ₀ | 1.090 λ₀ | 1.025 λ₀ |
+| moment at 2 λ₀ | 5.00 × 10¹⁹ N m | 5.30 × 10¹⁹ N m | 5.65 × 10¹⁹ N m |
+| mean slip of the active elements | 16.2 m | 17.1 m | 18.3 m |
+| elements outside the bracket | 0 | | 0 |
+
+The three maps have the same shape because the geometry and the load
+decide where slip wants to be; the two thresholds decide when it arrives
+and in what pieces. The history's first event takes the taper belt, 1224
+elements, at λ₀ in one cascade; the static-strength LCP activates the same
+elements one by one between 1.0025 and 1.045 λ₀. In moment the history
+lands 46 % of the way from one LCP to the other. For a total at a given
+load, either LCP is within 6 % of the history and the pair bounds it. For
+the events, their sizes, their recurrence and who triggers whom, the LCP
+has nothing to say: all of that is the drop's, and the drop is the one
+thing it does not have.
+
 ## What this is, and is not
 
 The moments are a cell model's. Each failure moves one element by the
@@ -207,7 +260,8 @@ python studies/active_fractal/avalanche.py assemble A --workers 12
 python studies/active_fractal/avalanche.py run A            # 3-5 s of history
 python studies/active_fractal/avalanche.py run A --spread 0.02
 python studies/active_fractal/avalanche.py run A --coupled
-python studies/active_fractal/avalanche.py figure            # the table, three figures
+python studies/active_fractal/avalanche.py lcp A            # the static LCP's scan, ~15 min
+python studies/active_fractal/avalanche.py figure            # the table, four figures
 ```
 
 `assemble` is its own process because mhs parallelises over spawned

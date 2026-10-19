@@ -3,6 +3,7 @@
 
     python studies/active_fractal/avalanche.py assemble A --workers 12
     python studies/active_fractal/avalanche.py run A [--spread 0.02] [--coupled]
+    python studies/active_fractal/avalanche.py lcp A
     python studies/active_fractal/avalanche.py figure
 
 THE QUESTION. The three-fault system of the on-fault page interacts through
@@ -28,6 +29,14 @@ cutoff belong to the fault or to the mesh. On the ladder the taper belt is
 held at the page's 1.5 km in KILOMETRES (``TAPER_KM``), not at 6 h: the
 near-planar belt is what fails first, and a belt that widened with h would
 change the fault between rungs. At h = 0.25 that is 6 h, the page's mesh.
+
+THE LCP BESIDE IT. ``lcp`` scans the load with the static LCP (one strength,
+no drop, one solution at each load) at the static and at the dynamic
+strength, recording each element's activation load and the slip, so the
+history's first-failure map has its path-free counterpart: the history lies
+between the two LCPs element by element, in activation load and in slip
+(measured on A: 3748 of 3748 both ways), and the LCP has no events because
+its slip is continuous in the load.
 
 Outputs go to ``out/avalanche_<tag>.npz`` (one per run, gitignored) and the
 figures to ``website/src/figures/`` for the site's /avalanche/ page. One
@@ -581,8 +590,170 @@ def maps_figure(runs, out, n_big: int = 3):
     plt.close(fig)
 
 
+# ------------------------------------------------------------------ lcp --
+#: The load scan of ``lcp``: fine through the activation of the fault, then
+#: coarse to the history's end load.
+LCP_LOADS = np.concatenate([np.arange(1.0, 1.30, 0.0025),
+                            np.arange(1.30, 2.0001, 0.01)])
+
+
+def cmd_lcp(a) -> int:
+    print(f"=== lcp {a.name}", flush=True)
+    net, rec = build(a.name)
+    describe(a.name, net, rec)
+    n = net.n_elements
+    areas = net.areas()
+    Km, _ = K.assemble(net, mu=OF.MU, lam=OF.LAM, workers=1, verbose=True)
+    fric = Fr.build_friction(net, regime=OF.REGIME, drop_ratio=OF.DROP_RATIO,
+                             mean_stress_ratio=OF.MEAN_STRESS)
+    d, g_s, g_d = C.coefficients(fric)
+    P = K.project(Km, fric.slip_dir, fric.slip_dir)
+    del Km
+    lam0 = float(np.nanmin(fric.first_failure_lambda()))
+    lams = LCP_LOADS * lam0
+    out = {}
+    for name, g in (("static", g_s), ("dynamic", g_d)):
+        act = np.full(n, np.nan)
+        frac, mom = [], []
+        warm = None
+        t0 = time.time()
+        for lam in lams:
+            sol = St.solve(P, d, g, lam, warm=warm)
+            if not sol.converged:
+                raise SystemExit(f"{name}: the LCP did not converge at "
+                                 f"{lam / lam0:.4f} lam0")
+            warm = sol.delta
+            new = (sol.delta > 0.0) & np.isnan(act)
+            act[new] = lam
+            frac.append(float((sol.delta > 0.0).mean()))
+            mom.append(float((areas * sol.delta).sum() * OF.MU * 1e18))
+        out[name] = dict(act=act, frac=np.array(frac), mom=np.array(mom),
+                         slip=sol.delta)
+        print(f"  {name} strength: {lams.size} loads in {time.time() - t0:.0f} s; "
+              f"active at {lams[-1] / lam0:.1f} lam0 {int((sol.delta > 0).sum())} "
+              f"of {n}, moment {mom[-1]:.3e} N m", flush=True)
+    OUT.mkdir(exist_ok=True)
+    path = OUT / f"avalanche_lcp_{a.name}.npz"
+    np.savez_compressed(path, lams=lams, lam0=lam0, uv=rec["uv"], idx=rec["idx"],
+                        areas=areas, **{f"{k}_{q}": v for k, o in out.items()
+                                        for q, v in o.items()})
+    print(f"  saved {path}", flush=True)
+    return 0
+
+
+def lcp_figure(runs, out):
+    """The history's first-failure map between the two LCPs' activation
+    maps, the slip at the end load for the three, and the curves."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PolyCollection
+    hist = {s["name"]: (z, s) for z, s in runs
+            if s["spread"] == 0 and not s["coupled"]}
+    files = sorted(OUT.glob("avalanche_lcp_*.npz"))
+    pairs = [(f.stem[len("avalanche_lcp_"):], f) for f in files]
+    pairs = [(nm, f) for nm, f in pairs if nm in hist]
+    if not pairs:
+        print("  lcp figure skipped: no lcp scan beside a history")
+        return
+    nm, f = pairs[0]
+    z, s = hist[nm]
+    L = np.load(f, allow_pickle=False)
+    lam0 = float(L["lam0"])
+    uv, idx = L["uv"], L["idx"]
+    polys = uv[idx]
+    cols = [("static LCP, strength $\\mu_s$", L["static_act"], L["static_slip"], "#1f77b4"),
+            ("stick-slip history", z["lam_first"], z["slip"], "#d62728"),
+            ("static LCP, strength $\\mu_d$", L["dynamic_act"], L["dynamic_slip"], "#2ca02c")]
+    smax = max(float(np.nanmax(c[2])) for c in cols) * 1e3
+    fig = plt.figure(figsize=(13, 9.2))
+    gs = fig.add_gridspec(3, 3, height_ratios=[1, 1, 0.85], hspace=0.3, wspace=0.3)
+
+    def frame(ax):
+        ax.set_xlim(uv[:, 0].min() - 0.3, uv[:, 0].max() + 0.3)
+        ax.set_ylim(uv[:, 1].max() + 0.3, -0.3)
+        ax.set_aspect("equal")
+        _style(ax)
+        ax.set_xticks([round(uv[:, 0].min()), 0, round(uv[:, 0].max())])
+        ax.set_yticks([0, 5, 10])
+
+    pc1 = pc2 = None
+    for j, (title, act, slip, _) in enumerate(cols):
+        ax = fig.add_subplot(gs[0, j])
+        pc1 = PolyCollection(polys, array=np.where(np.isfinite(act), act / lam0, np.nan),
+                             cmap="viridis", clim=(1.0, 1.3), edgecolors="none")
+        ax.add_collection(pc1)
+        frame(ax)
+        ax.set_title(title, fontsize=10)
+        _letter(ax, "abc"[j])
+        if j == 0:
+            ax.set_ylabel("$v$, down dip (km)")
+        ax = fig.add_subplot(gs[1, j])
+        pc2 = PolyCollection(polys, array=slip * 1e3, cmap="magma", clim=(0.0, smax),
+                             edgecolors="none")
+        ax.add_collection(pc2)
+        frame(ax)
+        ax.set_xlabel("$u$, along strike (km)")
+        ax.text(0.97, 0.95, "def"[j], transform=ax.transAxes, ha="right", va="top", color="w")
+        if j == 0:
+            ax.set_ylabel("$v$, down dip (km)")
+    fig.colorbar(pc1, ax=fig.axes[0:5:2], shrink=0.7, pad=0.02, ticks=[1.0, 1.1, 1.2, 1.3],
+                 label=r"activation load, $\lambda / \lambda_0$")
+    fig.colorbar(pc2, ax=fig.axes[1:6:2], shrink=0.7, pad=0.02,
+                 label=f"slip at {L['lams'][-1] / lam0:.0f} $\\lambda_0$ (m)")
+    x = L["lams"] / lam0
+    xh = z["ev_lam"] / lam0
+    ax = fig.add_subplot(gs[2, 0])
+    ax.plot(x, L["static_frac"], color=cols[0][3], lw=1.4, label="static LCP, $\\mu_s$")
+    ax.plot(xh, np.cumsum(z["ev_n_new"]) / s["n"], color=cols[1][3], lw=1.4, label="history")
+    ax.plot(x, L["dynamic_frac"], color=cols[2][3], lw=1.4, label="static LCP, $\\mu_d$")
+    _style(ax)
+    ax.set_xlim(1.0, 1.5)
+    ax.set_xticks([1.0, 1.25, 1.5])
+    ax.set_ylim(0, 1)
+    ax.set_yticks([0, 0.5, 1])
+    ax.set_xlabel(r"$\lambda / \lambda_0$")
+    ax.set_ylabel("active fraction of the fault")
+    ax.legend(fontsize=8, frameon=False, loc="lower right")
+    _letter(ax, "g")
+    ax = fig.add_subplot(gs[2, 1])
+    ax.plot(x, L["static_mom"] / 1e19, color=cols[0][3], lw=1.4)
+    ax.plot(xh, np.cumsum(z["ev_moment"]) / 1e19, color=cols[1][3], lw=1.4)
+    ax.plot(x, L["dynamic_mom"] / 1e19, color=cols[2][3], lw=1.4)
+    _style(ax)
+    ax.set_xlim(1.0, 2.0)
+    ax.set_xticks([1.0, 1.5, 2.0])
+    ax.set_ylim(0, 6)
+    ax.set_yticks([0, 3, 6])
+    ax.set_xlabel(r"$\lambda / \lambda_0$")
+    ax.set_ylabel("cumulative moment ($10^{19}$ N m)")
+    _letter(ax, "h")
+    ax = fig.add_subplot(gs[2, 2])
+    gap_s = (L["static_act"] - z["lam_first"]) / lam0      # how much earlier the history is
+    gap_d = (z["lam_first"] - L["dynamic_act"]) / lam0     # how much later than the dynamic LCP
+    for g_, c, lab in ((gap_s, cols[0][3], "static LCP activates later by"),
+                       (gap_d, cols[2][3], "dynamic LCP activates earlier by")):
+        v = np.sort(g_[np.isfinite(g_)])
+        ax.step(v, 1.0 - np.arange(v.size) / v.size, where="post", color=c, lw=1.4, label=lab)
+    _style(ax, log_x=True)
+    _decades(ax, "x", 1e-4, 1)
+    ax.set_ylim(0, 1)
+    ax.set_yticks([0, 0.5, 1])
+    ax.set_xlabel(r"$\Delta\lambda / \lambda_0$ against the history, per element")
+    ax.set_ylabel("fraction of elements")
+    ax.legend(fontsize=8, frameon=False, loc="lower left")
+    _letter(ax, "i")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    n_out = int(((z["slip"] > L["dynamic_slip"] + 1e-12) | (z["slip"] < L["static_slip"] - 1e-12)).sum())
+    print(f"  lcp figure on {nm}: history outside the slip bracket on {n_out} of {s['n']} elements; "
+          f"moment at the end load static {L['static_mom'][-1]:.3e}, history "
+          f"{np.cumsum(z['ev_moment'])[-1]:.3e}, dynamic {L['dynamic_mom'][-1]:.3e} N m")
+
+
 def cmd_figure(a) -> int:
-    files = sorted(OUT.glob("avalanche_*.npz"))
+    files = sorted(f for f in OUT.glob("avalanche_*.npz")
+                   if not f.name.startswith("avalanche_lcp_"))
     if not files:
         raise SystemExit(f"no runs in {OUT}")
     runs = [load(f) for f in files]
@@ -595,6 +766,7 @@ def cmd_figure(a) -> int:
     stats_figure(runs, out / "avalanche_stats.png")
     resolution_figure(runs, out / "avalanche_resolution.png")
     maps_figure(runs, out / "avalanche_maps.png")
+    lcp_figure(runs, out / "avalanche_lcp.png")
     (OUT / "avalanche_table.json").write_text(json.dumps(rows, indent=1,
                                                          default=float))
     print(f"  figures -> {out}; table -> {OUT / 'avalanche_table.json'}")
@@ -618,6 +790,9 @@ def main(argv=None) -> int:
                    help="in units of lam0, the first failure with no interaction")
     r.add_argument("--max-events", type=int, default=5_000_000)
     r.add_argument("--order", default="sequential")
+    l_ = sub.add_parser("lcp", help="the static LCP's load scan at both strengths, "
+                                    "the history's path-free counterpart")
+    l_.add_argument("name", choices=sorted(VARIANTS))
     f = sub.add_parser("figure", help="table and figures from out/avalanche_*.npz")
     f.add_argument("--out", default=str(FIGURES))
     a = ap.parse_args(argv)
@@ -625,6 +800,8 @@ def main(argv=None) -> int:
         return cmd_assemble(a)
     if a.cmd == "run":
         return cmd_run(a)
+    if a.cmd == "lcp":
+        return cmd_lcp(a)
     return cmd_figure(a)
 
 

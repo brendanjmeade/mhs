@@ -43,10 +43,10 @@ python studies/active_fractal/roughvol.py solve && ... volume     # /roughness/
 python studies/active_fractal/isosurf.py field ... && ... mesh    # /isosurface/
 python studies/active_fractal/onfault.py solve && ... field --k 1 && ... payload   # /onfault/
 python studies/active_fractal/onfault.py thresholds                                 # /avalanche/, the opening figure
-python studies/active_fractal/avalanche.py assemble A && ... run A && ... figure    # /avalanche/, per variant
+python studies/active_fractal/avalanche.py assemble A && ... run A && ... lcp A && ... figure   # /avalanche/, per variant
 ```
 
-The avalanche page is prose and three PNG figures in `src/figures/`, written
+The avalanche page is prose and four PNG figures in `src/figures/`, written
 by `avalanche.py figure` from the runs in `studies/active_fractal/out/`; the
 numbers quoted in its text are the ones `figure` prints as a table, so a
 re-run that changes them is a page edit as well.
