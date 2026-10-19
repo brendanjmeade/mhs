@@ -141,7 +141,11 @@ def main(argv=None) -> bool:
             n_fail += rc != 0
         print(f"{tag:12s} {gid:48s} {dt:6.1f} s")
         if rc != 0 or printed != "PASS":
-            tail = (out.strip().splitlines() or ["(no stdout)"])[-12:]
+            lines = out.strip().splitlines() or ["(no stdout)"]
+            # every failed check first, then the tail: a CI log that showed
+            # only the last twelve lines once hid WHICH two of 67 had failed
+            failed = [ln for ln in lines if "[XX]" in ln or ln.strip().startswith("failed:")]
+            tail = failed + [ln for ln in lines[-12:] if ln not in failed]
             for line in tail:
                 print(f"             | {line}")
             if proc_err := getattr(locals().get("proc", None), "stderr", ""):

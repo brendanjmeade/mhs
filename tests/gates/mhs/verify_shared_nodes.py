@@ -20,7 +20,7 @@ sibling full-space package.
       element-major P2 matrix with each element's six columns summed into the
       shared ones, for displacement, stress and traction; the interaction
       matrix equals the traction at the nodes resolved in the node frames; a
-      row block equals the slice of the whole; ``by_rows`` is bitwise the
+      row block equals the slice of the whole; ``by_rows`` is, to round-off, the
       serial result. At a surface trace the same partition of unity holds at
       a node ON z = 0, which is where the layout collocates on a
       surface-breaking fault.
@@ -59,6 +59,12 @@ MU, LAM = 30.0, 45.0            # nu = 0.30, not 1/4: a lam/mu swap is visible
 NU = 0.5 * LAM / (LAM + MU)
 DTAU = 0.01                     # GPa, the uniform stress drop
 DEPTH = -20.0                   # km: 20 radii down, the free surface is weak
+#: A row block against the whole matrix, and ``by_rows`` against the direct
+#: call, agree to this fraction of the max entry rather than bitwise: the
+#: batching differs, and OpenBLAS's small-problem kernels round differently
+#: from its blocked ones (measured bitwise under Accelerate, last-bit under
+#: the pip wheels on every CI platform).
+ROWS_ROUNDOFF = 1e-13
 DIP = 30.0                      # a horizontal disc is the frame trap
 
 #: Measured on the polar disc at a/h = 6 (216 triangles, 469 nodes), the
@@ -368,24 +374,28 @@ def part_b() -> None:
           relmax(K, np.einsum("oai,oigk,gbk->ogab", fr, T, fr)), 1e-14)
     Kr = mhs.interaction_matrix(tris, mat, eps, order=2, layout="continuous",
                                 shared=sn, rows=(7, 30))
-    check_true("b rows=(lo, hi) is the slice of the whole, bitwise",
-               np.array_equal(Kr, K[7:30]), "")
+    # Round-off, not bitwise, wherever two calls batch the observers
+    # differently: OpenBLAS runs a different kernel for a small problem than
+    # for a large one, so the same row computed in a 23-row block and in the
+    # whole matrix can differ in its last bit on the pip wheels (CI, all four
+    # platforms) while agreeing bitwise under Accelerate. 1e-13 of the max.
+    check("b rows=(lo, hi) is the slice of the whole (round-off)",
+          relmax(Kr, K[7:30]), ROWS_ROUNDOFF)
     # the discontinuous layout takes rows too
     K0 = mhs.interaction_matrix(tris, mat, eps)
-    check_true("b ... and so does the discontinuous layout",
-               np.array_equal(mhs.interaction_matrix(tris, mat, eps,
-                                                     rows=(5, 20)), K0[5:20]),
-               "")
+    check("b ... and so does the discontinuous layout (round-off)",
+          relmax(mhs.interaction_matrix(tris, mat, eps, rows=(5, 20)),
+                 K0[5:20]), ROWS_ROUNDOFF)
     call = functools.partial(mhs.interaction_matrix, tris, mat, eps, order=2,
                              layout="continuous", shared=sn,
                              receiver=("strike", "dip"), source=("strike", "dip"))
     direct = call()
-    check_true("b by_rows(workers=1) == the direct call, bitwise",
-               np.array_equal(by_rows(call, sn.n, workers=1), direct), "")
+    check("b by_rows(workers=1) == the direct call (round-off)",
+          relmax(by_rows(call, sn.n, workers=1), direct), ROWS_ROUNDOFF)
     t0 = time.time()
     par = by_rows(call, sn.n, workers=2)
-    check_true("b by_rows(workers=2) == the direct call, bitwise",
-               np.array_equal(par, direct), f"{time.time() - t0:.1f} s")
+    check("b by_rows(workers=2) == the direct call (round-off)",
+          relmax(par, direct), ROWS_ROUNDOFF)
     check_true("b collocation_points(layout='continuous') is the node table",
                np.array_equal(mhs.collocation_points(tris, 2,
                                                      layout="continuous",

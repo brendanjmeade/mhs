@@ -290,7 +290,9 @@ def by_rows(call, n_rows: int, *, workers: int | None = None, out=None,
     "continuous"``, or of ``mhs.traction_matrix`` with its observers bound.
     The same guard as ``by_source`` applies: the workers are spawned, so the
     calling script's top level must be under ``if __name__ == "__main__"``.
-    ``workers=1`` runs in this process and is bitwise the parallel result.
+    ``workers=1`` runs in this process and agrees with the parallel result
+    to round-off (bitwise under a BLAS whose kernels do not depend on the
+    problem size; OpenBLAS's small-problem kernels round differently).
     """
     n_rows = int(n_rows)
     if n_rows <= 0:
