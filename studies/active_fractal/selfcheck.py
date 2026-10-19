@@ -2523,15 +2523,29 @@ def c_onfault() -> None:
 
 
 # ------------------------------------------------------------------ [trace] ---
+#: The trace-row readout of one fixed slip, mollified against classical, at
+#: eps = 0.1 h: measured 1.19 MPa with the fold (7.3 before it), on a row
+#: whose classical normal-stress change is ~5 MPa; pinned at 2 MPa.
+TRACE_READOUT_MAX = 2.0
+#: ... and from eps/h = 0.05 down it sits at the Boussinesq quadrature's
+#: floor, 0.13, 0.18, 0.21 MPa, not on a convergence; pinned at 0.5.
+TRACE_READOUT_FLOOR = 0.5
+
+
 def c_trace() -> None:
-    """Where the two kernels part, and why: a slipping element that touches
-    the free surface. Its smeared slip straddles z = 0, and the mollified
-    kernel reads it at a resolution floor the classical element does not
-    have. Pinned as a CONVERGENCE, on the page's own fault B alone: as eps
-    falls the mollified solve approaches the classical one, and so does the
-    mollified readout of one fixed slip on the trace row, while three rows
-    down the two agree at the production eps already. The numbers printed
-    here are the ones the page quotes.
+    """The trace row: a slipping element that touches the free surface, whose
+    smeared slip straddles z = 0. Before the kernel folded that slip back
+    into the body (mhs.kernels.fold) this row was where the mollified kernel
+    parted from the classical one: the classical-to-mollified slip ratio on
+    it was 1.60, 1.20, 1.05 at eps/h = 0.1, 0.05, 0.025 (whole fault 1.17,
+    1.07, 1.02) and the readout of one fixed slip differed by 7.3, 2.0, 0.5,
+    0.1 MPa. With the fold the row is first order in eps like everything
+    else: 0.942, 0.966, 0.995 (whole fault 0.973, 0.985, 0.998) and 1.19,
+    0.13, 0.18, 0.21 MPa -- the last three at the floor of the Boussinesq
+    quadrature, not a convergence, which is why the readout is pinned as a
+    bound rather than as monotone. Three rows down the two agree at the
+    production eps already (0.44 MPa). On the page's own fault B alone; the
+    numbers printed here are the ones the page quotes.
     """
     print("\n[trace] the trace row: the mollified kernel against the classical "
           "one as eps falls")
@@ -2604,9 +2618,11 @@ def c_trace() -> None:
                                      (0.1, 0.05, 0.025, 0.0125))
               + " MPa at eps/h = 0.1, 0.05, 0.025, 0.0125")
     t = [dev[("trace row", e)] for e in (0.1, 0.05, 0.025, 0.0125)]
-    check_true("the trace-row readout approaches the classical one as eps falls",
-               t[0] > t[1] > t[2] > t[3], " -> ".join(f"{v:.2f}" for v in t))
-    check("  to under 1 MPa at eps/h = 0.0125", t[3], 1.0)
+    check("the trace-row readout agrees with the classical one at eps = 0.1 h "
+          "(MPa; 7.3 before the fold)", t[0], TRACE_READOUT_MAX)
+    check("  and sits at the quadrature floor from eps/h = 0.05 on (MPa; "
+          + " -> ".join(f"{v:.2f}" for v in t) + ")", max(t[1:]),
+          TRACE_READOUT_FLOOR)
     check("three rows down the two agree at eps = 0.1 h already (MPa)",
           dev[("rows 2-3", 0.1)], 1.0)
 

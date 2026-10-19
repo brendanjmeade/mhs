@@ -211,7 +211,8 @@ def cache_key(tris, fault_id, mu, lam, eps) -> str:
                "groups_sha256": hashlib.sha256(g.tobytes()).hexdigest(),
                "n": int(t.shape[0]), "mu": mu, "lam": lam, "eps": eps,
                "receiver": list(RECEIVER), "source": list(SOURCE),
-               "layout": "continuous P2, source_major_(n_src,n_b,n_a,n_rec)"}
+               "layout": "continuous P2, source_major_(n_src,n_b,n_a,n_rec)",
+               "kernel": K.fold_tag()}
     blob = json.dumps(payload, sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
 
@@ -323,13 +324,15 @@ def traction(pts, nrm, tris, sn, slip_nodes, workers, *, eps, mu=30.0,
     import concurrent.futures as cf
     import multiprocessing as mp
     npt = pts.shape[0]
-    parts = [(pts[i:i + CHUNK], nrm[i:i + CHUNK]) for i in range(0, npt, CHUNK)]
+    # strided blocks, for the reason onfault.interleave gives
+    n_parts = min(npt, max(1, -(-npt // CHUNK), 4 * max(1, int(workers or 1))))
+    splits = [np.arange(i, npt, n_parts) for i in range(n_parts)]
+    parts = [(pts[idx], nrm[idx]) for idx in splits]
     out = np.empty((npt, 3))
     if workers in (0, 1):
         _init(tris, sn, slip_nodes, eps, mu, lam)
-        for i, part in enumerate(parts):
-            got = _chunk(part)
-            out[i * CHUNK:i * CHUNK + got.shape[0]] = got
+        for idx, part in zip(splits, parts):
+            out[idx] = _chunk(part)
         return out
     t0 = time.time()
     with pinned_blas(1):
@@ -340,7 +343,7 @@ def traction(pts, nrm, tris, sn, slip_nodes, workers, *, eps, mu=30.0,
                                               lam)) as ex:
             done = 0
             for i, got in enumerate(ex.map(_chunk, parts, chunksize=1)):
-                out[i * CHUNK:i * CHUNK + got.shape[0]] = got
+                out[splits[i]] = got
                 done += got.shape[0]
                 if log and (i % 10 == 0 or done == npt):
                     el = time.time() - t0

@@ -106,6 +106,19 @@ def _git() -> str | None:
         return None
 
 
+def fold_tag() -> dict:
+    """What the kernel does at the free surface, for the cache keys: a matrix
+    assembled before the fold (``mhs.kernels.fold``) or under other fold
+    parameters is a different matrix, and must miss rather than be served."""
+    from mhs import defaults as d
+    return dict(fold="mirror + Boussinesq for sources within "
+                     "FOLD_SOURCE_DEPTH_EPS of z = 0",
+                source_depth_eps=d.FOLD_SOURCE_DEPTH_EPS,
+                band_depth_eps=d.FOLD_BAND_DEPTH_EPS, reach_eps=d.FOLD_REACH_EPS,
+                fine_spacing_eps=d.FOLD_FINE_SPACING_EPS,
+                n_radial=d.FOLD_N_RADIAL, n_angular=d.FOLD_N_ANGULAR)
+
+
 def cache_key(tris: np.ndarray, mu: float, lam: float, eps: float) -> str:
     """A short hash of everything the matrix depends on.
 
@@ -123,7 +136,8 @@ def cache_key(tris: np.ndarray, mu: float, lam: float, eps: float) -> str:
     payload = {"geometry_sha256": geom, "n": int(tris.shape[0]),
                "mu": mu, "lam": lam, "eps": eps,
                "receiver": list(RECEIVER), "source": list(SOURCE),
-               "layout": "source_major_(n_src,n_b,n_a,n_rec)"}
+               "layout": "source_major_(n_src,n_b,n_a,n_rec)",
+               "kernel": fold_tag()}
     blob = json.dumps(payload, sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
 

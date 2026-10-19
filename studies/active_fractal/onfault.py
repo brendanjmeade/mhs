@@ -90,7 +90,7 @@ EPS = 0.1 * H_KM
 SLOPE = R.SLOPE
 CORR_KM = R.CORR_OVER_H * R.H_KM # the published correlation length, in km (4)
 REGIME, DROP_RATIO, MEAN_STRESS = R.REGIME, R.DROP_RATIO, R.MEAN_STRESS
-SCHEMA = 3
+SCHEMA = 4                       # 4: the A-alone experiment beside the system
 
 #: The system. Every fault strikes along y and dips toward +x, with no
 #: azimuth because the thrust load ``diag(-1, 0, 1)`` compresses along x and
@@ -150,6 +150,10 @@ EDGE_STEP = 0.02                 # eps per byte of the shipped edge distance
 KERNELS = ("mollified", "classical", "continuous")
 #: The passes of ``field`` that need a pool of their own.
 POOL_PASSES = ("mollified", "continuous")
+#: The two experiments the page shows: the three faults together, and A by
+#: itself on the same mesh, the same matrix (its A-A block) and the same
+#: load -- the baseline that says what B and C do to A.
+EXPERIMENTS = ("system", "alone")
 
 #: The continuous kernel's mollification width, TWICE the P0 kernels'.
 #: Measured on this system at eps = 0.1 h: the nodal operator's symmetric part
@@ -487,7 +491,27 @@ def cmd_solve(a) -> int:
                 active_system=float(active_el[m].mean()),
                 moment_ratio=(mom_sys / mom_alone if mom_alone > 0 else
                               float("inf") if mom_sys > 0 else 1.0),
-                shadow_GPa=shadow, max_slip_m=float(sol.delta[mg].max() * 1e3)))
+                moment_system_km3=mom_sys, moment_alone_km3=mom_alone,
+                shadow_GPa=shadow, max_slip_m=float(sol.delta[mg].max() * 1e3),
+                max_slip_alone_m=float(alone.delta[mg].max() * 1e3)))
+            if i == 0:
+                # THE BASELINE EXPERIMENT: A alone, on the same mesh and the
+                # same matrix (its A-A block), under the same load. Kept in
+                # full so `field` can read its maps.
+                if nodal:
+                    s_al = Fr.slip_cartesian(net.tris, fric_n.slip_dir,
+                                             alone.delta, planes=sn.normals)
+                    state.update(slip_alone_continuous_nodes=s_al,
+                                 active_alone_continuous_nodes=alone.active)
+                    slip_al, act_al = sn.element_mean(s_al), sn.element_mean(alone.delta) > 0.0
+                else:
+                    slip_al = Fr.slip_cartesian(net.tris, fric.slip_dir, alone.delta)
+                    act_al = alone.active
+                state.update({f"delta_alone_{k}": alone.delta,
+                              f"slip_alone_{k}": slip_al,
+                              f"active_alone_{k}": act_al,
+                              f"sweeps_alone_{k}": alone.sweeps,
+                              f"residual_alone_{k}": alone.residual})
             print(f"    {k:10s} {f['name']}: active alone {rows[-1]['active_alone']:.2f}"
                   f" -> system {rows[-1]['active_system']:.2f}, moment x"
                   f"{rows[-1]['moment_ratio']:.3f}, shadow "
@@ -549,6 +573,17 @@ def cells(tris: np.ndarray, k: int, eps: float = EPS) -> dict:
                 facet_area=area, k=k)
 
 
+def interleave(npt: int, workers: int) -> list:
+    """Cell index blocks of at most CHUNK cells, STRIDED rather than
+    contiguous: the folded kernel's cost sits on the rows that touch the
+    surface, which element order keeps together, so a contiguous chunk of
+    those rows ran for hours on one worker while the others sat idle. With
+    every block holding a share of every row the pool stays level."""
+    n_parts = max(1, -(-npt // CHUNK), 4 * max(1, int(workers or 1)))
+    n_parts = min(n_parts, npt)
+    return [np.arange(i, npt, n_parts) for i in range(n_parts)]
+
+
 def _init(tris, slip, eps):
     _W.update(tris=tris, slip=slip, eps=float(eps),
               mat=mhs.Material(mu=MU, lam=LAM))
@@ -578,13 +613,13 @@ def mollified_traction(pts, nrm, tris, slip, workers, *, eps: float = EPS,
     import multiprocessing as mp
     from mhs.parallel import pinned_blas
     npt = pts.shape[0]
-    parts = [(pts[i:i + CHUNK], nrm[i:i + CHUNK]) for i in range(0, npt, CHUNK)]
+    splits = interleave(npt, workers)
+    parts = [(pts[idx], nrm[idx]) for idx in splits]
     out = np.empty((npt, 3))
     if workers in (0, 1):
         _init(tris, slip, eps)
-        for i, part in enumerate(parts):
-            got = _chunk(part)
-            out[i * CHUNK:i * CHUNK + got.shape[0]] = got
+        for idx, part in zip(splits, parts):
+            out[idx] = _chunk(part)
         return out
     fn = _chunk_latepin if pin == "worker" else _chunk
     guard = pinned_blas(1) if pin == "parent" else contextlib.nullcontext()
@@ -596,7 +631,7 @@ def mollified_traction(pts, nrm, tris, slip, workers, *, eps: float = EPS,
                                     initargs=(tris, slip, eps)) as ex:
             done = 0
             for i, got in enumerate(ex.map(fn, parts, chunksize=1)):
-                out[i * CHUNK:i * CHUNK + got.shape[0]] = got
+                out[splits[i]] = got
                 done += got.shape[0]
                 if log and (i % 10 == 0 or done == npt):
                     el = time.time() - t0
@@ -727,16 +762,28 @@ def probe_run(z, c, cfg: str) -> int:
     return 0
 
 
+def alone_cells(z: dict, c: dict) -> np.ndarray:
+    """The cells of fault A: where the A-alone experiment has a map."""
+    return np.flatnonzero(z["fault_id"][c["facet"]] == 0)
+
+
 def field_pass(name: str, z: dict, c: dict, tris: np.ndarray, workers: int,
-               sn=None) -> np.ndarray:
-    """One kernel's traction on every cell: the pool pass of ``field``."""
+               sn=None, experiment: str = "system") -> np.ndarray:
+    """One kernel's traction on every cell: the pool pass of ``field``. The
+    ``alone`` experiment reads A's own slip on A's cells only; B and C carry
+    no slip there and have no map."""
+    pts, nrm = c["pts"], c["nrm"]
+    if experiment == "alone":
+        sel = alone_cells(z, c)
+        pts, nrm = pts[sel], nrm[sel]
+    tag = "" if experiment == "system" else f"alone_"
     if name == "mollified":
-        return mollified_traction(c["pts"], c["nrm"], tris, z["slip_mollified"],
+        return mollified_traction(pts, nrm, tris, z[f"slip_{tag}mollified"],
                                   workers)
     if name == "continuous":
-        return Nd.traction(c["pts"], c["nrm"], tris, sn,
-                           z["slip_continuous_nodes"], workers,
-                           eps=float(z["eps_continuous"]), mu=MU, lam=LAM)
+        return Nd.traction(pts, nrm, tris, sn, z[f"slip_{tag}continuous_nodes"],
+                           workers, eps=float(z["eps_continuous"]), mu=MU,
+                           lam=LAM)
     raise ValueError(name)
 
 
@@ -755,9 +802,10 @@ def cmd_field(a) -> int:
     if a.pass_:
         # one pool pass in a process of its own; the parent merges it
         sn = Nd.table(net) if a.pass_ == "continuous" else None
-        t = field_pass(a.pass_, z, c, tris, a.workers, sn)
-        np.savez_compressed(a.out, **{f"t_{a.pass_}": t}, k=a.k, tris=tris)
-        print(f"  pass {a.pass_}: saved {a.out}")
+        t = field_pass(a.pass_, z, c, tris, a.workers, sn, a.experiment)
+        key = f"t_{a.pass_}" if a.experiment == "system" else f"t_alone_{a.pass_}"
+        np.savez_compressed(a.out, **{key: t}, k=a.k, tris=tris)
+        print(f"  pass {a.pass_} ({a.experiment}): saved {a.out}")
         return 0
     print(f"  k = {a.k}: {a.k * a.k} cells per facet, {npt} cells x {nsrc} "
           f"sources = {npt * nsrc / 1e6:.1f} M pairs; nearest cell to an edge "
@@ -771,49 +819,74 @@ def cmd_field(a) -> int:
             a.out, tris=tris, k=a.k, corners=c["corners"], facet=c["facet"],
             edge_eps=c["edge_eps"], area=c["area"], facet_area=c["facet_area"],
             pts=c["pts"], lam=z["lam"], coupled=coupled, state=str(a.state),
-            **extra)
+            **stamp, **extra)
         print(f"  saved {a.out}" + (" (pool passes only, classical to come)"
                                     if "t_classical" not in extra else ""))
 
     # Banked before the cheap pass is attempted, and reloaded when the cells
     # match: the lesson of isosurf's lost 2.2 h. Each pool pass runs in a
     # subprocess of its own and is merged here.
+    sel = alone_cells(z, c)
+    passes = [(name, exp) for exp in EXPERIMENTS for name in POOL_PASSES]
+    keyof = lambda name, exp: f"t_{name}" if exp == "system" else f"t_alone_{name}"
+    rows = {"system": npt, "alone": sel.size}
+    # A banked pass is reused only for the SAME state (the slip it was read
+    # from) and the SAME kernel: keyed on the mesh alone, the first folded
+    # field run quietly reused lift-era tractions of an older slip, because
+    # the mesh had not changed.
+    stamp = dict(state_sha=hashlib.sha256(pathlib.Path(a.state).read_bytes()).hexdigest(),
+                 kernel=json.dumps(K.fold_tag(), sort_keys=True))
     banked: dict = {}
     if pathlib.Path(a.out).exists():
         with np.load(a.out, allow_pickle=False) as z0:
-            if int(z0["k"]) == a.k and np.array_equal(z0["tris"], tris):
-                for name in POOL_PASSES:
-                    if f"t_{name}" in z0 and z0[f"t_{name}"].shape == (npt, 3):
-                        banked[name] = z0[f"t_{name}"]
-                        print(f"  reusing the {name} pass already in {a.out}")
-    for name in POOL_PASSES:
-        if name in banked:
+            same = (int(z0["k"]) == a.k and np.array_equal(z0["tris"], tris)
+                    and all(key in z0 and str(z0[key]) == val
+                            for key, val in stamp.items()))
+            if same:
+                for name, exp in passes:
+                    key = keyof(name, exp)
+                    if key in z0 and z0[key].shape == (rows[exp], 3):
+                        banked[key] = z0[key]
+                        print(f"  reusing the {name} ({exp}) pass already in {a.out}")
+            else:
+                print(f"  {a.out} is from another state or kernel: nothing reused")
+    for name, exp in passes:
+        key = keyof(name, exp)
+        if key in banked:
             continue
-        side = pathlib.Path(a.out).with_suffix(f".{name}.npz")
+        side = pathlib.Path(a.out).with_suffix(f".{name}.{exp}.npz")
         subprocess.run([sys.executable, __file__, "field", "--state",
                         str(a.state), "--k", str(a.k), "--out", str(side),
-                        "--workers", str(a.workers), "--pass", name],
-                       check=True)
+                        "--workers", str(a.workers), "--pass", name,
+                        "--experiment", exp], check=True)
         with np.load(side, allow_pickle=False) as zs:
-            banked[name] = zs[f"t_{name}"]
+            banked[key] = zs[key]
         side.unlink()
-        save(**{f"t_{n}": t for n, t in banked.items()})
-    t_c = classical_traction(c["pts"], c["nrm"], tris, z["slip_classical"])
-    tr = dict(banked, classical=t_c)
-    got = {}
-    for k in KERNELS:
-        t = tr[k]
-        bad = int((~np.isfinite(t)).any(axis=1).sum())
-        print(f"    {k}: {bad} non-finite cells of {npt}")
-        got.update({f"{k}_{m}": v for m, v in
-                    metrics(t, c["facet"], z, coupled).items()})
-    save(**{f"t_{k}": tr[k] for k in KERNELS}, **got)
-    for m in METRICS:
+        save(**banked)
+    tr = dict(banked)
+    tr["t_classical"] = classical_traction(c["pts"], c["nrm"], tris,
+                                           z["slip_classical"])
+    tr["t_alone_classical"] = classical_traction(c["pts"][sel], c["nrm"][sel],
+                                                 tris, z["slip_alone_classical"])
+    got = {"alone_cells": sel}
+    for exp in EXPERIMENTS:
         for k in KERNELS:
-            v = got[f"{k}_{m}"]
-            print(f"    {m:4s} {k:10s} [{np.nanmin(v) * 1e3:+9.3f}, "
-                  f"{np.nanmax(v) * 1e3:+9.3f}] MPa  p50 |.| "
-                  f"{np.nanmedian(np.abs(v)) * 1e3:7.3f}")
+            t = tr[keyof(k, exp)]
+            bad = int((~np.isfinite(t)).any(axis=1).sum())
+            print(f"    {k} ({exp}): {bad} non-finite cells of {t.shape[0]}")
+            facet = c["facet"] if exp == "system" else c["facet"][sel]
+            tag = "" if exp == "system" else "alone_"
+            got.update({f"{tag}{k}_{m}": v for m, v in
+                        metrics(t, facet, z, coupled).items()})
+    save(**tr, **got)
+    for exp in EXPERIMENTS:
+        tag = "" if exp == "system" else "alone_"
+        for m in METRICS:
+            for k in KERNELS:
+                v = got[f"{tag}{k}_{m}"]
+                print(f"    {exp:6s} {m:4s} {k:10s} [{np.nanmin(v) * 1e3:+9.3f}, "
+                      f"{np.nanmax(v) * 1e3:+9.3f}] MPa  p50 |.| "
+                      f"{np.nanmedian(np.abs(v)) * 1e3:7.3f}")
     return 0
 
 
@@ -881,6 +954,8 @@ def cmd_payload(a) -> int:
     for m in METRICS:
         win[m] = window_rule(f[f"mollified_{m}"], area)
     st: dict = {}
+    sel = f["alone_cells"]
+    on_a = fid == 0
     for kern in KERNELS:
         put(f"onfault.{kern}.slip", np.linalg.norm(z[f"slip_{kern}"], axis=1),
             np.float32)
@@ -889,6 +964,19 @@ def cmd_payload(a) -> int:
             v = f[f"{kern}_{m}"]
             put(f"onfault.{kern}.{m}", v, np.float32)
             st[kern][m] = stats(v, area, win[m])
+        # A alone: a map on A's cells, NaN where there is no fault in that
+        # experiment (the viewer paints those grey).
+        s_al = np.linalg.norm(z[f"slip_alone_{kern}"], axis=1)
+        s_al[~on_a] = np.nan
+        put(f"onfault.alone.{kern}.slip", s_al, np.float32)
+        st[f"alone.{kern}"] = {}
+        for m in METRICS:
+            v = np.full(facet.shape[0], np.nan)
+            v[sel] = f[f"alone_{kern}_{m}"]
+            if not np.isfinite(v[sel]).all():
+                raise SystemExit(f"alone {kern} {m}: non-finite on A; refused")
+            put(f"onfault.alone.{kern}.{m}", v, np.float32)
+            st[f"alone.{kern}"][m] = stats(v, area, win[m])
 
     # The welded surface of every fault, for the wireframe and the rims.
     geom = []
@@ -961,7 +1049,21 @@ def cmd_payload(a) -> int:
         metrics=dict(S="tau_s - mu sigma_n', total, GPa",
                      dsn="slip-induced normal stress, compression positive, GPa",
                      dts="slip-induced shear along the slip direction, GPa"),
-        defaults=dict(kernel="mollified", metric="S", mask_eps=0.0))
+        experiments=dict(
+            system="A, B and C together",
+            alone="A by itself: the same mesh of A, the same matrix (its A-A "
+                  "block), the same load; B and C absent, so their cells "
+                  "carry NaN",
+            **{f"alone_{kern}": dict(
+                active_fraction=float(z[f"active_alone_{kern}"][on_a].mean()),
+                sweeps=int(z[f"sweeps_alone_{kern}"]),
+                residual=float(z[f"residual_alone_{kern}"]),
+                **{key: table[kern][0][key] for key in
+                   ("moment_system_km3", "moment_alone_km3", "moment_ratio",
+                    "shadow_GPa", "max_slip_m", "max_slip_alone_m")})
+               for kern in KERNELS}),
+        defaults=dict(kernel="mollified", metric="S", experiment="system",
+                      mask_eps=0.0))
     (out / "onfault_manifest.json").write_text(
         json.dumps(man, indent=1, sort_keys=True, allow_nan=False) + "\n")
     total = sum(v["bytes"] for v in arrays.values())
@@ -992,6 +1094,8 @@ def main(argv=None) -> int:
     f.add_argument("--probe", action="store_true")
     f.add_argument("--probe-run", default=None, help=argparse.SUPPRESS)
     f.add_argument("--pass", dest="pass_", default=None, choices=POOL_PASSES,
+                   help=argparse.SUPPRESS)
+    f.add_argument("--experiment", default="system", choices=EXPERIMENTS,
                    help=argparse.SUPPRESS)
     p = sub.add_parser("payload", help="field -> website/public/data")
     p.add_argument("--field", default=str(here / "out" / "onfault_field.npz"))

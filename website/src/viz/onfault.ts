@@ -1,5 +1,10 @@
 // On-fault stress on a system of three surface-breaking rough faults: one
-// scalar per element, three kernels, one window.
+// scalar per element, three kernels, one window, and TWO EXPERIMENTS -- the
+// main fault A by itself (the same mesh, matrix block and load) and the three
+// faults together -- so that what B and C do to A is a difference of two
+// maps rather than a reading of one. In the "alone" experiment B and C have
+// no map and are painted grey; the difference view paints system minus alone
+// on A, through the same window.
 //
 // COLOUR IS DATA HERE, so this scene is unlit and flat: no light, no relief
 // shading, nothing that would modulate a Coulomb excess by where a lamp is.
@@ -48,7 +53,7 @@ export interface OnFaultManifest {
   stats: Record<string, Record<string, { saturated_area_fraction: number;
                                          nonfinite: number }>>;
   arrays: Record<string, { dtype: string; shape: number[]; bytes: number }>;
-  defaults: { kernel: string; metric: string };
+  defaults: { kernel: string; metric: string; experiment?: string };
 }
 
 interface FaultGeom {
@@ -73,7 +78,7 @@ uniform sampler2D uLut;
 uniform vec2  uWin;        // lo, hi in GPa
 uniform bool  uMark;       // paint out-of-window cells flat rather than saturated
 void main() {
-  if (isnan(vValue)) { fragColor = vec4(1.0, 0.0, 1.0, 1.0); return; }
+  if (isnan(vValue)) { fragColor = vec4(0.86, 0.86, 0.87, 1.0); return; }   // no map here
   float t = (vValue - uWin.x) / max(uWin.y - uWin.x, 1e-30);
   if (uMark && (t < 0.0 || t > 1.0)) { fragColor = vec4(0.13, 0.13, 0.14, 1.0); return; }
   fragColor = vec4(texture(uLut, vec2(clamp(t, 0.0, 1.0), 0.5)).rgb, 1.0);
@@ -90,6 +95,10 @@ export const METRICS: Record<string, { label: string; signed: boolean; map: MapN
 export const KERNELS: Record<string, string> = {
   mollified: "mollified P0 (mhs)", classical: "classical TDE (cutde)",
   continuous: "mollified, continuous P2 (mhs)",
+};
+
+export const EXPERIMENTS: Record<string, string> = {
+  system: "A + B + C", alone: "A alone", diff: "system − alone, on A",
 };
 
 export class OnFaultScene {
@@ -308,14 +317,16 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
 
   let kernel = man.defaults.kernel;
   let metric = man.defaults.metric;
+  let experiment = man.defaults.experiment ?? "system";
   let winMPa = Number(man.window[metric]) * 1e3;     // half-width, MPa
   let mark = false;
 
   const cache = new Map<string, Float32Array>();
-  async function values(kern: string, met: string): Promise<Float32Array> {
-    const key = met === "slip" ? `onfault.${kern}.slip` : `onfault.${kern}.${met}`;
+  async function raw(exp: string, kern: string, met: string): Promise<Float32Array> {
+    const key = `onfault.${exp === "alone" ? "alone." : ""}${kern}.${met}`;
     const hit = cache.get(key);
     if (hit) return hit;
+    if (!A[key]) throw new Error(`${key} is not in the manifest`);
     let v = new Float32Array(await load(key));
     if (met === "slip") {              // per element -> per cell, km -> m
       const out = new Float32Array(n * kk);
@@ -324,6 +335,19 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
     }
     cache.set(key, v);
     return v;
+  }
+  /** The map of one experiment; "diff" is system minus alone on A, NaN
+   * elsewhere, so the same window applies to all three. */
+  async function values(exp: string, kern: string, met: string): Promise<Float32Array> {
+    if (exp !== "diff") return raw(exp, kern, met);
+    const key = `diff:${kern}.${met}`;
+    const hit = cache.get(key);
+    if (hit) return hit;
+    const [sys, al] = await Promise.all([raw("system", kern, met), raw("alone", kern, met)]);
+    const d = new Float32Array(sys.length);
+    for (let i = 0; i < d.length; i++) d[i] = sys[i] - al[i];   // NaN off A survives
+    cache.set(key, d);
+    return d;
   }
 
   const sel = (name: string, opts: [string, string][], value: string,
@@ -350,6 +374,8 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
     return b;
   };
 
+  sel("experiment", Object.keys(EXPERIMENTS).map((k) => [k, EXPERIMENTS[k]]),
+      experiment, (v) => { experiment = v; void refresh(); });
   sel("kernel", Object.keys(KERNELS).map((k) => [k, KERNELS[k]]), kernel,
       (v) => { kernel = v; void refresh(); });
   sel("metric", Object.keys(METRICS).map((k) => [k, METRICS[k].label]), metric,
@@ -393,7 +419,7 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
     b.addEventListener("click", () => {
       const a = document.createElement("a");
       a.href = view.screenshot();
-      a.download = `mhs-onfault-${kernel}-${metric}.png`;
+      a.download = `mhs-onfault-${experiment}-${kernel}-${metric}.png`;
       a.click();
     });
     shotWrap.appendChild(b);
@@ -408,10 +434,12 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
   function applyWindow() {
     const m = METRICS[metric];
     if (m.signed) view.setWindow(-winMPa * 1e-3, winMPa * 1e-3);
+    else if (experiment === "diff") view.setWindow(-winMPa, winMPa);   // a slip difference is signed
     else view.setWindow(0, winMPa);          // slip is already in metres
     if (winIn) winIn.value = String(Math.log10(Math.max(winMPa, 0.1)));
     if (winOut) winOut.textContent = m.signed ? `±${fmt(winMPa)} MPa`
-                                              : `0 – ${fmt(winMPa)} m`;
+                                   : experiment === "diff" ? `±${fmt(winMPa)} m`
+                                                           : `0 – ${fmt(winMPa)} m`;
     paintLegend();
   }
 
@@ -421,12 +449,13 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
     let sat = 0, tot = 0;
     const lo = m.signed ? -winMPa * 1e-3 : 0, hi = m.signed ? winMPa * 1e-3 : winMPa;
     for (let c = 0; c < v.length; c++) {
+      const x = v[c];
+      if (Number.isNaN(x)) continue;          // no map in this experiment
       const a = cellArea(c);
       tot += a;
-      const x = v[c];
       if (x < lo || x > hi) sat += a;
     }
-    return sat / tot;
+    return tot > 0 ? sat / tot : 0;
   }
 
   function paintLegend() {
@@ -434,12 +463,14 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
     const m = METRICS[metric];
     const fa = man.faults[0];
     const bits: string[] = [];
+    bits.push(EXPERIMENTS[experiment]);
     bits.push(`${m.label}${m.signed ? " (MPa)" : " (m)"}`);
     bits.push(m.signed ? `window ±${fmt(winMPa)} MPa` : `window 0–${fmt(winMPa)} m`);
     const sats = Object.keys(KERNELS)
       .filter((k) => current[k])
       .map((k) => `${k} ${(100 * saturated(current[k])).toFixed(1)} %`);
-    if (sats.length) bits.push(`saturated: ${sats.join(", ")} of area`);
+    if (sats.length) bits.push(`saturated: ${sats.join(", ")} of the mapped area`);
+    if (experiment !== "system") bits.push(`grey: no fault in this experiment`);
     bits.push(`remote on A: τ ${fmt(fa.remote_shear_MPa)} MPa, `
       + `σₙ′ ${fmt(fa.remote_sigma_n_MPa)} MPa`);
     bits.push(kk === 1 ? `one value per element, sampled at its centroid`
@@ -460,21 +491,23 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
       // Every kernel of the chosen metric, so the legend can state all the
       // saturated fractions without a toggle.
       const names = Object.keys(KERNELS);
-      const loaded = await Promise.all(names.map((k) => values(k, metric)));
+      const loaded = await Promise.all(names.map((k) => values(experiment, k, metric)));
       if (mine !== seq) return;
       current = {};
       names.forEach((k, i) => { current[k] = loaded[i]; });
       const m = METRICS[metric];
       if (metric === "slip" && winMPa === 0) {
         let mx = 0;
-        for (const v of loaded) for (let i = 0; i < v.length; i++) mx = Math.max(mx, v[i]);
+        for (const v of loaded) for (let i = 0; i < v.length; i++) {
+          if (!Number.isNaN(v[i])) mx = Math.max(mx, Math.abs(v[i]));
+        }
         winMPa = mx;
       }
-      view.setMap(m.map);
+      view.setMap(metric === "slip" && experiment === "diff" ? "rdbu_r" : m.map);
       view.setValues(current[kernel]);
       applyWindow();
-      status.textContent = `${KERNELS[kernel]} — ${m.label}`;
-      root.dataset.shown = `${kernel}/${metric}`;
+      status.textContent = `${EXPERIMENTS[experiment]} — ${KERNELS[kernel]} — ${m.label}`;
+      root.dataset.shown = `${experiment}/${kernel}/${metric}`;
     } catch (e) {
       status.textContent = `failed: ${e}`;
     }
