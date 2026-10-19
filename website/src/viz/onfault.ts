@@ -98,7 +98,9 @@ export const KERNELS: Record<string, string> = {
 };
 
 export const EXPERIMENTS: Record<string, string> = {
-  system: "A + B + C", alone: "A alone", diff: "system − alone, on A",
+  system: "A + B + C: the three faults together",
+  alone: "A alone: B and C absent",
+  diff: "change on A: (A + B + C) − (A alone), own window",
 };
 
 export class OnFaultScene {
@@ -456,6 +458,20 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
                                    : experiment === "diff" ? `±${fmt(winMPa)} m`
                                                            : `0 – ${fmt(winMPa)} m`;
     paintLegend();
+    paintStatus();
+  }
+
+  /** The line under the viewer: what is shown, and at what window -- for the
+   * difference, beside the maps' own window, so that a few MPa of change at
+   * a tight window cannot read as a large stress. */
+  function paintStatus() {
+    const m = METRICS[metric];
+    const unit = m.signed ? "MPa" : "m";
+    const win = m.signed || experiment === "diff" ? `window ±${fmt(winMPa)} ${unit}`
+                                                  : `window 0–${fmt(winMPa)} m`;
+    const maps = experiment === "diff" && m.signed
+      ? ` (the maps use ±${fmt(Number(man.window[metric] ?? 0) * 1e3)} MPa)` : "";
+    status.textContent = `${EXPERIMENTS[experiment]} — ${KERNELS[kernel]} — ${m.label} — ${win}${maps}`;
   }
 
   /** Area-weighted fraction of cells outside the window. */
@@ -528,7 +544,7 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
       view.setMap(metric === "slip" && experiment === "diff" ? "rdbu_r" : m.map);
       view.setValues(current[kernel]);
       applyWindow();
-      status.textContent = `${EXPERIMENTS[experiment]} — ${KERNELS[kernel]} — ${m.label}`;
+      paintStatus();
       root.dataset.shown = `${experiment}/${kernel}/${metric}`;
     } catch (e) {
       status.textContent = `failed: ${e}`;
