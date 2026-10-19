@@ -1650,6 +1650,26 @@ def c_slip() -> None:
     check_true("released moment is positive",
                all(e.moment_Nm > 0.0 for e in ev),
                f"total {sum(e.moment_Nm for e in ev):.3e} N m")
+    # the recorder hook sees every event and changes none
+    import avalanche as Av                                     # noqa: PLC0415
+    rc = Av.Recorder(net.n_elements)
+    st2, ev2 = Csc.run_history(net, fric, P, lam_max=lam_max, record=rc)
+    check_true("a recorder leaves the history bit for bit",
+               np.array_equal(st2.s, st.s) and ev2 == ev, "")
+    check_true("it counts every failure the events count",
+               int(rc.count.sum()) == sum(e.n_slipped for e in ev)
+               and len(rc.n_new) == len(ev), f"{int(rc.count.sum())}")
+    check_true("first-failure load is set exactly on the elements that slipped",
+               bool(np.array_equal(np.isfinite(rc.lam_first), st.s > 0.0))
+               and bool(np.all(np.diff(np.sort(rc.lam_first[st.s > 0.0])) >= 0.0)),
+               "")
+    check_true("the trigger of every event slipped in it",
+               all(rc.count[j] > 0 for j in rc.trigger), "")
+    fi, fo, fk = rc.footprint()
+    check_true("every footprint is its event, and only the big ones are kept",
+               all(fo[w + 1] - fo[w] == ev[k].n_slipped for w, k in enumerate(fk))
+               and len(fk) == sum(e.n_slipped >= Av.BIG for e in ev),
+               f"{len(fk)} footprints of >= {Av.BIG} elements")
 
     # THE ROBUSTNESS CLAIM the dimension result depends on.
     worst_j, worst_slip = 1.0, 0.0
@@ -2269,6 +2289,54 @@ def c_system() -> None:
     check_true("REFUSES a correlation length longer than the disc",
                refused(lambda: Sy.build_system(spec[:1], h, rms_slope=0.25,
                                                corr=4.0), ValueError), "")
+
+    # the stadium: the disc pulled apart along strike by a straight run
+    run = 2.0
+    o0 = Sy.outline(1.5, 1.0, h)
+    check_true("run = 0 is the disc, bit for bit",
+               np.array_equal(Sy.outline(1.5, 1.0, h, run=0.0).verts, o0.verts)
+               and Sy.outline(1.5, 1.0, h, run=0.0).tags == o0.tags, "")
+    rs, ns = Sy.build_system((dict(spec[0], name="S", run=run),), h,
+                             rms_slope=0.25, corr=8 * h)
+    S = rs[0]
+    o = S["outline"]
+    check_true("the stadium carries both arcs, a run and a trace",
+               {"arc", "run", "trace"} == set(o.tags), f"{sorted(set(o.tags))}")
+    check("every arc vertex lies on the nearer of the two circles (km)",
+          o.off_circle(), 1e-9 * h)
+    ri = o.vertices_on("run")
+    check("the run is the straight line at the bottom of the discs (km)",
+          float(np.abs(o.verts[ri, 1] - (o.v_c + o.a)).max()), 1e-12)
+    check("and spans exactly the run between the centres",
+          float(np.ptp(o.verts[ri, 0])) - run, 1e-12)
+    tl = S["xyz"][S["trace_idx"], 1]
+    check("the trace is the disc's chord plus the run",
+          abs(float(tl.max() - tl.min())
+              / (2.0 * math.sqrt(1.5 ** 2 - 1.0 ** 2) + run) - 1.0), 1e-9)
+    check("and the fault is 2 a + run long",
+          abs(float(ns.length[0]) - (3.0 + run)), 1e-12)
+    def flat_area(r):
+        e1 = r["uv"][r["idx"][:, 1]] - r["uv"][r["idx"][:, 0]]
+        e2 = r["uv"][r["idx"][:, 2]] - r["uv"][r["idx"][:, 0]]
+        return float(np.abs(np.cross(e1, e2)).sum() / 2.0)
+    check("in plane, the stadium is the disc plus the run times the cut width",
+          abs(flat_area(S) / (flat_area(A) + run * (1.0 + 1.5)) - 1.0), 1e-3)
+    share = N.edge_sharing(S["idx"])
+    check_true("the stadium is a manifold tiling",
+               share.size == 3 and share[0] == 0, f"{share}")
+    check_true("zero displacement on its outline, the run included",
+               bool(np.all(S["w"][S["boundary_idx"]] == 0.0)), "")
+    check("its median edge within 15 % of h", abs(S["median_edge"] / h - 1.0), 0.15)
+    rb, nb = Sy.build_system(
+        (dict(name="D", a=1.0, dip=30.0, seed=1, centre=(0.0, 0.0, -20.0), run=run),),
+        h, rms_slope=0.25, corr=8 * h)
+    check_true("a buried stadium is two arcs and two runs, no trace",
+               set(rb[0]["outline"].tags) == {"arc", "run"}
+               and rb[0]["trace_idx"].size == 0, f"{rb[0]['n']} elements")
+    check_true("REFUSES a stadium splay",
+               refused(lambda: Sy.build_system(
+                   (spec[0], dict(spec[2], run=run)), h, rms_slope=0.25,
+                   corr=8 * h), ValueError), "")
 
 
 # --------------------------------------------------------------- [onfault] ---

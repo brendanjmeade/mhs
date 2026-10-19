@@ -2,7 +2,7 @@
 
 The project site, published at <https://brendanjmeade.github.io/mhs/>.
 
-Astro, eight pages, no framework runtime. Built and deployed by
+Astro, nine pages, no framework runtime. Built and deployed by
 `.github/workflows/deploy-website.yml` on every push to `main` that touches
 `website/`. The workflow passes `SITE` and `BASE`, deriving the base path from
 the repository name, so `astro.config.mjs`'s defaults exist only for `npm run
@@ -42,7 +42,14 @@ build machine (`studies/active_fractal/roughvol.py` says why):
 python studies/active_fractal/roughvol.py solve && ... volume     # /roughness/
 python studies/active_fractal/isosurf.py field ... && ... mesh    # /isosurface/
 python studies/active_fractal/onfault.py solve && ... field --k 1 && ... payload   # /onfault/
+python studies/active_fractal/onfault.py thresholds                                 # /avalanche/, the opening figure
+python studies/active_fractal/avalanche.py assemble A && ... run A && ... figure    # /avalanche/, per variant
 ```
+
+The avalanche page is prose and three PNG figures in `src/figures/`, written
+by `avalanche.py figure` from the runs in `studies/active_fractal/out/`; the
+numbers quoted in its text are the ones `figure` prints as a table, so a
+re-run that changes them is a page edit as well.
 
 `fault` builds the home page's clickable interaction matrix: 256 triangles,
 three 256×256 float32 matrices (shear, normal, Coulomb). It **refuses to write**

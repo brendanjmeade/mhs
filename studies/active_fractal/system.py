@@ -33,6 +33,13 @@ against 6 h at a rim) because two rough surfaces meeting at 20 degrees would
 otherwise cross within a kilometre of the line at a three-sigma peak; the
 side gate below decides, not that estimate.
 
+A STADIUM IS A DISC PULLED APART. A spec with ``run=L`` is the disc with
+its two halves moved L/2 apart along strike and joined by straight runs, so a
+fault can be made longer along strike than down dip without changing its
+radius, its roughness or its cut by the surface. The rims are still curves,
+the trace is still a chord, and the same taper, roughness and gates apply.
+A splay is never a stadium (its junction chord is computed for a disc).
+
 Every fault strikes along y and dips toward +x at ``dip`` degrees, with its
 trace line at ``(x_t, y_t, 0)``: in-plane coordinates are u along strike and
 v down-dip, ``X(u, v) = (x_t + v cos dip, y_t + u, -v sin dip)``, and the
@@ -107,6 +114,21 @@ class Outline:
     a: float
     v_c: float
     v_cut: float | None
+    run: float = 0.0
+
+    @property
+    def centres(self) -> np.ndarray:
+        """``(k, 2)`` centres of the arcs: one for a disc, two for a stadium."""
+        if self.run > 0.0:
+            return np.array([[0.5 * self.run, self.v_c], [-0.5 * self.run, self.v_c]])
+        return np.array([[0.0, self.v_c]])
+
+    def off_circle(self) -> float:
+        """The largest distance (km) of an arc vertex from the nearer circle."""
+        ai = self.vertices_on("arc")
+        rr = np.linalg.norm(self.verts[ai][:, None, :] - self.centres[None, :, :],
+                            axis=2)
+        return float(np.abs(rr - self.a).min(axis=1).max())
 
     @property
     def segments(self) -> np.ndarray:
@@ -119,39 +141,47 @@ class Outline:
         return np.unique(seg.ravel())
 
 
-def outline(a: float, v_c: float, h: float, v_cut: float | None = None
-            ) -> Outline:
+def outline(a: float, v_c: float, h: float, v_cut: float | None = None, *,
+            run: float = 0.0) -> Outline:
     """The disc of radius ``a`` centred at ``(0, v_c)``, cut by the surface
     ``v = 0`` when the circle crosses it and by ``v = v_cut`` when given,
     sampled at spacing about ``h``: arc vertices exactly on the circle, chord
     vertices exactly on their line (``v`` set to 0 or ``v_cut``, not computed).
+    With ``run > 0`` the two half-discs sit ``run`` apart along strike and
+    straight runs join them (tag ``"run"``), a stadium; the arcs are then on
+    the circles about ``(+-run / 2, v_c)``.
 
     The loop runs counter-clockwise in ``(u, v)``: from the surface on the
     +u side down the +u arc, across the junction chord toward -u, up the -u
     arc to the surface, and back along the trace.
     """
-    if not (a > 0.0 and h > 0.0 and v_c >= 0.0):
-        raise ValueError(f"need a, h > 0 and v_c >= 0; got {a}, {h}, {v_c}")
+    if not (a > 0.0 and h > 0.0 and v_c >= 0.0 and run >= 0.0):
+        raise ValueError(f"need a, h > 0 and v_c, run >= 0; got {a}, {h}, "
+                         f"{v_c}, {run}")
     cut_s = v_c < a
     cut_j = v_cut is not None
     if cut_j and not (0.0 < v_cut < v_c + a):
         raise ValueError(f"v_cut = {v_cut} is not inside the disc's reach "
                          f"(0, {v_c + a})")
+    if cut_j and run > 0.0:
+        raise ValueError("a splay is a disc: its junction chord is computed "
+                         "for one; a stadium cannot attach")
+    r = 0.5 * run                              # the arc centres sit at +-r
 
-    def P(t):
-        return np.array([a * math.cos(t), v_c + a * math.sin(t)])
+    def P(t, cu):
+        return np.array([cu + a * math.cos(t), v_c + a * math.sin(t)])
 
-    def arc(t0, t1):
+    def arc(t0, t1, cu):
         n = max(1, int(round(a * (t1 - t0) / h)))
         t = t0 + (t1 - t0) * np.arange(n) / n
-        return np.stack([a * np.cos(t), v_c + a * np.sin(t)], axis=1)
+        return np.stack([cu + a * np.cos(t), v_c + a * np.sin(t)], axis=1)
 
     def chord(p0, p1):
         n = max(1, int(round(float(np.linalg.norm(p1 - p0)) / h)))
         s = np.arange(n) / n
         return p0 + s[:, None] * (p1 - p0)
 
-    if not cut_s and not cut_j:
+    if not cut_s and not cut_j and run == 0.0:
         n = max(3, int(round(2.0 * math.pi * a / h)))
         t = 2.0 * math.pi * np.arange(n) / n
         verts = np.stack([a * np.cos(t), v_c + a * np.sin(t)], axis=1)
@@ -165,18 +195,29 @@ def outline(a: float, v_c: float, h: float, v_cut: float | None = None
     if cut_s and cut_j:
         if not be > -al:
             raise ValueError("the junction chord lies above the surface")
-        pieces = [(arc(-al, be), "arc"), (chord(P(be), P(math.pi - be)), "junction"),
-                  (arc(math.pi - be, math.pi + al), "arc"),
-                  (chord(P(math.pi + al), P(-al)), "trace")]
+        pieces = [(arc(-al, be, 0.0), "arc"),
+                  (chord(P(be, 0.0), P(math.pi - be, 0.0)), "junction"),
+                  (arc(math.pi - be, math.pi + al, 0.0), "arc"),
+                  (chord(P(math.pi + al, 0.0), P(-al, 0.0)), "trace")]
+    elif cut_s and run == 0.0:                # one arc: the disc, unchanged
+        pieces = [(arc(-al, math.pi + al, 0.0), "arc"),
+                  (chord(P(math.pi + al, 0.0), P(-al, 0.0)), "trace")]
     elif cut_s:
-        pieces = [(arc(-al, math.pi + al), "arc"),
-                  (chord(P(math.pi + al), P(-al)), "trace")]
-    else:
-        pieces = [(arc(math.pi - be, 2.0 * math.pi + be), "arc"),
-                  (chord(P(be), P(math.pi - be)), "junction")]
+        pieces = [(arc(-al, 0.5 * math.pi, r), "arc"),
+                  (chord(P(0.5 * math.pi, r), P(0.5 * math.pi, -r)), "run"),
+                  (arc(0.5 * math.pi, math.pi + al, -r), "arc"),
+                  (chord(P(math.pi + al, -r), P(-al, r)), "trace")]
+    elif cut_j:
+        pieces = [(arc(math.pi - be, 2.0 * math.pi + be, 0.0), "arc"),
+                  (chord(P(be, 0.0), P(math.pi - be, 0.0)), "junction")]
+    else:                                      # a buried stadium
+        pieces = [(arc(-0.5 * math.pi, 0.5 * math.pi, r), "arc"),
+                  (chord(P(0.5 * math.pi, r), P(0.5 * math.pi, -r)), "run"),
+                  (arc(0.5 * math.pi, 1.5 * math.pi, -r), "arc"),
+                  (chord(P(1.5 * math.pi, -r), P(1.5 * math.pi, r)), "run")]
     verts = np.concatenate([p for p, _ in pieces])
     tags = tuple(t for p, t in pieces for _ in range(p.shape[0]))
-    out = Outline(verts, tags, a, v_c, v_cut)
+    out = Outline(verts, tags, a, v_c, v_cut, run)
     # chord endpoints are shared with the arcs and carry the arc's round-off:
     # put every chord vertex exactly on its line
     verts[out.vertices_on("trace"), 1] = 0.0
@@ -331,7 +372,7 @@ def build_system(spec, h: float, *, rms_slope: float, corr: float,
                 v_c = 0.5 * v_cut
         if v_c is None:
             raise ValueError(f"{f['name']}: give v_c (or centre), or attach")
-        o = outline(f["a"], v_c, h, v_cut)
+        o = outline(f["a"], v_c, h, v_cut, run=float(f.get("run", 0.0)))
         r = dict(name=f["name"], spec=f, trace=trace, v_c=v_c, outline=o,
                  junction=j)
         if j is not None:
@@ -417,9 +458,7 @@ def build_system(spec, h: float, *, rms_slope: float, corr: float,
     for f in spec:
         r = rec[f["name"]]
         o = r["outline"]
-        arc_i = o.vertices_on("arc")
-        rr = np.linalg.norm(o.verts[arc_i] - np.array([0.0, o.v_c]), axis=1)
-        off = float(np.abs(rr - o.a).max())
+        off = o.off_circle()
         if off > tol:
             raise SystemExit(f"{f['name']}: an arc vertex is {off:.3e} km off "
                              f"its circle")
@@ -504,7 +543,9 @@ def build_system(spec, h: float, *, rms_slope: float, corr: float,
         faults=[dict(name=f["name"], a=f["a"], dip=f["dip"], seed=f["seed"],
                      trace=list(r["trace"]), v_c=r["v_c"],
                      attach=f.get("attach"), n=r["n"],
-                     trace_length_km=float(2.0 * math.sqrt(max(f["a"] ** 2 - r["v_c"] ** 2, 0.0))),
+                     run_km=r["outline"].run,
+                     trace_length_km=float(2.0 * math.sqrt(max(f["a"] ** 2 - r["v_c"] ** 2, 0.0))
+                                           + r["outline"].run),
                      median_edge_km=r["median_edge"],
                      tilt_rms_deg=r["tilt_rms_deg"], height_rms_km=r["height_rms"],
                      slope_rms=r["slope_rms"], amp_km=r["amp_km"],
@@ -515,7 +556,7 @@ def build_system(spec, h: float, *, rms_slope: float, corr: float,
         contact=contact, min_nz=float(nz_all.min()))
     net = network.Network(
         tris=tris, fault_id=fault_id,
-        length=np.array([2.0 * f["a"] for f in spec]),
+        length=np.array([2.0 * f["a"] + rec[f["name"]]["outline"].run for f in spec]),
         width=np.array([2.0 * f["a"] for f in spec]),
         azimuth=np.zeros(len(spec)),
         dip=np.array([float(f["dip"]) for f in spec]),

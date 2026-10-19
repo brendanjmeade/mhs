@@ -249,7 +249,7 @@ def equilibrium_residual(state: State, d: np.ndarray,
 def run_history(net, fric, P, *, shear_modulus: float = 30.0,
                 lam_max: float | None = None, max_events: int = 200_000,
                 order: str = "sequential", seed: int = 0,
-                verbose: bool = False) -> tuple[State, list[Event]]:
+                verbose: bool = False, record=None) -> tuple[State, list[Event]]:
     """Load the network quasi-statically, one ``Event`` per load increment.
 
     Monotonic loading, cumulative slip, no healing of the slip itself: every
@@ -258,6 +258,12 @@ def run_history(net, fric, P, *, shear_modulus: float = 30.0,
     posed -- all faults locked at the start, patches activating and interacting
     as the load rises -- so ``D_active`` is a function of ``lambda`` and not one
     number.
+
+    ``record(k, lam, trigger, moved, ds)``, when given, sees every event as it
+    is relaxed: its index, load, the element whose static strength the load
+    reached, the mask of elements that slipped and their slip. An ``Event``
+    keeps the totals; a per-element reading (who slipped first, how often, the
+    footprint of one event) is the recorder's, so the loop stays one loop.
     """
     n = net.n_elements
     d, g_s, g_d = coefficients(fric)
@@ -280,6 +286,8 @@ def run_history(net, fric, P, *, shear_modulus: float = 30.0,
         ds = state.s - before
         moved = ds > 0.0
         ever |= moved
+        if record is not None:
+            record(k, lam_next, j, moved, ds)
         ev = Event(index=k, lam=lam_next, lam_increment=inc,
                    n_slipped=int(moved.sum()),
                    n_faults=int(np.unique(net.fault_id[moved]).size)

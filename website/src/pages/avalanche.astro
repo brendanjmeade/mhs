@@ -1,0 +1,42 @@
+---
+import Base from "../layouts/Base.astro";
+import About from "../components/About.astro";
+import Avalanche from "../content/avalanche.mdx";
+
+const sections = [
+  { id: "a-shadow-not-a-trigger", label: "A shadow, not a trigger" },
+  { id: "one-fault-is-the-avalanche-system", label: "One fault is the avalanche system" },
+  { id: "the-resolution-ladder", label: "The resolution ladder" },
+  { id: "roughness-and-length", label: "Roughness and length" },
+  { id: "where-the-big-events-are", label: "Where the big events are" },
+  { id: "what-this-is-and-is-not", label: "What this is, and is not" },
+  { id: "reproducing-it", label: "Reproducing it" },
+];
+---
+<Base
+  title="mhs — Avalanches"
+  description="Stick-slip loading histories on one rough fault that breaks the free surface: a single near-planar crack is a critical branching process by geometry, with power-law event sizes, a resolution ladder that separates what belongs to the fault from what belongs to the mesh, and the three-fault system's shadow for contrast."
+  current="avalanche"
+>
+  <Fragment slot="sidebar">
+    <h1>Avalanches<span class="sub">one rough fault, loaded until it fails</span></h1>
+    <nav class="toc">
+      <h3>Contents</h3>
+      <ol>
+        {sections.map((s) => (
+          <li><a href={`#${s.id}`}>{s.label}</a></li>
+        ))}
+      </ol>
+    </nav>
+    <hr />
+    <p class="contact">
+      Every number on this page is printed by
+      <code>studies/active_fractal/avalanche.py figure</code> and
+      <code>onfault.py thresholds</code>; the figures are their output,
+      committed with the page.
+    </p>
+    <About />
+  </Fragment>
+
+  <Avalanche />
+</Base>

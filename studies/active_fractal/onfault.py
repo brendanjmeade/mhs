@@ -4,6 +4,7 @@ value per element, three kernels, for the site.
     python onfault.py solve   [--out out/onfault_state.npz] [--workers 12]
     python onfault.py field   --state out/onfault_state.npz [--k 1] [--probe]
     python onfault.py payload --field out/onfault_field.npz
+    python onfault.py thresholds          # the failure-load shift, a figure
 
 THE THIRD KERNEL is the mollified one again, with CONTINUOUS quadratic slip
 (``nodal``): one slip vector per shared node of each fault, C0 across every
@@ -1076,6 +1077,127 @@ def cmd_payload(a) -> int:
     return 0
 
 
+# ----------------------------------------------------------- thresholds --
+def _onset(P, d, g, lam_lo, lam_hi, mask, include, tol=1e-3) -> float:
+    """The smallest load in ``[lam_lo, lam_hi]`` at which any element of
+    ``mask`` slips in the LCP restricted to ``include``, by bisection to a
+    relative ``tol``."""
+    sol = St.solve(P, d, g, lam_hi, include=include)
+    if not (sol.delta[mask] > 0.0).any():
+        raise SystemExit("no slip on the fault at the upper bound of the scan")
+    while (lam_hi - lam_lo) / lam_hi > tol:
+        mid = 0.5 * (lam_lo + lam_hi)
+        sol = St.solve(P, d, g, mid, include=include)
+        if (sol.delta[mask] > 0.0).any():
+            lam_hi = mid
+        else:
+            lam_lo = mid
+    return lam_hi
+
+
+def cmd_thresholds(a) -> int:
+    """The failure-load shift on the page's system: for each fault, the load
+    at which it first slips ALONE (the LCP restricted to it: the remote load
+    and its own self-interaction) against the load at which it first slips
+    IN THE SYSTEM, and the active fraction of each fault against the load
+    both ways. Static, path-free (the LCP has one solution), both P0
+    kernels. What it measures: the onsets never move (the remote load reaches
+    strength before any neighbour's stress does) and the neighbours act on
+    COMPLETION, a shadow that throttles C."""
+    here = pathlib.Path(__file__).resolve().parent
+    _, net = build()
+    fid, area = net.fault_id, net.areas()
+    names = [f["name"] for f in net.meta["faults"]]
+    fric = Fr.build_friction(net, regime=REGIME, drop_ratio=DROP_RATIO,
+                             mean_stress_ratio=MEAN_STRESS)
+    d, g, _ = C.coefficients(fric)
+    ff = fric.first_failure_lambda()
+    lam0 = float(np.nanmin(ff))
+    masks = {nm: fid == i for i, nm in enumerate(names)}
+    print(f"  {net.n_elements} elements; first failure with no interaction "
+          f"lam0 = {lam0:.5f} GPa")
+    for nm in names:
+        m = masks[nm]
+        print(f"    {nm}: first element fails alone at "
+              f"{np.nanmin(ff[m]) / lam0:.4f} lam0; "
+              f"{int(np.isinf(ff[m]).sum())} of {int(m.sum())} can never fail")
+    Km, _ = K.assemble(net, mu=MU, lam=LAM, workers=a.workers, verbose=True)
+    Kc = classical_matrix(net.tris)
+    lams = np.concatenate([np.linspace(0.95, 1.10, 31),
+                           np.linspace(1.11, 1.60, 50)]) * lam0
+    results = {}
+    for kname, Kmat in (("mollified", Km), ("classical", Kc)):
+        P = K.project(Kmat, fric.slip_dir, fric.slip_dir)
+        onsets = {}
+        for nm in names:
+            m = masks[nm]
+            lo = 0.95 * float(np.nanmin(ff[m]))
+            la = _onset(P, d, g, lo, 1.6 * lam0, m, include=m)
+            ls = _onset(P, d, g, lo, 1.6 * lam0, m, include=None)
+            onsets[nm] = dict(alone=la / lam0, system=ls / lam0,
+                              shift=(ls - la) / la)
+            print(f"  {kname}: {nm} first slips alone at {la / lam0:.4f} lam0, "
+                  f"in the system at {ls / lam0:.4f}: shift "
+                  f"{100 * (ls - la) / la:+.2f} %", flush=True)
+        curves = {nm: dict(alone=[], system=[], moment_alone=[], moment_system=[])
+                  for nm in names}
+        warm_s, warm_a = None, {nm: None for nm in names}
+        t0 = time.time()
+        for lam in lams:
+            sol = St.solve(P, d, g, lam, warm=warm_s)
+            warm_s = sol.delta
+            for nm in names:
+                m = masks[nm]
+                sa = St.solve(P, d, g, lam, include=m, warm=warm_a[nm])
+                warm_a[nm] = sa.delta
+                curves[nm]["system"].append(float((sol.delta[m] > 0).mean()))
+                curves[nm]["alone"].append(float((sa.delta[m] > 0).mean()))
+                curves[nm]["moment_system"].append(float((sol.delta * area)[m].sum()))
+                curves[nm]["moment_alone"].append(float((sa.delta * area)[m].sum()))
+        print(f"  {kname}: {lams.size} loads x {1 + len(names)} solves in "
+              f"{time.time() - t0:.0f} s", flush=True)
+        for nm in names:
+            c = {k: np.array(v) for k, v in curves[nm].items()}
+            j = int(np.argmin(np.abs(lams / lam0 - 1.10)))
+            print(f"    {nm} at 1.10 lam0: active alone {c['alone'][j]:.3f}, in "
+                  f"the system {c['system'][j]:.3f}; at 1.60: "
+                  f"{c['alone'][-1]:.3f} / {c['system'][-1]:.3f}")
+        results[kname] = dict(onsets=onsets, lams_over_lam0=(lams / lam0).tolist(),
+                              curves=curves)
+    out = here / "out"
+    out.mkdir(exist_ok=True)
+    (out / "onfault_thresholds.json").write_text(
+        json.dumps(dict(lam0=lam0, names=names, results=results), indent=1))
+    import matplotlib                                          # noqa: PLC0415
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt                            # noqa: PLC0415
+    fig, axes = plt.subplots(1, 2, figsize=(9, 3.4), sharey=True,
+                             gridspec_kw=dict(wspace=0.08))
+    cols = dict(zip(names, ("#1f77b4", "#ff7f0e", "#2ca02c")))
+    for i, (ax, kname) in enumerate(zip(axes, ("mollified", "classical"))):
+        r = results[kname]
+        x = np.array(r["lams_over_lam0"])
+        for nm in names:
+            c = r["curves"][nm]
+            ax.plot(x, c["system"], color=cols[nm], lw=1.6, label=f"{nm}, in the system")
+            ax.plot(x, c["alone"], color=cols[nm], lw=1.0, ls="--", label=f"{nm}, alone")
+        ax.tick_params(direction="out", length=3, width=0.8)
+        ax.set_xlim(0.95, 1.6)
+        ax.set_xticks([1.0, 1.3, 1.6])
+        ax.set_ylim(0, 1)
+        ax.set_yticks([0, 0.5, 1])
+        ax.set_xlabel(r"$\lambda / \lambda_0$")
+        ax.set_title(f"{kname} P0", fontsize=10)
+        ax.text(0.97, 0.05, "ab"[i], transform=ax.transAxes, ha="right", va="bottom")
+    axes[0].set_ylabel("active fraction of the fault")
+    axes[0].legend(fontsize=7, frameon=False, loc="upper left")
+    fig_dir = pathlib.Path(a.figure).parent
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(a.figure, dpi=200, bbox_inches="tight")
+    print(f"  -> {out / 'onfault_thresholds.json'}, {a.figure}")
+    return 0
+
+
 def main(argv=None) -> int:
     here = pathlib.Path(__file__).resolve().parent
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -1097,6 +1219,12 @@ def main(argv=None) -> int:
                    help=argparse.SUPPRESS)
     f.add_argument("--experiment", default="system", choices=EXPERIMENTS,
                    help=argparse.SUPPRESS)
+    t = sub.add_parser("thresholds", help="the failure-load shift and the "
+                                          "active fraction, alone vs in the "
+                                          "system, both P0 kernels")
+    t.add_argument("--workers", type=int, default=1)
+    t.add_argument("--figure", default=str(here.parents[1] / "website" / "src"
+                                           / "figures" / "onfault_thresholds.png"))
     p = sub.add_parser("payload", help="field -> website/public/data")
     p.add_argument("--field", default=str(here / "out" / "onfault_field.npz"))
     p.add_argument("--out", default=str(here.parents[1] / "website" / "public"
@@ -1109,6 +1237,8 @@ def main(argv=None) -> int:
     if a.cmd == "field":
         a.out = a.out or str(here / "out" / "onfault_field.npz")
         return cmd_field(a)
+    if a.cmd == "thresholds":
+        return cmd_thresholds(a)
     return cmd_payload(a)
 
 
