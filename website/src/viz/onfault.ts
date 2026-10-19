@@ -375,15 +375,30 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
   };
 
   sel("experiment", Object.keys(EXPERIMENTS).map((k) => [k, EXPERIMENTS[k]]),
-      experiment, (v) => { experiment = v; void refresh(); });
+      experiment, (v) => { experiment = v; winMPa = defaultWindow(metric); void refresh(); });
   sel("kernel", Object.keys(KERNELS).map((k) => [k, KERNELS[k]]), kernel,
       (v) => { kernel = v; void refresh(); });
   sel("metric", Object.keys(METRICS).map((k) => [k, METRICS[k].label]), metric,
       (v) => { metric = v; winMPa = defaultWindow(v); void refresh(); });
 
   function defaultWindow(met: string): number {
-    if (met === "slip") return 0;        // set from the data when loaded
+    if (met === "slip" || experiment === "diff") return 0;   // set from the data when loaded
     return Number(man.window[met]) * 1e3;
+  }
+  /** Area-weighted 99th percentile of |v| over the mapped cells, rounded to two
+   * figures: the manifest's window rule, applied client-side to a difference
+   * map, which at the maps' own window (tens of MPa) would show nothing. */
+  function p99(v: Float32Array): number {
+    const idx: number[] = [];
+    for (let c = 0; c < v.length; c++) if (!Number.isNaN(v[c])) idx.push(c);
+    idx.sort((a, b) => Math.abs(v[a]) - Math.abs(v[b]));
+    let tot = 0;
+    for (const c of idx) tot += cellArea(c);
+    let cum = 0, x = 0;
+    for (const c of idx) { cum += cellArea(c); x = Math.abs(v[c]); if (cum >= 0.99 * tot) break; }
+    if (!(x > 0)) return 1;
+    const mag = 10 ** Math.floor(Math.log10(x));
+    return Math.round(x / mag * 10) / 10 * mag;
   }
 
   // The window slider is log-spaced over 0.1..100 MPa: the maps span decades
@@ -471,6 +486,7 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
       .map((k) => `${k} ${(100 * saturated(current[k])).toFixed(1)} %`);
     if (sats.length) bits.push(`saturated: ${sats.join(", ")} of the mapped area`);
     if (experiment !== "system") bits.push(`grey: no fault in this experiment`);
+    if (experiment === "diff") bits.push(`the window is the change's own 99th percentile; the maps' window is ±${fmt(Number(man.window[metric] ?? 0) * 1e3)} MPa`);
     bits.push(`remote on A: τ ${fmt(fa.remote_shear_MPa)} MPa, `
       + `σₙ′ ${fmt(fa.remote_sigma_n_MPa)} MPa`);
     bits.push(kk === 1 ? `one value per element, sampled at its centroid`
@@ -496,12 +512,18 @@ export async function startOnFault(root: HTMLElement, baseUrl: string,
       current = {};
       names.forEach((k, i) => { current[k] = loaded[i]; });
       const m = METRICS[metric];
-      if (metric === "slip" && winMPa === 0) {
-        let mx = 0;
-        for (const v of loaded) for (let i = 0; i < v.length; i++) {
-          if (!Number.isNaN(v[i])) mx = Math.max(mx, Math.abs(v[i]));
+      if (winMPa === 0) {
+        if (experiment === "diff") {
+          // the change's own window, from the kernel shown, in the map's units
+          const w = p99(current[kernel]);
+          winMPa = m.signed ? w * 1e3 : w;
+        } else {
+          let mx = 0;
+          for (const v of loaded) for (let i = 0; i < v.length; i++) {
+            if (!Number.isNaN(v[i])) mx = Math.max(mx, Math.abs(v[i]));
+          }
+          winMPa = mx;
         }
-        winMPa = mx;
       }
       view.setMap(metric === "slip" && experiment === "diff" ? "rdbu_r" : m.map);
       view.setValues(current[kernel]);
