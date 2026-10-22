@@ -328,6 +328,14 @@ class Friction:
         """STATIC strength: the level an element must reach to fail."""
         return self.mu * (self.sigma_eff_0 if sigma_eff is None else sigma_eff)
 
+    def strength_at(self, lam: float) -> np.ndarray:
+        """STATIC strength at load ``lam``: ``mu (sigma_eff_0 + lam sigma_n_load)``,
+        the normal-stress part of the load folded in. It is the threshold the
+        scalar LCP's ``lam d + q <= g`` rearranges to, and the disc radius of
+        ``static.solve_cone``; negative where the load has opened the element,
+        which ``Friction.lambda_tensile`` bounds."""
+        return self.mu * (self.sigma_eff_0 + float(lam) * self.sigma_n_load)
+
     def strength_dynamic(self,
                          sigma_eff: np.ndarray | None = None) -> np.ndarray:
         """DYNAMIC strength: the level a failed element relaxes down to."""

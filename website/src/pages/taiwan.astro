@@ -29,13 +29,16 @@ const sections = [
       strike-slip in five steps.
     </p>
     <p>
-      At each tensor the static Coulomb LCP is solved along the load, from
-      the first failure to six times it. What is painted is one value per
-      element: the slip at a chosen load, the load at which the element first
-      slipped, the rake the tensor imposes, or how fast the tensor loads the
-      element toward failure. Two effective-normal-stress models and two
-      kernels, so that neither the strength profile nor the kernel can be
-      mistaken for the result.
+      At each tensor the static Coulomb problem is solved along the load,
+      from the first failure to six times it, under two slip rules: a fixed
+      rake, each element slipping along the shear the tensor resolves on it,
+      and a free rake, each element&rsquo;s slip a vector that turns to
+      follow the total shear. What is painted is one value per element: the
+      slip at a chosen load, the load at which the element first slipped, the
+      rake of that slip, the rake the tensor imposes, or how fast the tensor
+      loads the element toward failure. Two effective-normal-stress models
+      and two kernels, so that neither the strength profile nor the kernel
+      can be mistaken for the result.
     </p>
     <nav class="toc">
       <h3>Contents</h3>
@@ -53,6 +56,7 @@ const sections = [
 
   <div id="viewer" class="onfault">
     <div class="panel">
+      <label data-ctl="rake"><span>slip rule</span></label>
       <label data-ctl="theta"><span>S<sub>Hmax</sub> azimuth</span></label>
       <label data-ctl="r"><span>regime r</span></label>
       <label data-ctl="model"><span>effective stress</span></label>
@@ -116,20 +120,35 @@ const sections = [
     regimes are equally favoured. Friction is 0.6 everywhere.
   </p>
   <p>
-    The tensor fixes each element&rsquo;s slip direction: the rake is the
-    direction of the resolved shear, and the LCP solves only for its
-    magnitude. The rake map is therefore a prediction of the tensor and not
-    of the solve. With the compressive axis at 110&deg;, normal to the fault,
-    every element slips reverse; at 90&deg; and 100&deg; a right-lateral
-    component appears, and from 120&deg; on a left-lateral one, which is the
-    sense observed on the fault.
+    The tensor also resolves a shear direction on each element, and that
+    rake is the map labelled <i>rake the tensor imposes</i>: with the
+    compressive axis at 110&deg;, normal to the fault, every element is
+    loaded reverse; at 90&deg; and 100&deg; a right-lateral component
+    appears, and from 120&deg; on a left-lateral one, which is the sense
+    observed on the fault. Under the fixed rule that is the rake the slip
+    has; under the free rule the slip may turn away from it, and the map
+    labelled <i>rake of the slip</i> is what the solve chose.
   </p>
 
   <h2 id="what-is-solved">What is solved</h2>
   <p>
-    The static LCP of the <a href={`${base}avalanche/`}>avalanche page</a>:
-    one strength per element, slip wherever the shear reaches it and nowhere
-    else, one unique answer at each load, no events. The load is scanned from
+    Two slip rules on the same matrix. The <b>fixed rake</b> is the static
+    LCP of the <a href={`${base}avalanche/`}>avalanche page</a>: one
+    strength per element, slip along the tensor&rsquo;s shear wherever that
+    shear reaches the strength and nowhere else, solved by projected
+    Gauss&ndash;Seidel. The <b>free rake</b> is the same problem with the
+    constraint removed: each element&rsquo;s slip is a vector in its plane,
+    Coulomb friction is a disc rather than a threshold, an element is locked
+    strictly inside the disc or slips on its rim parallel to the total shear
+    it carries, regional plus what every other element&rsquo;s slip adds.
+    It is solved by the contact-dynamics form of the same sweep, a
+    projection onto the disc per element, and it reduces to the fixed rule
+    exactly when the slip is confined to the tensor&rsquo;s direction. The
+    two differ where the neighbours turn an element&rsquo;s shear off the
+    regional rake, and where the fixed rule&rsquo;s non-negativity forbids
+    an element from slipping against it. One unique answer at each load in
+    either rule, measured rather than proven: warm and cold starts agree to
+    better than a nanometre. No events. The load is scanned from
     &lambda;<sub>0</sub>, the load at which the best-oriented element reaches
     its strength with no interaction under the uniform model, to
     6&nbsp;&lambda;<sub>0</sub>, warm-started, and the lithostatic model is
@@ -149,18 +168,22 @@ const sections = [
 
   <h2 id="what-the-sweep-says">What the sweep says</h2>
   <figure class="panels">
-    <img src={sweepFig.src} alt="Six panels: first-failure load, half-active load for both stress models, area-mean rake, never-failing area, and activation curves at 130 degrees" />
+    <img src={sweepFig.src} alt="Eight panels: first-failure load, half-active load for both stress models, free-over-fixed moment, area-mean rake, never-failing area, activation curves at 130 degrees, and the rake rotation" />
     <figcaption>
-      <b>The sweep in six numbers.</b> <b>a</b> the first-failure load
+      <b>The sweep in eight numbers.</b> <b>a</b> the first-failure load
       &lambda;<sub>0</sub> against the azimuth of the most compressive axis,
       one line per regime. <b>b</b>, <b>c</b> the load at which half the
       fault&rsquo;s area is slipping, uniform and lithostatic effective
-      stress, solid for the mollified kernel and dashed for the classical
-      dislocation. <b>d</b> the area-mean rake the tensor imposes.
-      <b>e</b> the area the tensor can never bring to failure. <b>f</b> the
-      active area against the load at 130&deg;, solid uniform, dotted
-      lithostatic. A missing point in b or c is a tensor that does not bring
-      half the area to failure by 6&nbsp;&lambda;<sub>0</sub>.
+      stress, solid for the free rake and dashed for the fixed one, both on
+      the mollified kernel. <b>d</b> the moment under the free rake over the
+      fixed one at 3&nbsp;&lambda;<sub>0</sub>. <b>e</b> the area-mean rake
+      the tensor imposes. <b>f</b> the area the tensor can never bring to
+      failure. <b>g</b> the active area against the load at 130&deg;, free
+      rake, solid uniform, dotted lithostatic. <b>h</b> the area-median
+      angle by which the free rake turns away from the tensor&rsquo;s on the
+      slipping area at 3&nbsp;&lambda;<sub>0</sub>. A missing point in b or c
+      is a tensor that does not bring half the area to failure by
+      6&nbsp;&lambda;<sub>0</sub>.
     </figcaption>
   </figure>
   <p>
@@ -175,7 +198,8 @@ const sections = [
     <b>Fault-normal compression is the hardest way to load this fault.</b>
     With the compressive axis at 110&deg;, normal to the strike, the thrust
     tensor needs 478&nbsp;MPa of maximum shear to bring half the area to
-    failure, against 387&nbsp;MPa at 130&deg; and 316&nbsp;MPa at 150&deg;:
+    failure under either rule, against 387&nbsp;MPa at 130&deg; and
+    316&nbsp;MPa at 150&deg;:
     a 60&deg; fault is poorly oriented for pure thrust, and obliquity helps.
     For the strike-slip half of the family the fault-normal case does not
     activate at all: with r&nbsp;&ge;&nbsp;0.5 at 100&deg; to 120&deg;, a
@@ -210,15 +234,33 @@ const sections = [
     where it is wrong.
   </p>
   <p>
+    <b>The free rake moves the moment, not the map.</b> Letting the slip
+    turn changes the load at which half the fault is active by under
+    2&nbsp;% on every tensor (b, c, solid against dashed), switches on a few
+    elements and switches none off, and reverses the sense of slip on at
+    most a handful of slivers whose neighbours turn their shear round. What
+    it changes is the moment (d): by 0.1&nbsp;% for pure thrust at any
+    azimuth, and by up to 11&nbsp;% on the uniform model and 15&nbsp;% on
+    the lithostatic one at r&nbsp;=&nbsp;0.5 and the oblique azimuths, where
+    the regional shear on the fault is smallest
+    against what the slipping neighbours add and the tensor itself is
+    ambiguous between reverse and sinistral. The slip turns by an area-median
+    0.1&deg; to 0.4&deg; for thrust and 1&deg; to 3&deg; for the strike-slip
+    and axial tensors at 3&nbsp;&lambda;<sub>0</sub> (h), with a 90th
+    percentile under 10&deg;. The fixed rake is therefore a sub-percent
+    approximation where the tensor is thrust-like and a several-percent one
+    where it is not, and the maps under either rule tell the same story.
+  </p>
+  <p>
     <b>The kernel does not matter here, and the slivers did not break the
-    solve.</b> The classical dislocation and the mollified kernel put the
-    half-active load within 1.2&nbsp;% of each other on every tensor
-    (median ratio 0.999), the active fraction within 0.011 at every load,
-    and the moment within 4&nbsp;%. The symmetric part of the classical
-    operator is strongly indefinite on this mesh (smallest eigenvalue
-    &minus;95 against &minus;1.1 for the mollified kernel, the slivers&rsquo;
-    self-stiffness), and the projected Gauss&ndash;Seidel iteration still
-    converged in all 1,820 solves without the active-set fallback. The
+    solve.</b> Under either rule the classical dislocation and the mollified
+    kernel put the half-active load within 1.4&nbsp;% of each other on every
+    tensor, the active fraction within 0.011 at every load, and the moment
+    within 4&nbsp;%. The symmetric part of the classical operator is
+    strongly indefinite on this mesh (smallest eigenvalue &minus;95 against
+    &minus;1.1 for the mollified kernel, the slivers&rsquo; self-stiffness),
+    and the projected Gauss&ndash;Seidel sweeps still converged in all 3,640
+    solves, scalar and cone alike, without the active-set fallback. The
     slips themselves, tens of metres at three times the first failure, are
     what a static load of several hundred MPa produces on a frictional
     surface with no other faults to share it: read the maps for where slip
@@ -236,15 +278,18 @@ const sections = [
       150&nbsp;MPa and the pore ratio are assumptions, not measurements.</li>
     <li>Not a converged mesh: the segments are used as supplied, at one
       resolution, with their slivers.</li>
-    <li>Uniform friction and a fixed rake per element. Opening is not
-      modelled; where the load drives the normal stress through zero the
-      linear criterion is wrong and the manifest says where.</li>
+    <li>Uniform friction, and no coupling of the normal stress to slip in
+      either rule, which is where genuine Coulomb non-uniqueness would
+      enter. Opening is not modelled; where the load drives the normal
+      stress through zero the linear criterion is wrong and the manifest
+      says where.</li>
   </ul>
 
   <h2 id="reproducing-it">Reproducing it</h2>
-  <pre><code class="language-sh">python studies/active_fractal/selfcheck.py -k taiwan
+  <pre><code class="language-sh">python studies/active_fractal/selfcheck.py -k taiwan    # the inputs
+python studies/active_fractal/selfcheck.py -k rake      # the free-rake solver on a penny
 python studies/active_fractal/taiwan.py assemble --workers 8   # the folded matrix, cached
-python studies/active_fractal/taiwan.py run                    # 70 tensors x 2 kernels x 13 loads
+python studies/active_fractal/taiwan.py run                    # 70 tensors x 2 kernels x 2 rules x 13 loads
 python studies/active_fractal/taiwan.py figure                 # website/src/figures/taiwan_sweep.png
 python studies/active_fractal/taiwan.py payload                # website/public/data/taiwan_*</code></pre>
 

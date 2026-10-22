@@ -15,6 +15,11 @@ interface Case {
   never_fail_area: number; active_fraction: number[]; moment_Nm: number[];
   max_slip_m: number[]; rake_mean_deg: number; min_eig_sym_negP: number;
   branching_ratio: number; newton_solves: number; lam_tensile_over_lam0: number;
+  sweeps: number;
+  // free rule only
+  moment_vs_fixed?: (number | null)[]; rotation_median_deg?: (number | null)[];
+  rotation_p90_deg?: (number | null)[]; n_reversed?: number[]; n_on?: number[];
+  n_off?: number[];
 }
 
 export interface TaiwanManifest {
@@ -26,13 +31,14 @@ export interface TaiwanManifest {
             edge_km: number[] }[];
   data_source: string;
   sweep: { thetas: number[]; rs: number[]; models: string[]; kernels: string[];
-           loads: number[]; ship_loads: number[]; quoted_load: number };
+           rakes: string[]; loads: number[]; ship_loads: number[]; quoted_load: number };
   friction: { mu: number; mean_stress_ratio: number; pore_ratio: number;
               sigma_eff_uniform_GPa: number };
-  labels: { models: Record<string, string>; kernels: Record<string, string> };
+  labels: { models: Record<string, string>; kernels: Record<string, string>;
+            rakes: Record<string, string> };
   cases: Record<string, Case>;
   arrays: Record<string, { dtype: string; shape: number[]; bytes: number }>;
-  defaults: { kernel: string; model: string; theta: number; r: number;
+  defaults: { rake: string; kernel: string; model: string; theta: number; r: number;
               load: number; metric: string };
 }
 
@@ -43,7 +49,8 @@ interface FaultGeom {
 const METRICS: Record<string, { label: string; map: MapName; unit: string }> = {
   slip: { label: "slip at the chosen load", map: "viridis", unit: "m" },
   act: { label: "activation load λ/λ₀ (grey: not by 6 λ₀)", map: "viridis", unit: "λ₀" },
-  rake: { label: "rake of the slip direction (0 sinistral, 90 reverse, 180 dextral)",
+  srake: { label: "rake of the slip at the chosen load (grey: locked)", map: "rdbu_r", unit: "deg" },
+  rake: { label: "rake the tensor imposes (0 sinistral, 90 reverse, 180 dextral)",
           map: "rdbu_r", unit: "deg" },
   d: { label: "Coulomb loading rate per unit λ (≤ 0: can never fail)",
        map: "rdbu_r", unit: "" },
@@ -146,6 +153,7 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
     return;
   }
   const S = man.sweep;
+  let rake = man.defaults.rake ?? "fixed";
   let kernel = man.defaults.kernel;
   let model = man.defaults.model;
   let theta = man.defaults.theta;
@@ -155,18 +163,40 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
   let win = 0;              // upper bound of the window in the metric's unit
   let mark = false;
 
-  const caseKey = () => `${kernel}.${model}.az${az3(theta)}.r${r2(r)}`;
+  const caseKey = () => `${rake}.${kernel}.${model}.az${az3(theta)}.r${r2(r)}`;
   const arrayKey = () => {
     if (metric === "slip") return `taiwan.${caseKey()}.slip${loadF.toFixed(2)}`;
     if (metric === "act") return `taiwan.${caseKey()}.act`;
+    if (metric === "srake") return rake === "free"
+      ? `taiwan.${caseKey()}.srake${loadF.toFixed(2)}`
+      : `srake:${caseKey()}.${loadF.toFixed(2)}`;      // derived, below
     return `taiwan.az${az3(theta)}.r${r2(r)}.${metric}`;
   };
 
   const cache = new Map<string, Float32Array>();
+  async function fetchArray(key: string): Promise<Float32Array> {
+    const hit = cache.get(key);
+    if (hit) return hit;
+    if (!A[key]) throw new Error(`${key} is not in the manifest`);
+    const v = new Float32Array(await load(key));
+    cache.set(key, v);
+    return v;
+  }
   async function values(): Promise<Float32Array> {
     const key = arrayKey();
     const hit = cache.get(key);
     if (hit) return hit;
+    if (key.startsWith("srake:")) {
+      // Under the fixed rule the rake of the slip is the tensor's wherever
+      // the element slips, and nothing where it is locked.
+      const [rk, sl] = await Promise.all([
+        fetchArray(`taiwan.az${az3(theta)}.r${r2(r)}.rake`),
+        fetchArray(`taiwan.${caseKey()}.slip${loadF.toFixed(2)}`)]);
+      const out = new Float32Array(rk.length);
+      for (let i = 0; i < rk.length; i++) out[i] = sl[i] > 0 ? rk[i] : NaN;
+      cache.set(key, out);
+      return out;
+    }
     if (!A[key]) throw new Error(`${key} is not in the manifest`);
     let v = new Float32Array(await load(key));
     if (metric === "slip") {                   // km -> m
@@ -202,6 +232,8 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
     return b;
   };
 
+  sel("rake", S.rakes.map((k) => [k, man.labels.rakes[k]]), rake,
+      (v) => { rake = v; void refresh(); });
   sel("theta", S.thetas.map((t) => [String(t), `${t}°`]), String(theta),
       (v) => { theta = Number(v); win = 0; void refresh(); });
   sel("r", S.rs.map((x) => [String(x), REGIME(x)]), String(r),
@@ -212,8 +244,9 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
       (v) => { kernel = v; void refresh(); });
   const loadSel = sel("load", S.ship_loads.map((f) => [String(f), `${f} λ₀`]),
                       String(loadF), (v) => { loadF = Number(v); win = 0; void refresh(); });
+  const usesLoad = (m: string) => m === "slip" || m === "srake";
   sel("metric", Object.keys(METRICS).map((k) => [k, METRICS[k].label]), metric,
-      (v) => { metric = v; win = 0; if (loadSel) loadSel.disabled = v !== "slip"; void refresh(); });
+      (v) => { metric = v; win = 0; if (loadSel) loadSel.disabled = !usesLoad(v); void refresh(); });
 
   const winWrap = root.querySelector<HTMLElement>(`[data-ctl="window"]`);
   let winIn: HTMLInputElement | null = null, winOut: HTMLElement | null = null;
@@ -262,16 +295,16 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
    * drives slip and the Coulomb rate. */
   function applyWindow() {
     if (metric === "act") view.setWindow(1, S.loads[S.loads.length - 1]);
-    else if (metric === "rake") view.setWindow(0, 180);
+    else if (metric === "rake" || metric === "srake") view.setWindow(0, 180);
     else if (metric === "d") view.setWindow(-win, win);
     else view.setWindow(0, win);
     if (winIn) {
-      winIn.disabled = metric === "act" || metric === "rake";
+      winIn.disabled = metric === "act" || metric === "rake" || metric === "srake";
       winIn.value = String(Math.log10(Math.max(win, 0.1)));
     }
     if (winOut) {
       winOut.textContent = metric === "act" ? `1 – ${S.loads[S.loads.length - 1]} λ₀`
-        : metric === "rake" ? "0 – 180°"
+        : metric === "rake" || metric === "srake" ? "0 – 180°"
         : metric === "d" ? `±${fmt(win)}` : `0 – ${fmt(win)} m`;
     }
     paintBar();
@@ -283,7 +316,8 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
   function barEnds(): { lo: string; hi: string; mid: string } {
     const top = S.loads[S.loads.length - 1];
     if (metric === "act") return { lo: "1", hi: `${top}`, mid: "activation load λ/λ₀ (grey: not active by the last load)" };
-    if (metric === "rake") return { lo: "0 sinistral", hi: "180 dextral", mid: "rake (deg), 90 reverse" };
+    if (metric === "rake") return { lo: "0 sinistral", hi: "180 dextral", mid: "rake the tensor imposes (deg), 90 reverse" };
+    if (metric === "srake") return { lo: "0 sinistral", hi: "180 dextral", mid: `rake of the slip at ${loadF} λ₀ (deg), 90 reverse` };
     if (metric === "d") return { lo: `−${fmt(win)}`, hi: `+${fmt(win)}`, mid: "Coulomb loading rate per unit λ (≤ 0 never fails)" };
     return { lo: "0", hi: `${fmt(win)} m`, mid: `slip at ${loadF} λ₀ (m)` };
   }
@@ -301,12 +335,13 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
     bar.append(strip, ends);
   }
 
-  const describe = () => `S_Hmax ${theta}°, r ${r} (${REGIME(r).split(":")[1].trim()}), `
+  const describe = () => `${rake} rake, S_Hmax ${theta}°, r ${r} (${REGIME(r).split(":")[1].trim()}), `
     + `${man.labels.models[model]}, ${man.labels.kernels[kernel]}`;
 
   function paintStatus() {
     const m = METRICS[metric];
-    const what = metric === "slip" ? `slip at ${loadF} λ₀` : m.label;
+    const what = metric === "slip" ? `slip at ${loadF} λ₀`
+      : metric === "srake" ? `rake of the slip at ${loadF} λ₀` : m.label;
     status.textContent = `${describe()} — ${what} — ${winOut?.textContent ?? ""}`;
   }
 
@@ -314,7 +349,8 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
   function saturated(v: Float32Array): number {
     let sat = 0, tot = 0;
     const lo = metric === "d" ? -win : 0;
-    const hi = metric === "act" ? S.loads[S.loads.length - 1] : metric === "rake" ? 180 : win;
+    const hi = metric === "act" ? S.loads[S.loads.length - 1]
+      : metric === "rake" || metric === "srake" ? 180 : win;
     for (let i = 0; i < v.length; i++) {
       if (Number.isNaN(v[i])) continue;
       tot += area[i];
@@ -338,7 +374,13 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
           + `moment ${c.moment_Nm[il].toExponential(2)} N m, max slip ${fmt(c.max_slip_m[il])} m`);
       }
       bits.push(`${(100 * c.never_fail_area).toFixed(1)} % of the area can never fail under this tensor`);
-      bits.push(`area-mean rake ${c.rake_mean_deg.toFixed(0)}°`);
+      bits.push(`area-mean rake the tensor imposes ${c.rake_mean_deg.toFixed(0)}°`);
+      if (rake === "free" && il >= 0 && c.moment_vs_fixed) {
+        const mv = c.moment_vs_fixed[il], rm = c.rotation_median_deg?.[il], rp = c.rotation_p90_deg?.[il];
+        bits.push(`against the fixed rake at ${loadF} λ₀: moment ×${mv === null ? "—" : mv.toFixed(3)}`
+          + (rm === null || rm === undefined ? "" : `, rake turned ${rm.toFixed(1)}° (median), ${(rp ?? 0).toFixed(1)}° (p90)`)
+          + `, ${c.n_on?.[il] ?? 0} elements switched on, ${c.n_off?.[il] ?? 0} off, ${c.n_reversed?.[il] ?? 0} reversed`);
+      }
       bits.push(`min eig sym(−P) ${c.min_eig_sym_negP.toFixed(1)}, branching ratio ${c.branching_ratio.toFixed(3)}`
         + (c.newton_solves ? `, ${c.newton_solves} of ${S.loads.length} loads by the active-set solver` : ""));
     }
@@ -372,7 +414,7 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
     }
   }
 
-  if (loadSel) loadSel.disabled = metric !== "slip";
+  if (loadSel) loadSel.disabled = !usesLoad(metric);
   await refresh();
   return view;
 }

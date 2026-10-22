@@ -2978,6 +2978,120 @@ def c_nodal() -> None:
 
 
 
+
+# ------------------------------------------------------------------ [rake] ---
+def c_rake() -> None:
+    """The free-rake cone solver (``static.solve_cone``) against the scalar
+    LCP and a linear solve, on the crack clause's penny: it is the linear
+    solution when nothing locks, the scalar solution when the load's shear
+    direction is uniform, and a mesh-converged O(1) away from it when that
+    direction rotates across the crack -- the clause that fails if a solver
+    silently re-fixes the rake. Complementarity is checked on the solution
+    itself, and warm and cold starts must agree."""
+    print("\n[rake] the free-rake cone solver on a penny crack")
+    import mhs                                                # noqa: PLC0415
+    a, mu_, lam_, tau0, depth = 1.0, 30.0, 30.0, 0.01, -20.0
+    nu_ = mhs.Material(mu=mu_, lam=lam_).nu_if_you_must
+    pen = Gr.penny(nu_)
+    h = 0.1 * a
+    eps = 0.1 * h
+    tris = N.disc_mesh(a, h, depth=depth)
+    n = tris.shape[0]
+    raw = mhs.interaction_matrix(
+        tris=tris, material=mhs.Material(mu=mu_, lam=lam_), eps=eps,
+        receiver=Kmod.RECEIVER, source=Kmod.SOURCE, obs_tris=tris)
+    Kf = Kmod.to_source_major(raw)
+    del raw
+    Ksh = np.ascontiguousarray(Kf[:, :, :2, :])
+    areas = 0.5 * np.linalg.norm(np.cross(tris[:, 1] - tris[:, 0],
+                                          tris[:, 2] - tris[:, 0]), axis=1)
+    cen = tris.mean(axis=1)
+    r = np.hypot(cen[:, 0], cen[:, 1])
+    print(f"       {n} elements, eps/h 0.1, nu {nu_:.3f}")
+
+    def fixed(tau, g):
+        sd = tau / np.linalg.norm(tau, axis=1, keepdims=True)
+        P = Kmod.project(Kf, sd, sd)
+        sol = St.solve(P, np.linalg.norm(tau, axis=1), g, 1.0, max_sweeps=20000)
+        return sd * sol.delta[:, None], sol
+
+    def rotation(s_fix, s_free):
+        sd = s_fix / np.maximum(np.linalg.norm(s_fix, axis=1, keepdims=True), 1e-300)
+        on = (np.linalg.norm(s_free, axis=1) > 0) & (np.linalg.norm(s_fix, axis=1) > 0)
+        rot = np.degrees(np.arctan2(
+            np.abs(sd[:, 0] * s_free[:, 1] - sd[:, 1] * s_free[:, 0]),
+            np.einsum("ia,ia->i", sd, s_free)))
+        return rot[on]
+
+    def complementarity(sol, g):
+        mag = np.linalg.norm(sol.shear, axis=1)
+        on = sol.active
+        rim = float(np.abs(mag[on] - g[on]).max()) if on.any() else 0.0
+        cosang = (np.einsum("ia,ia->i", sol.slip[on], sol.shear[on])
+                  / np.maximum(sol.magnitude[on] * mag[on], 1e-300))
+        ang = float(np.degrees(np.arccos(np.clip(cosang, -1, 1))).max()) if on.any() else 0.0
+        inside = float((mag[~on] / np.maximum(g[~on], 1e-300)).max()) if (~on).any() else 0.0
+        return rim, ang, inside
+
+    # A: frictionless, uniform oblique load: the cone problem IS linear
+    phi = math.radians(30.0)
+    tau = np.tile([tau0 * math.cos(phi), tau0 * math.sin(phi)], (n, 1))
+    A = -np.transpose(Ksh, (3, 2, 0, 1)).reshape(2 * n, 2 * n)
+    s_lin = np.linalg.solve(A, tau.reshape(-1)).reshape(n, 2)
+    g0 = np.zeros(n)
+    free = St.solve_cone(Ksh, tau, g0, 1.0, tol=1e-12)
+    check_true("A: the cone solver converges with nothing locked", free.converged,
+               f"{free.sweeps} sweeps")
+    check("A: it is the linear solution (max |s - s_lin| / max |s_lin|)",
+          float(np.abs(free.slip - s_lin).max() / np.abs(s_lin).max()), 1e-9)
+    prof = np.sqrt(np.maximum(0.0, a * a - r * r))
+    inner = r < 0.5 * a
+    want = pen.slip * tau0 * a / mu_ * prof
+    check("A: the interior is Eshelby's profile (|ratio - 1|)",
+          abs(float(np.median(free.magnitude[inner] / want[inner])) - 1.0), 0.02)
+    s_fix, _ = fixed(tau, g0)
+    check("A: against the fixed rake, interior rotation median (deg)",
+          float(np.median(rotation(s_fix, free.slip)[inner[(np.linalg.norm(s_fix, axis=1) > 0)]])), 0.2)
+
+    # B: frictional, uniform load: the two rules coincide
+    g = np.full(n, 0.6 * tau0)
+    s_fix, solB = fixed(tau, g)
+    free = St.solve_cone(Ksh, tau, g, 1.0)
+    check_true("B: converged", free.converged, f"{free.sweeps} sweeps")
+    check("B: uniform load, moment free / fixed - 1",
+          abs(float((areas * free.magnitude).sum() / (areas * solB.delta).sum()) - 1.0), 1e-3)
+    check_true("B: the active sets are the same", bool(np.array_equal(free.active, solB.active)),
+               f"{int(free.active.sum())} of {n}")
+    rim, ang, inside = complementarity(free, g)
+    check("B: slipping elements sit on the disc (max ||t| - g|, GPa)", rim, 1e-8)
+    check("B: and slip parallel to their shear (max angle, deg)", ang, 1e-4)
+    check("B: locked elements sit inside it (max |t| / g)", inside, 1.0)
+    cold = St.solve_cone(Ksh, tau, g, 1.0)
+    warm = St.solve_cone(Ksh, tau, g, 1.0, warm=s_fix)
+    check("B: warm and cold starts agree (km)",
+          float(np.abs(cold.slip - warm.slip).max()), 1e-9)
+
+    # C: the load's shear direction rotates across the crack, 60 deg per a
+    ang_c = math.radians(30.0) + math.radians(60.0) * cen[:, 0] / a
+    tau = tau0 * np.stack([np.cos(ang_c), np.sin(ang_c)], axis=1)
+    # Measured 6.9 and 3.3 deg of median rotation; friction halves it because
+    # the locked rim no longer carries the rotated shear into the interior.
+    for gval, tag, lo, hi, rot_min in ((0.0, "frictionless", 1.03, 1.05, 5.0),
+                                       (0.6 * tau0, "frictional", 1.01, 1.03, 2.0)):
+        g = np.full(n, gval)
+        s_fix, solC = fixed(tau, g)
+        free = St.solve_cone(Ksh, tau, g, 1.0)
+        check_true(f"C {tag}: converged", free.converged, f"{free.sweeps} sweeps")
+        ratio = float((areas * free.magnitude).sum() / (areas * solC.delta).sum())
+        check_true(f"C {tag}: rotating load, moment free / fixed in [{lo}, {hi}]",
+                   lo <= ratio <= hi, f"{ratio:.4f}")
+        rot = rotation(s_fix, free.slip)
+        check(f"C {tag}: the rake rotates (median, deg)", float(np.median(rot)),
+              rot_min, below=False)
+        rim, ang, inside = complementarity(free, g)
+        check(f"C {tag}: complementarity (max ||t| - g| on active, GPa)", rim, 1e-8)
+        check(f"C {tag}: locked inside the disc (max |t| / g)", inside, 1.0)
+
 # ---------------------------------------------------------------- [taiwan] ---
 def c_taiwan() -> None:
     """The Longitudinal Valley Fault study's inputs: the Gmsh reader against
@@ -3080,7 +3194,7 @@ CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "spectrum": c_spectrum, "slip": c_slip, "align": c_align,
            "cloud": c_cloud, "rough": c_rough, "iso": c_iso,
            "system": c_system, "onfault": c_onfault, "trace": c_trace,
-           "nodal": c_nodal, "taiwan": c_taiwan}
+           "nodal": c_nodal, "taiwan": c_taiwan, "rake": c_rake}
 
 
 def main() -> bool:

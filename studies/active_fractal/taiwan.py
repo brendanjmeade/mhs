@@ -37,9 +37,16 @@ two regimes are equally favoured. The end members are ``LOAD_TENSORS``'
 thrust and strike-slip tensors (the latter rotated so its compression axis
 is +x), gated in ``selfcheck.py -k taiwan``.
 
-THE SOLVE. The static Coulomb LCP (``static.solve``): one strength per
-element, slip wherever the shear reaches it and nowhere else, one unique
-answer at every load, no events. Each tensor is scanned in the load from its
+THE SOLVE. The static Coulomb problem under two slip rules. FIXED RAKE:
+the scalar LCP (``static.solve``), each element slipping along the shear
+the tensor resolves on it, one strength per element, slip wherever the
+shear reaches it and nowhere else. FREE RAKE: the cone problem
+(``static.solve_cone``), each element's slip a vector in its plane that
+turns to follow the total shear, regional plus what its neighbours' slip
+adds. The fixed rake is a constraint on the free problem; on this fault it
+costs under 1 % of moment for thrust-like tensors and up to 11 % for the
+strike-slip ones, with the active set essentially unchanged. One unique
+answer at every load (measured, see ``static.py``), no events. Each tensor is scanned in the load from its
 own first failure ``lambda0`` (the load at which the best-oriented element
 reaches strength with no interaction, uniform model) to ``6 lambda0``,
 warm-started, and records every element's activation load and its slip at
@@ -50,9 +57,11 @@ effective-normal-stress models: uniform 150 MPa, and lithostatic minus a
 pore-pressure ratio of 0.4, which makes the shallow rows weak. Two kernels:
 the mollified half-space kernel with the free surface folded in (eps 0.1 h)
 and the classical triangular dislocation as the control. Friction 0.6
-everywhere, mean-stress ratio 2/3, the on-fault page's values. The fixed
-rake of each element is set by the tensor alone (``friction.build_friction``),
-so the rake map is a prediction of the tensor and not of the solve.
+everywhere, mean-stress ratio 2/3, the on-fault page's values. Under
+the fixed rule the rake of each element is set by the tensor alone
+(``friction.build_friction``), so that rake map is a prediction of the
+tensor and not of the solve; under the free rule the solve's own rake is
+recorded beside it.
 
 Outputs: ``out/taiwan_sweep.npz`` (gitignored), the summary figure in
 ``website/src/figures/taiwan_sweep.png`` and the viewer's payload in
@@ -123,6 +132,11 @@ THETAS = (90.0, 100.0, 110.0, 120.0, 130.0, 140.0, 150.0)
 RS = (0.0, 0.25, 0.5, 0.75, 1.0)
 MODELS = ("uniform", "lithostatic")
 KERNELS = ("mollified", "classical")
+#: The slip rule: ``fixed`` is the scalar LCP along the tensor's rake
+#: (``static.solve``), ``free`` the cone problem in which each element's
+#: slip vector may turn (``static.solve_cone``). Both are run; the page
+#: offers both.
+RAKES = ("fixed", "free")
 #: Multiples of ``lambda0``, the UNIFORM model's first failure for the tensor
 #: (the lithostatic model's own first failure is a near-surface sliver at a
 #: fraction of a MPa, so both models are scanned on the uniform model's
@@ -143,6 +157,8 @@ DROP_RATIO = OF.DROP_RATIO                 # unused by the LCP; build_friction w
 
 MODEL_LABEL = {"uniform": "uniform 150 MPa",
                "lithostatic": "lithostatic, pore ratio 0.4"}
+RAKE_LABEL = {"fixed": "fixed rake: slip along the tensor's shear",
+              "free": "free rake: slip vector on the Coulomb disc"}
 KERNEL_LABEL = {"mollified": "mollified P0, folded (mhs)",
                 "classical": "classical TDE (cutde)"}
 
@@ -363,18 +379,22 @@ def cmd_run(a) -> int:
     describe(net, meta)
     n = net.n_elements
     areas = net.areas()
+    asum = areas.sum()
     Km, info = K.assemble(net, mu=OF.MU, lam=OF.LAM, workers=1, verbose=True)
     Kc = OF.classical_matrix(net.tris)
     mats = {"mollified": Km, "classical": Kc}
-    nk, nm, nt, nr, nl = len(KERNELS), len(MODELS), len(THETAS), len(RS), len(LOADS)
+    shear = {k: np.ascontiguousarray(v[:, :, :2, :]) for k, v in mats.items()}
+    nR, nk, nm = len(RAKES), len(KERNELS), len(MODELS)
+    nt, nr, nl = len(THETAS), len(RS), len(LOADS)
     loads = np.array(LOADS)
-    act = np.full((nk, nm, nt, nr, n), np.nan)
-    slip = np.zeros((nk, nm, nt, nr, nl, n), np.float32)
-    frac = np.zeros((nk, nm, nt, nr, nl))
-    mom = np.zeros((nk, nm, nt, nr, nl))
-    sweeps = np.zeros((nk, nm, nt, nr, nl), np.int64)
-    method = np.zeros((nk, nm, nt, nr, nl), np.int8)
-    converged = np.zeros((nk, nm, nt, nr, nl), bool)
+    act = np.full((nR, nk, nm, nt, nr, n), np.nan)
+    slip = np.zeros((nR, nk, nm, nt, nr, nl, n), np.float32)
+    srake = np.full((nR, nk, nm, nt, nr, nl, n), np.nan, np.float32)
+    frac = np.zeros((nR, nk, nm, nt, nr, nl))
+    mom = np.zeros((nR, nk, nm, nt, nr, nl))
+    sweeps = np.zeros((nR, nk, nm, nt, nr, nl), np.int64)
+    method = np.zeros((nR, nk, nm, nt, nr, nl), np.int8)
+    converged = np.zeros((nR, nk, nm, nt, nr, nl), bool)
     lam0 = np.zeros((nm, nt, nr))
     lam_tensile = np.zeros((nm, nt, nr))
     never = np.zeros((nm, nt, nr), np.int64)
@@ -384,6 +404,7 @@ def cmd_run(a) -> int:
     sn_load = np.zeros((nt, nr, n))
     mineig = np.zeros((nk, nt, nr))
     branch = np.zeros((nk, nt, nr))
+    iq = LOADS.index(LOAD_QUOTED)
     t_all = time.time()
     for it, theta in enumerate(THETAS):
         for ir, r in enumerate(RS):
@@ -407,42 +428,51 @@ def cmd_run(a) -> int:
                 lam_tensile[im, it, ir] = fric.max_lambda_compressive()
                 lam_ref = lam0[0, it, ir]           # the uniform model's
                 for ik, kern in enumerate(KERNELS):
-                    warm = None
-                    t0 = time.time()
-                    for il, f in enumerate(LOADS):
-                        lam = f * lam_ref
-                        sol, how = solve_any(P[kern], d, g_s, lam, warm)
-                        warm = sol.delta
-                        new = (sol.delta > 0.0) & np.isnan(act[ik, im, it, ir])
-                        act[ik, im, it, ir, new] = f
-                        slip[ik, im, it, ir, il] = sol.delta
-                        frac[ik, im, it, ir, il] = float((areas * (sol.delta > 0.0)).sum()
-                                                         / areas.sum())
-                        mom[ik, im, it, ir, il] = float((areas * sol.delta).sum()
-                                                        * OF.MU * 1e18)
-                        sweeps[ik, im, it, ir, il] = sol.sweeps
-                        method[ik, im, it, ir, il] = how
-                        converged[ik, im, it, ir, il] = sol.converged
-                    iq = LOADS.index(LOAD_QUOTED)
-                    print(f"  az {theta:3.0f} r {r:.2f} {model:11s} {kern:9s}: lam0 "
-                          f"{1e3 * lam0[im, it, ir]:6.1f} MPa, tensile at "
-                          f"{lam_tensile[im, it, ir] / lam_ref:5.2f} lam0, "
-                          f"active {frac[ik, im, it, ir, iq]:.3f} at {LOAD_QUOTED} lam0, "
-                          f"{frac[ik, im, it, ir, -1]:.3f} at {LOADS[-1]}; "
-                          f"{nl} loads {time.time() - t0:4.0f} s, newton "
-                          f"{int(method[ik, im, it, ir].sum())}, min eig "
-                          f"{mineig[ik, it, ir]:+.3f}", flush=True)
+                    for iR, rule in enumerate(RAKES):
+                        warm = None
+                        t0 = time.time()
+                        for il, f in enumerate(LOADS):
+                            lam = f * lam_ref
+                            if rule == "fixed":
+                                sol, how = solve_any(P[kern], d, g_s, lam, warm)
+                                warm = sol.delta
+                                mag = sol.delta
+                                rk = np.where(mag > 0.0, rake[it, ir], np.nan)
+                                sw, ok = sol.sweeps, sol.converged
+                            else:
+                                sol = St.solve_cone(shear[kern], fric.tau_load,
+                                                    fric.strength_at(lam), lam, warm=warm)
+                                warm = sol.slip
+                                mag, rk, how = sol.magnitude, sol.rake_deg, 0
+                                sw, ok = sol.sweeps, sol.converged
+                            new = (mag > 0.0) & np.isnan(act[iR, ik, im, it, ir])
+                            act[iR, ik, im, it, ir, new] = f
+                            slip[iR, ik, im, it, ir, il] = mag
+                            srake[iR, ik, im, it, ir, il] = rk
+                            frac[iR, ik, im, it, ir, il] = float((areas * (mag > 0.0)).sum() / asum)
+                            mom[iR, ik, im, it, ir, il] = float((areas * mag).sum() * OF.MU * 1e18)
+                            sweeps[iR, ik, im, it, ir, il] = sw
+                            method[iR, ik, im, it, ir, il] = how
+                            converged[iR, ik, im, it, ir, il] = ok
+                        print(f"  az {theta:3.0f} r {r:.2f} {model:11s} {kern:9s} {rule:5s}: "
+                              f"lam0 {1e3 * lam0[im, it, ir]:6.1f} MPa, active "
+                              f"{frac[iR, ik, im, it, ir, iq]:.3f} at {LOAD_QUOTED} lam0, "
+                              f"{frac[iR, ik, im, it, ir, -1]:.3f} at {LOADS[-1]}; moment "
+                              f"{mom[iR, ik, im, it, ir, iq]:.3e}; {nl} loads {time.time() - t0:4.0f} s, "
+                              f"sweeps {int(sweeps[iR, ik, im, it, ir].sum())}, not converged "
+                              f"{int((~converged[iR, ik, im, it, ir]).sum())}, min eig "
+                              f"{mineig[ik, it, ir]:+.3f}", flush=True)
     print(f"  sweep done in {(time.time() - t_all) / 60:.1f} min; not converged: "
           f"{int((~converged).sum())} of {converged.size}", flush=True)
     OUT.mkdir(exist_ok=True)
     path = OUT / "taiwan_sweep.npz"
     np.savez_compressed(
         path, thetas=np.array(THETAS), rs=np.array(RS), loads=loads,
-        models=np.array(MODELS), kernels=np.array(KERNELS),
+        models=np.array(MODELS), kernels=np.array(KERNELS), rakes=np.array(RAKES),
         tris=net.tris, fault_id=net.fault_id, areas=areas,
-        act=act, slip=slip, frac=frac, mom=mom, sweeps=sweeps, method=method,
-        converged=converged, lam0=lam0, lam_tensile=lam_tensile, never=never,
-        rake=rake, dcoef=dcoef, tau_mag=tau_mag, sn_load=sn_load,
+        act=act, slip=slip, srake=srake, frac=frac, mom=mom, sweeps=sweeps,
+        method=method, converged=converged, lam0=lam0, lam_tensile=lam_tensile,
+        never=never, rake=rake, dcoef=dcoef, tau_mag=tau_mag, sn_load=sn_load,
         mineig=mineig, branch=branch, key=info["key"],
         meta=json.dumps(meta), git=str(K._git()))
     print(f"  saved {path}", flush=True)
@@ -477,7 +507,14 @@ def lam_half(frac: np.ndarray, loads: np.ndarray, lam_ref: float,
     return float((loads[j - 1] + t * (loads[j] - loads[j - 1])) * lam_ref)
 
 
-def figure(z, out: pathlib.Path) -> None:
+def rotation_deg(srake_free: np.ndarray, rake_fixed: np.ndarray) -> np.ndarray:
+    """Per-element angle between the free rake and the tensor's, in [0, 180],
+    NaN where the free rule has the element locked."""
+    d = np.abs((srake_free - rake_fixed + 180.0) % 360.0 - 180.0)
+    return np.where(np.isfinite(srake_free), d, np.nan)
+
+
+def figure(z, out: pathlib.Path):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -485,16 +522,28 @@ def figure(z, out: pathlib.Path) -> None:
     areas = z["areas"]
     w = areas / areas.sum()
     nt, nr = len(thetas), len(rs)
+    iq = list(loads).index(LOAD_QUOTED)
     cmap = plt.get_cmap("viridis")
     cols = [cmap(0.1 + 0.8 * i / (nr - 1)) for i in range(nr)]
-    half = np.full((2, 2, nt, nr), np.nan)          # kernel, model
-    for ik in range(2):
-        for im in range(2):
-            for it in range(nt):
-                for ir in range(nr):
-                    half[ik, im, it, ir] = 1e3 * lam_half(
-                        z["frac"][ik, im, it, ir], loads, z["lam0"][0, it, ir])
-    fig, axes = plt.subplots(2, 3, figsize=(12.5, 7.2))
+    half = np.full((2, 2, 2, nt, nr), np.nan)          # rake, kernel, model
+    for iR in range(2):
+        for ik in range(2):
+            for im in range(2):
+                for it in range(nt):
+                    for ir in range(nr):
+                        half[iR, ik, im, it, ir] = 1e3 * lam_half(
+                            z["frac"][iR, ik, im, it, ir], loads, z["lam0"][0, it, ir])
+    ratio = z["mom"][1, 0, :, :, :, iq] / z["mom"][0, 0, :, :, :, iq]   # free / fixed, mollified
+    rot_med = np.full((2, nt, nr), np.nan)
+    for im in range(2):
+        for it in range(nt):
+            for ir in range(nr):
+                rot = rotation_deg(z["srake"][1, 0, im, it, ir, iq], z["rake"][it, ir])
+                on = np.isfinite(rot) & (z["slip"][0, 0, im, it, ir, iq] > 0)
+                if on.any():
+                    o = np.argsort(rot[on]); ww = w[on][o]
+                    rot_med[im, it, ir] = rot[on][o][np.searchsorted(np.cumsum(ww), 0.5 * ww.sum())]
+    fig, axes = plt.subplots(2, 4, figsize=(16.0, 7.2))
     ax = axes[0, 0]
     for ir, r in enumerate(rs):
         ax.plot(thetas, 1e3 * z["lam0"][0, :, ir], "-o", color=cols[ir], ms=3,
@@ -508,13 +557,21 @@ def figure(z, out: pathlib.Path) -> None:
     for im, model in enumerate(MODELS):
         ax = axes[0, 1 + im]
         for ir, r in enumerate(rs):
-            ax.plot(thetas, half[0, im, :, ir], "-o", color=cols[ir], ms=3)
-            ax.plot(thetas, half[1, im, :, ir], "--", color=cols[ir], lw=0.9)
+            ax.plot(thetas, half[1, 0, im, :, ir], "-o", color=cols[ir], ms=3)
+            ax.plot(thetas, half[0, 0, im, :, ir], "--", color=cols[ir], lw=0.9)
         ax.set_ylim(0, None)
-        ax.set_ylabel(f"load with half the area active (MPa)")
-        ax.set_title(f"{MODEL_LABEL[model]}: solid mollified, dashed classical",
-                     fontsize=9)
+        ax.set_ylabel("load with half the area active (MPa)")
+        ax.set_title(f"{MODEL_LABEL[model]}: solid free rake, dashed fixed", fontsize=9)
         _style(ax); _letter(ax, "bc"[im])
+    ax = axes[0, 3]
+    for ir, r in enumerate(rs):
+        ax.plot(thetas, ratio[0, :, ir], "-o", color=cols[ir], ms=3)
+        ax.plot(thetas, ratio[1, :, ir], ":", color=cols[ir], lw=1.0)
+    ax.axhline(1, color="0.75", lw=0.8)
+    ax.set_ylim(0.98, None)
+    ax.set_ylabel(f"moment, free / fixed rake, at {LOAD_QUOTED:g} $\\lambda_0$")
+    ax.set_title("solid uniform, dotted lithostatic", fontsize=9)
+    _style(ax); _letter(ax, "d")
     ax = axes[1, 0]
     for ir, r in enumerate(rs):
         ax.plot(thetas, [float(np.sum(w * z["rake"][it, ir])) for it in range(nt)],
@@ -522,9 +579,9 @@ def figure(z, out: pathlib.Path) -> None:
     ax.axhline(90, color="0.75", lw=0.8)
     ax.set_ylim(0, 180)
     ax.set_yticks([0, 45, 90, 135, 180])
-    ax.set_ylabel("area-mean rake (deg)")
+    ax.set_ylabel("area-mean rake the tensor imposes (deg)")
     ax.set_title("0 left-lateral, 90 reverse, 180 right-lateral", fontsize=9)
-    _style(ax); _letter(ax, "d")
+    _style(ax); _letter(ax, "e")
     ax = axes[1, 1]
     for ir, r in enumerate(rs):
         ax.plot(thetas, [float(np.sum(w * (z["dcoef"][it, ir] <= 0.0)))
@@ -532,56 +589,76 @@ def figure(z, out: pathlib.Path) -> None:
     ax.set_ylim(0, 1.02)
     ax.set_ylabel("area that can never fail")
     ax.set_title("normal stress rising faster than shear, at any load", fontsize=9)
-    _style(ax); _letter(ax, "e")
+    _style(ax); _letter(ax, "f")
     ax = axes[1, 2]
     it = int(np.argmin(np.abs(thetas - 130.0)))
     for ir, r in enumerate(rs):
-        ax.plot(loads, z["frac"][0, 0, it, ir], "-", color=cols[ir])
-        ax.plot(loads, z["frac"][0, 1, it, ir], ":", color=cols[ir])
+        ax.plot(loads, z["frac"][1, 0, 0, it, ir], "-", color=cols[ir])
+        ax.plot(loads, z["frac"][1, 0, 1, it, ir], ":", color=cols[ir])
     ax.set_ylim(0, 1.02)
     ax.set_xlim(loads[0], loads[-1])
     ax.set_xlabel("load  $\\lambda / \\lambda_0$")
-    ax.set_ylabel("active area fraction")
+    ax.set_ylabel("active area fraction (free rake)")
     ax.set_title(f"$S_{{Hmax}}$ at {thetas[it]:.0f}: solid uniform, dotted lithostatic",
                  fontsize=9)
-    _style(ax); _letter(ax, "f")
-    for ax in (axes[0, 0], axes[0, 1], axes[0, 2], axes[1, 0], axes[1, 1]):
-        ax.set_xticks(thetas)
-    for ax in (axes[1, 0], axes[1, 1]):
-        ax.set_xlabel("$S_{Hmax}$ azimuth (deg, clockwise from north)")
+    _style(ax); _letter(ax, "g")
+    ax = axes[1, 3]
+    for ir, r in enumerate(rs):
+        ax.plot(thetas, rot_med[0, :, ir], "-o", color=cols[ir], ms=3)
+        ax.plot(thetas, rot_med[1, :, ir], ":", color=cols[ir], lw=1.0)
+    ax.set_ylim(0, None)
+    ax.set_ylabel(f"area-median rake rotation at {LOAD_QUOTED:g} $\\lambda_0$ (deg)")
+    ax.set_title("free rake against the tensor's, on the slipping area", fontsize=9)
+    _style(ax); _letter(ax, "h")
+    for ax in axes.ravel():
+        if ax is not axes[1, 2]:
+            ax.set_xticks(thetas)
+    for ax in axes[1]:
+        if ax is not axes[1, 2]:
+            ax.set_xlabel("$S_{Hmax}$ azimuth (deg, clockwise from north)")
     fig.tight_layout()
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=150)
     plt.close(fig)
-    return half
+    return half, ratio, rot_med
 
 
 def cmd_figure(a) -> int:
     z = dict(np.load(OUT / "taiwan_sweep.npz", allow_pickle=False))
     out = pathlib.Path(a.out) / "taiwan_sweep.png"
-    half = figure(z, out)
+    half, ratio, rot_med = figure(z, out)
     loads = list(z["loads"])
     iq = loads.index(LOAD_QUOTED)
     print(f"  {out}")
-    for im, model in enumerate(MODELS):
-        print(f"  {model}: load with half the area active (MPa), mollified, az x r")
-        for it, th in enumerate(z["thetas"]):
-            print(f"    az {th:3.0f}: " + " ".join(f"{half[0, im, it, ir]:6.0f}"
-                                                  for ir in range(len(z["rs"]))))
+    for iR, rule in enumerate(RAKES):
+        for im, model in enumerate(MODELS):
+            print(f"  {rule} rake, {model}: load with half the area active (MPa), mollified, az x r")
+            for it, th in enumerate(z["thetas"]):
+                print(f"    az {th:3.0f}: " + " ".join(f"{half[iR, 0, im, it, ir]:6.0f}"
+                                                      for ir in range(len(z["rs"]))))
     print(f"  lam0 (MPa), uniform, az x r")
     for it, th in enumerate(z["thetas"]):
         print(f"    az {th:3.0f}: " + " ".join(f"{1e3 * z['lam0'][0, it, ir]:6.0f}"
                                               for ir in range(len(z["rs"]))))
-    good = np.isfinite(half[0]) & np.isfinite(half[1])
-    print(f"  kernels: half-active load classical/mollified "
-          f"{np.median(half[1][good] / half[0][good]):.3f} median, "
-          f"{(half[1][good] / half[0][good]).min():.3f}-{(half[1][good] / half[0][good]).max():.3f}")
-    diff = np.abs(z["frac"][0] - z["frac"][1])
-    print(f"  kernels: max |active fraction difference| {diff.max():.3f}, "
-          f"moment ratio classical/mollified at {LOAD_QUOTED} lam0 "
-          f"{np.median(z['mom'][1, ..., iq] / z['mom'][0, ..., iq]):.3f} (median)")
+    print(f"  moment free / fixed at {LOAD_QUOTED} lam0, mollified uniform, az x r")
+    for it, th in enumerate(z["thetas"]):
+        print(f"    az {th:3.0f}: " + " ".join(f"{ratio[0, it, ir]:6.3f}"
+                                              for ir in range(len(z["rs"]))))
+    print(f"  area-median rotation (deg) at {LOAD_QUOTED} lam0, mollified uniform, az x r")
+    for it, th in enumerate(z["thetas"]):
+        print(f"    az {th:3.0f}: " + " ".join(f"{rot_med[0, it, ir]:6.2f}"
+                                              for ir in range(len(z["rs"]))))
+    for iR, rule in enumerate(RAKES):
+        good = np.isfinite(half[iR, 0]) & np.isfinite(half[iR, 1])
+        q = half[iR, 1][good] / half[iR, 0][good]
+        print(f"  {rule}: kernels, half-active load classical/mollified {np.median(q):.3f} "
+              f"median, {q.min():.3f}-{q.max():.3f}; max |active fraction difference| "
+              f"{np.abs(z['frac'][iR, 0] - z['frac'][iR, 1]).max():.3f}; moment ratio "
+              f"classical/mollified at {LOAD_QUOTED} lam0 "
+              f"{np.median(z['mom'][iR, 1, ..., iq] / z['mom'][iR, 0, ..., iq]):.3f}")
     print(f"  min eig sym(-P): mollified {z['mineig'][0].min():+.3f}, classical "
-          f"{z['mineig'][1].min():+.3f}; newton solves {int((z['method'] == 1).sum())}")
+          f"{z['mineig'][1].min():+.3f}; newton solves {int((z['method'] == 1).sum())}; "
+          f"not converged {int((~z['converged']).sum())}")
     return 0
 
 
@@ -609,6 +686,18 @@ def cmd_payload(a) -> int:
         arrays[name] = dict(dtype=np.dtype(dtype).name, shape=list(np.shape(arr)),
                             bytes=len(buf), sha256=hashlib.sha256(buf).hexdigest()[:16])
 
+    def wmedian(v, mask):
+        if not mask.any():
+            return None
+        o = np.argsort(v[mask]); ww = w[mask][o]
+        return float(v[mask][o][np.searchsorted(np.cumsum(ww), 0.5 * ww.sum())])
+
+    def wquantile(v, mask, q):
+        if not mask.any():
+            return None
+        o = np.argsort(v[mask]); ww = w[mask][o]
+        return float(v[mask][o][min(np.searchsorted(np.cumsum(ww), q * ww.sum()), o.size - 1)])
+
     put("taiwan.tris", tris, np.float32)
     put("taiwan.corners", np.eye(3)[None], np.float32)
     put("taiwan.area", areas, np.float32)
@@ -619,8 +708,7 @@ def cmd_payload(a) -> int:
     # The Coulomb criterion is linear in the load, so an element whose
     # effective normal stress the load drives through zero keeps "failing"
     # past the point where it would physically open; the page states how
-    # much area that is at each load (the uniform model: none by 6 lam0 on
-    # most tensors; the lithostatic model: the shallow rows early).
+    # much area that is at each load (under 1.2 % on either model by 6 lam0).
     net, _ = load_lvf()
     sig0 = {m: friction(net, thetas[0], rs[0], m).sigma_eff_0 for m in MODELS}
     for it, th in enumerate(thetas):
@@ -632,31 +720,54 @@ def cmd_payload(a) -> int:
                                              * z["sn_load"][it, ir] <= 0.0)))
                            for f in loads]
                 for ik, kern in enumerate(KERNELS):
-                    key = case_key(kern, model, th, r)
-                    put(f"taiwan.{key}.act", z["act"][ik, im, it, ir], np.float32)
-                    for il in ship:
-                        put(f"taiwan.{key}.slip{loads[il]:.2f}",
-                            z["slip"][ik, im, it, ir, il], np.float32)
-                    cases[key] = dict(
-                        # the load the scan multiplies: the uniform model's first
-                        # failure; the model's own is beside it
-                        lam0_MPa=1e3 * float(z["lam0"][0, it, ir]),
-                        lam0_own_MPa=1e3 * float(z["lam0"][im, it, ir]),
-                        lam_tensile_over_lam0=float(z["lam_tensile"][im, it, ir]
-                                                    / z["lam0"][0, it, ir]),
-                        never_fail=int(z["never"][im, it, ir]),
-                        active_fraction=[float(v) for v in z["frac"][ik, im, it, ir]],
-                        moment_Nm=[float(v) for v in z["mom"][ik, im, it, ir]],
-                        max_slip_m=[1e3 * float(z["slip"][ik, im, it, ir, il].max())
-                                    for il in range(len(loads))],
-                        lam_half_MPa=1e3 * lam_half(z["frac"][ik, im, it, ir],
-                                                    z["loads"], z["lam0"][0, it, ir]),
-                        never_fail_area=float(np.sum(w * (z["dcoef"][it, ir] <= 0.0))),
-                        tension_area=tension,
-                        rake_mean_deg=float(np.sum(w * z["rake"][it, ir])),
-                        min_eig_sym_negP=float(z["mineig"][ik, it, ir]),
-                        branching_ratio=float(z["branch"][ik, it, ir]),
-                        newton_solves=int((z["method"][ik, im, it, ir] == 1).sum()))
+                    for iR, rule in enumerate(RAKES):
+                        key = f"{rule}.{case_key(kern, model, th, r)}"
+                        put(f"taiwan.{key}.act", z["act"][iR, ik, im, it, ir], np.float32)
+                        for il in ship:
+                            put(f"taiwan.{key}.slip{loads[il]:.2f}",
+                                z["slip"][iR, ik, im, it, ir, il], np.float32)
+                            if rule == "free":
+                                put(f"taiwan.{key}.srake{loads[il]:.2f}",
+                                    z["srake"][iR, ik, im, it, ir, il], np.float32)
+                        c = dict(
+                            # the load the scan multiplies: the uniform model's
+                            # first failure; the model's own is beside it
+                            lam0_MPa=1e3 * float(z["lam0"][0, it, ir]),
+                            lam0_own_MPa=1e3 * float(z["lam0"][im, it, ir]),
+                            lam_tensile_over_lam0=float(z["lam_tensile"][im, it, ir]
+                                                        / z["lam0"][0, it, ir]),
+                            never_fail=int(z["never"][im, it, ir]),
+                            active_fraction=[float(v) for v in z["frac"][iR, ik, im, it, ir]],
+                            moment_Nm=[float(v) for v in z["mom"][iR, ik, im, it, ir]],
+                            max_slip_m=[1e3 * float(z["slip"][iR, ik, im, it, ir, il].max())
+                                        for il in range(len(loads))],
+                            lam_half_MPa=1e3 * lam_half(z["frac"][iR, ik, im, it, ir],
+                                                        z["loads"], z["lam0"][0, it, ir]),
+                            never_fail_area=float(np.sum(w * (z["dcoef"][it, ir] <= 0.0))),
+                            tension_area=tension,
+                            rake_mean_deg=float(np.sum(w * z["rake"][it, ir])),
+                            min_eig_sym_negP=float(z["mineig"][ik, it, ir]),
+                            branching_ratio=float(z["branch"][ik, it, ir]),
+                            newton_solves=int((z["method"][iR, ik, im, it, ir] == 1).sum()),
+                            sweeps=int(z["sweeps"][iR, ik, im, it, ir].sum()))
+                        if rule == "free":
+                            fx = z["slip"][0, ik, im, it, ir]
+                            fr_ = z["slip"][1, ik, im, it, ir]
+                            rot = [rotation_deg(z["srake"][1, ik, im, it, ir, il], z["rake"][it, ir])
+                                   for il in range(len(loads))]
+                            both = [(fx[il] > 0) & (fr_[il] > 0) for il in range(len(loads))]
+                            c.update(
+                                moment_vs_fixed=[float(z["mom"][1, ik, im, it, ir, il]
+                                                       / z["mom"][0, ik, im, it, ir, il])
+                                                 if z["mom"][0, ik, im, it, ir, il] > 0 else None
+                                                 for il in range(len(loads))],
+                                rotation_median_deg=[wmedian(rot[il], both[il]) for il in range(len(loads))],
+                                rotation_p90_deg=[wquantile(rot[il], both[il], 0.9) for il in range(len(loads))],
+                                n_reversed=[int(np.sum(np.isfinite(rot[il]) & (rot[il] > 90.0)))
+                                            for il in range(len(loads))],
+                                n_on=[int(np.sum((fr_[il] > 0) & (fx[il] == 0))) for il in range(len(loads))],
+                                n_off=[int(np.sum((fr_[il] == 0) & (fx[il] > 0))) for il in range(len(loads))])
+                        cases[key] = c
     geom = []
     for i, p in enumerate(meta["faults"]):
         t = tris[fid == i]
@@ -673,17 +784,18 @@ def cmd_payload(a) -> int:
         origin=dict(lon=meta["lon0"], lat=meta["lat0"]), km_per_deg=meta["km_per_deg"],
         faults=meta["faults"], data_source=meta["source"],
         sweep=dict(thetas=thetas, rs=rs, models=list(MODELS), kernels=list(KERNELS),
-                   loads=loads, ship_loads=list(SHIP_LOADS), quoted_load=LOAD_QUOTED),
+                   rakes=list(RAKES), loads=loads, ship_loads=list(SHIP_LOADS),
+                   quoted_load=LOAD_QUOTED),
         friction=dict(mu=MU_F, mean_stress_ratio=K_MEAN, pore_ratio=PORE_RATIO,
                       sigma_eff_uniform_GPa=Fr.SIGMA_EFF_UNIFORM, rho_g_GPa_per_km=Fr.RHO_G),
-        labels=dict(models=MODEL_LABEL, kernels=KERNEL_LABEL),
+        labels=dict(models=MODEL_LABEL, kernels=KERNEL_LABEL, rakes=RAKE_LABEL),
         tensor="most compressive axis horizontal at azimuth theta; r = 0 thrust, "
                "r = 1 strike-slip, diag(-1, r, 1 - r) between, unit maximum shear",
-        rake="Aki-Richards: 0 left-lateral, 90 reverse, 180 right-lateral; fixed per "
-             "element by the tensor",
+        rake="Aki-Richards: 0 left-lateral, 90 reverse, 180 right-lateral; under the "
+             "fixed rule set per element by the tensor, under the free rule solved",
         cases=cases, arrays=arrays,
-        defaults=dict(kernel="mollified", model="uniform", theta=130.0, r=0.5,
-                      load=2.0, metric="slip"))
+        defaults=dict(rake="free", kernel="mollified", model="uniform", theta=130.0,
+                      r=0.5, load=2.0, metric="slip"))
     for c in cases.values():
         for k in ("lam_half_MPa", "lam_tensile_over_lam0"):
             if not np.isfinite(c[k]):
@@ -701,7 +813,7 @@ def main(argv=None) -> int:
     s = sub.add_parser("assemble", help="the mollified matrix into the cache, in "
                                         "its own process")
     s.add_argument("--workers", type=int, default=8)
-    sub.add_parser("run", help="the stress-tensor sweep, both kernels")
+    sub.add_parser("run", help="the stress-tensor sweep, both kernels, both slip rules")
     f = sub.add_parser("figure", help="the summary figure from out/taiwan_sweep.npz")
     f.add_argument("--out", default=str(FIGURES))
     p = sub.add_parser("payload", help="out/taiwan_sweep.npz -> website/public/data")

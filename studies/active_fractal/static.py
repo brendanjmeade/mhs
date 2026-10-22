@@ -173,6 +173,130 @@ def solve(P: np.ndarray, d: np.ndarray, g: np.ndarray, lam: float, *,
     return Solution(delta, lam, max_sweeps, res, False, order.size)
 
 
+@dataclasses.dataclass
+class ConeSolution:
+    """One free-rake static solution: the slip VECTOR per element."""
+    slip: np.ndarray            # (n, 2) in each element's (strike, dip) frame
+    shear: np.ndarray           # (n, 2) total shear carried at the solution
+    lam: float
+    sweeps: int
+    residual: float             # cone natural residual, max |t - Proj_D(t + k s)|
+    converged: bool
+
+    @property
+    def magnitude(self) -> np.ndarray:
+        return np.linalg.norm(self.slip, axis=1)
+
+    @property
+    def active(self) -> np.ndarray:
+        return self.magnitude > 0.0
+
+    @property
+    def rake_deg(self) -> np.ndarray:
+        """Aki-Richards rake of the slip, NaN where locked."""
+        out = np.full(self.slip.shape[0], np.nan)
+        on = self.active
+        out[on] = np.degrees(np.arctan2(self.slip[on, 1], self.slip[on, 0]))
+        return out
+
+
+def full_shear(Ksh: np.ndarray, tau_load: np.ndarray, lam: float,
+               slip: np.ndarray) -> np.ndarray:
+    """``(n, 2)`` total shear: the regional ``lam tau_load`` plus what every
+    element's slip vector puts on every other, from the shear rows of ``K``."""
+    return lam * tau_load + np.einsum("jbai,jb->ia", Ksh, slip)
+
+
+def cone_residual(shear: np.ndarray, slip: np.ndarray, g: np.ndarray,
+                  k: np.ndarray) -> float:
+    """``max_i |t_i - Proj_{D_i}(t_i + k_i s_i)|``, GPa: zero exactly at a
+    solution of the cone problem, for any positive ``k``."""
+    r = shear + k[:, None] * slip
+    nr = np.linalg.norm(r, axis=1)
+    pr = r * np.minimum(1.0, g / np.maximum(nr, 1e-300))[:, None]
+    return float(np.linalg.norm(shear - pr, axis=1).max())
+
+
+def solve_cone(Ksh: np.ndarray, tau_load: np.ndarray, g: np.ndarray,
+               lam: float, *, warm: np.ndarray | None = None,
+               tol: float = TOL, max_sweeps: int = MAX_SWEEPS,
+               verbose: bool = False) -> ConeSolution:
+    """The FREE-RAKE static problem: each element's slip is a vector in its
+    own plane, and Coulomb friction is a disc rather than a threshold.
+
+    Per element ``i`` with total shear ``t_i`` (``full_shear``) and disc
+    radius ``g_i = mu_i sigma'_i`` (``Friction.strength_at``):
+
+        |t_i| <= g_i,   s_i = alpha_i t_i / |t_i|,   alpha_i >= 0,
+        alpha_i (g_i - |t_i|) = 0
+
+    -- locked strictly inside the disc, or slipping on its rim PARALLEL to
+    the shear it carries. Restricting ``s_i`` to the ray along a fixed
+    direction collapses this to :func:`solve`'s scalar LCP, so the fixed rake
+    is a CONSTRAINT on this problem, and the two differ exactly where it
+    binds: where the neighbours' slip turns an element's shear off the
+    regional rake, and where the scalar problem's ``delta >= 0`` forbids an
+    element from slipping against it.
+
+    THE METHOD is the contact-dynamics projected Gauss-Seidel (Moreau; Jean
+    1999; Jourdan, Alart & Jean 1998): with everything else frozen,
+    ``r = t_i + k_i s_i`` and ``s_i <- (r - Proj_D(r)) / k_i``, whose fixed
+    point is the local condition exactly for ANY ``k_i > 0``; ``k_i`` is the
+    scalar self-stiffness ``max(-K_ii^ss, -K_ii^dd)`` and only sets the rate.
+    One contiguous source-major column ``Ksh[i]`` per update, as
+    :func:`solve` reads ``P[i]``. ``Ksh`` is ``K[:, :, :2, :]``, the shear
+    rows of ``kernel.assemble``'s matrix, ``(n, 2, 2, n)``.
+
+    MEASURED, NOT GUARANTEED, as for :func:`solve`. Uniqueness of the cone
+    problem holds when the symmetric part of ``-Ksh`` is positive definite;
+    on the Longitudinal Valley Fault it is not (seven negative eigenvalues of
+    4996, the supplied mesh's slivers) and yet warm and cold starts agree to
+    1e-11 km on all 70 solves of the sweep, which is what ``selfcheck -k
+    rake`` and the study report. Genuine Coulomb non-uniqueness (Klarbring
+    1990) lives in the normal-stress coupling, which this solver does not
+    carry: the radius is the load's, as in :func:`solve` without
+    :func:`coulomb_coupled`. A negative radius (an element the load has
+    driven into tension) is clamped at zero, where the element slips freely,
+    the same thing the scalar problem does with a negative threshold.
+
+    Convergence is the cone's natural residual ``max |t - Proj_D(t + k s)|``,
+    zero exactly at a solution, at the scalar solver's tolerance.
+    """
+    n = Ksh.shape[0]
+    idx = np.arange(n)
+    k = np.maximum(-Ksh[idx, 0, 0, idx], -Ksh[idx, 1, 1, idx])
+    if not np.all(k > 0.0):
+        raise ValueError("a non-positive self-stiffness: the matrix is not "
+                         "source-major shear rows with a negative diagonal")
+    g = np.maximum(np.asarray(g, float), 0.0)
+    s = np.zeros((n, 2)) if warm is None else np.array(warm, float)
+    T = full_shear(Ksh, tau_load, lam, s)
+    res = np.inf
+    for sweep in range(1, max_sweeps + 1):
+        for i in range(n):
+            r0 = T[i, 0] + k[i] * s[i, 0]
+            r1 = T[i, 1] + k[i] * s[i, 1]
+            nr = (r0 * r0 + r1 * r1) ** 0.5
+            if nr <= g[i]:
+                n0 = n1 = 0.0                       # locked, inside the disc
+            else:
+                f = (nr - g[i]) / (k[i] * nr)       # on the rim, along r
+                n0, n1 = f * r0, f * r1
+            d0, d1 = n0 - s[i, 0], n1 - s[i, 1]
+            if d0 != 0.0 or d1 != 0.0:
+                s[i, 0], s[i, 1] = n0, n1
+                col = Ksh[i]                        # (2, 2, n), one contiguous read
+                T[:, 0] += d0 * col[0, 0] + d1 * col[1, 0]
+                T[:, 1] += d0 * col[0, 1] + d1 * col[1, 1]
+        res = cone_residual(T, s, g, k)
+        if verbose and (sweep <= 3 or sweep % 25 == 0):
+            print(f"      sweep {sweep:4d}  cone residual {res:.3e}  "
+                  f"slipping {int((np.abs(s).sum(axis=1) > 0).sum())}")
+        if res <= tol:
+            return ConeSolution(s, T, lam, sweep, res, True)
+    return ConeSolution(s, T, lam, max_sweeps, res, False)
+
+
 #: Active-set Newton iterations before a solve is declared non-convergent.
 #: Measured: a few on a penny crack, tens on the on-fault page's system.
 MAX_NEWTON = 200
