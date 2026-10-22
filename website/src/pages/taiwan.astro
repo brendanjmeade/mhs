@@ -1,0 +1,254 @@
+---
+import Base from "../layouts/Base.astro";
+import About from "../components/About.astro";
+import sweepFig from "../figures/taiwan_sweep.png";
+const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
+const sections = [
+  { id: "the-fault-and-the-mesh", label: "The fault and the mesh" },
+  { id: "the-tensors", label: "The tensors" },
+  { id: "what-is-solved", label: "What is solved" },
+  { id: "what-the-sweep-says", label: "What the sweep says" },
+  { id: "what-this-is-not", label: "What this is not" },
+  { id: "reproducing-it", label: "Reproducing it" },
+];
+---
+<Base
+  title="mhs — Taiwan"
+  description="The Longitudinal Valley Fault of eastern Taiwan, from two Taiwan Earthquake Model segments, under a sweep of regional stress tensors: the static Coulomb LCP's slip, activation load and rake on every element, for the mollified half-space kernel and the classical dislocation, two effective-stress models, and loads to six times the first failure."
+  current="taiwan"
+>
+  <Fragment slot="sidebar">
+    <h1>Taiwan<span class="sub">the Longitudinal Valley Fault under a sweep of stress tensors</span></h1>
+    <p>
+      One real fault instead of a synthetic one. Two Taiwan Earthquake Model
+      segments of the Longitudinal Valley Fault, 2,498 triangles striking
+      N20E and dipping about 60&deg; east to 20&nbsp;km, breaking the surface
+      along 147&nbsp;km of trace, loaded by a regional stress whose shape and
+      orientation are swept: the most compressive axis at seven azimuths
+      from 90&deg; to 150&deg;, and a regime from pure thrust to pure
+      strike-slip in five steps.
+    </p>
+    <p>
+      At each tensor the static Coulomb LCP is solved along the load, from
+      the first failure to six times it. What is painted is one value per
+      element: the slip at a chosen load, the load at which the element first
+      slipped, the rake the tensor imposes, or how fast the tensor loads the
+      element toward failure. Two effective-normal-stress models and two
+      kernels, so that neither the strength profile nor the kernel can be
+      mistaken for the result.
+    </p>
+    <nav class="toc">
+      <h3>Contents</h3>
+      <ol>{sections.map((s) => <li><a href={`#${s.id}`}>{s.label}</a></li>)}</ol>
+    </nav>
+    <hr />
+    <p class="contact">
+      Produced by <code>studies/active_fractal/taiwan.py</code> and gated by
+      <code>selfcheck.py -k taiwan</code>. The segments are the user&rsquo;s
+      meshes of the Taiwan Earthquake Model seismogenic structures, used as
+      supplied.
+    </p>
+    <About />
+  </Fragment>
+
+  <div id="viewer" class="onfault">
+    <div class="panel">
+      <label data-ctl="theta"><span>S<sub>Hmax</sub> azimuth</span></label>
+      <label data-ctl="r"><span>regime r</span></label>
+      <label data-ctl="model"><span>effective stress</span></label>
+      <label data-ctl="kernel"><span>kernel</span></label>
+    </div>
+    <div class="panel">
+      <label data-ctl="metric"><span>metric</span></label>
+      <label data-ctl="load"><span>load</span></label>
+      <div class="rng" data-ctl="window"><span class="lbl">window</span></div>
+    </div>
+    <div data-canvas class="canvas" aria-label="The two segments of the Longitudinal Valley Fault, coloured by the static LCP's slip, activation load, rake or Coulomb loading rate, one value per element"></div>
+    <p data-legend class="legend"></p>
+    <div class="panel">
+      <label data-ctl="mark"><span>mark saturated</span></label>
+      <label data-ctl="wire"><span>element edges</span></label>
+      <span class="lbl">view</span>
+      <span class="btns" data-ctl="view"></span>
+      <span class="btns" data-ctl="shot"></span>
+      <label data-ctl="publication"><span>publication view</span></label>
+    </div>
+    <p data-status class="status">loading&hellip;</p>
+  </div>
+
+  <h2 id="the-fault-and-the-mesh">The fault and the mesh</h2>
+  <p>
+    The Longitudinal Valley Fault is the suture between the Philippine Sea
+    plate and Eurasia in eastern Taiwan, an east-dipping reverse fault with
+    a left-lateral component that creeps along part of its length and
+    broke in 1951 and 2003. The two segments here are its southern 88&nbsp;km
+    and northern 58&nbsp;km, meeting at one trace vertex, which is the origin
+    of the local frame: x east, y north, z up, kilometres, the surface at
+    z&nbsp;=&nbsp;0. Geographic azimuths are clockwise from north, so the
+    fault&rsquo;s normal points to about 110&deg;.
+  </p>
+  <p>
+    The meshes are used as supplied: 1,499 and 999 triangles with a median
+    edge of 1.9&nbsp;km, a smallest edge of 0.12&nbsp;km and two near-vertical
+    slivers at the bottom and the top. Every triangle is wound so that its
+    normal points up, cutde&rsquo;s frame is checked against the
+    package&rsquo;s on every facet, the tiling is checked to be a manifold
+    with one boundary loop per segment, and the reader is checked against
+    meshio bit for bit. The mollification width is a tenth of the median
+    edge, 0.19&nbsp;km, and the free surface is folded into the kernel as on
+    the <a href={`${base}onfault/`}>on-fault page</a>.
+  </p>
+
+  <h2 id="the-tensors">The tensors</h2>
+  <p>
+    The load is a unit deviator times &lambda;, the maximum shear stress the
+    regional field carries, plus an isotropic part of two thirds of &lambda;,
+    on an effective normal stress of 150&nbsp;MPa everywhere or lithostatic
+    minus a pore-pressure ratio of 0.4. The deviator&rsquo;s most compressive
+    axis is horizontal at azimuth &theta;, and its shape is set by a regime
+    parameter r: at r&nbsp;=&nbsp;0 the vertical stress is the least
+    compressive (the thrust regime), at r&nbsp;=&nbsp;1 it is the
+    intermediate one (strike-slip), and in between the principal values are
+    (&minus;1, r, 1&nbsp;&minus;&nbsp;r) scaled to unit maximum shear, so that
+    &lambda; means the same thing on the whole family and
+    r&nbsp;=&nbsp;0.5 is the axially symmetric compression where the two
+    regimes are equally favoured. Friction is 0.6 everywhere.
+  </p>
+  <p>
+    The tensor fixes each element&rsquo;s slip direction: the rake is the
+    direction of the resolved shear, and the LCP solves only for its
+    magnitude. The rake map is therefore a prediction of the tensor and not
+    of the solve. With the compressive axis at 110&deg;, normal to the fault,
+    every element slips reverse; at 90&deg; and 100&deg; a right-lateral
+    component appears, and from 120&deg; on a left-lateral one, which is the
+    sense observed on the fault.
+  </p>
+
+  <h2 id="what-is-solved">What is solved</h2>
+  <p>
+    The static LCP of the <a href={`${base}avalanche/`}>avalanche page</a>:
+    one strength per element, slip wherever the shear reaches it and nowhere
+    else, one unique answer at each load, no events. The load is scanned from
+    &lambda;<sub>0</sub>, the load at which the best-oriented element reaches
+    its strength with no interaction under the uniform model, to
+    6&nbsp;&lambda;<sub>0</sub>, warm-started, and the lithostatic model is
+    scanned at the same absolute loads, so the two models are compared under
+    one tectonic stress. The quantities quoted below are in MPa of maximum
+    shear, which is what makes tensors of different shape comparable.
+  </p>
+  <p>
+    Two things the linear Coulomb criterion cannot say are stated beside
+    the maps instead. An element whose normal stress the tensor raises faster
+    than its shear can never fail at any load, and the legend gives that area
+    for the chosen tensor. And an element whose effective normal stress the
+    load drives through zero would open rather than slip; the manifest
+    records the area in that state at every load; it stays below 1.2&nbsp;%
+    of the fault on either model within the scan.
+  </p>
+
+  <h2 id="what-the-sweep-says">What the sweep says</h2>
+  <figure class="panels">
+    <img src={sweepFig.src} alt="Six panels: first-failure load, half-active load for both stress models, area-mean rake, never-failing area, and activation curves at 130 degrees" />
+    <figcaption>
+      <b>The sweep in six numbers.</b> <b>a</b> the first-failure load
+      &lambda;<sub>0</sub> against the azimuth of the most compressive axis,
+      one line per regime. <b>b</b>, <b>c</b> the load at which half the
+      fault&rsquo;s area is slipping, uniform and lithostatic effective
+      stress, solid for the mollified kernel and dashed for the classical
+      dislocation. <b>d</b> the area-mean rake the tensor imposes.
+      <b>e</b> the area the tensor can never bring to failure. <b>f</b> the
+      active area against the load at 130&deg;, solid uniform, dotted
+      lithostatic. A missing point in b or c is a tensor that does not bring
+      half the area to failure by 6&nbsp;&lambda;<sub>0</sub>.
+    </figcaption>
+  </figure>
+  <p>
+    <b>The first failure says nothing about the tensor.</b> &lambda;<sub>0</sub>
+    is 117 to 159&nbsp;MPa and flat in azimuth (panel a): it is set by
+    whichever sliver of the supplied mesh happens to be best oriented, and
+    it moves with the regime only because the family&rsquo;s intermediate
+    stress changes the normal stress on that sliver. The load at which half
+    the fault is slipping (b, c) is the number that discriminates.
+  </p>
+  <p>
+    <b>Fault-normal compression is the hardest way to load this fault.</b>
+    With the compressive axis at 110&deg;, normal to the strike, the thrust
+    tensor needs 478&nbsp;MPa of maximum shear to bring half the area to
+    failure, against 387&nbsp;MPa at 130&deg; and 316&nbsp;MPa at 150&deg;:
+    a 60&deg; fault is poorly oriented for pure thrust, and obliquity helps.
+    For the strike-slip half of the family the fault-normal case does not
+    activate at all: with r&nbsp;&ge;&nbsp;0.5 at 100&deg; to 120&deg;, a
+    third to 85&nbsp;% of the area has its normal stress rising faster than
+    its shear and can never fail (e), and half the area is not slipping by
+    6&nbsp;&lambda;<sub>0</sub>. The same tensors at 150&deg; are the
+    easiest in the sweep, 186 to 203&nbsp;MPa, two and a half times less than
+    fault-normal thrust.
+  </p>
+  <p>
+    <b>The observed sense of slip picks the oblique thrust-like corner.</b>
+    The fault is reverse with a left-lateral component. In this family that
+    rake, 45&deg; to 75&deg;, appears only with the compressive axis at
+    120&deg; to 150&deg; (d), and near the plate-convergence azimuth of about
+    130&deg; only the thrust-like half of the family (r&nbsp;&le;&nbsp;0.5)
+    brings half the fault to failure within the scan, at 377 to
+    397&nbsp;MPa, with a mean rake of 58&deg; to 73&deg;. The tensors that
+    both load the fault and slip it the right way are therefore the oblique,
+    thrust-leaning ones, and the pure strike-slip tensor at the convergence
+    azimuth clamps half of the fault shut.
+  </p>
+  <p>
+    <b>The strength profile shifts the numbers, not the ordering.</b> The
+    lithostatic model, weak in its shallow rows, has 3 to 45&nbsp;% of the
+    area slipping already at the uniform model&rsquo;s first failure and
+    reaches half the area at loads up to 20&nbsp;% lower for the thrust-like
+    tensors and within 5&nbsp;% for the strike-slip ones (c against b), with
+    a smoother activation curve (f); every ranking of azimuth and regime is
+    the same. The area the load drives into tension stays under 0.2&nbsp;%
+    on the uniform model and under 1.2&nbsp;% on the lithostatic one at
+    6&nbsp;&lambda;<sub>0</sub>, so the linear criterion is not being used
+    where it is wrong.
+  </p>
+  <p>
+    <b>The kernel does not matter here, and the slivers did not break the
+    solve.</b> The classical dislocation and the mollified kernel put the
+    half-active load within 1.2&nbsp;% of each other on every tensor
+    (median ratio 0.999), the active fraction within 0.011 at every load,
+    and the moment within 4&nbsp;%. The symmetric part of the classical
+    operator is strongly indefinite on this mesh (smallest eigenvalue
+    &minus;95 against &minus;1.1 for the mollified kernel, the slivers&rsquo;
+    self-stiffness), and the projected Gauss&ndash;Seidel iteration still
+    converged in all 1,820 solves without the active-set fallback. The
+    slips themselves, tens of metres at three times the first failure, are
+    what a static load of several hundred MPa produces on a frictional
+    surface with no other faults to share it: read the maps for where slip
+    goes, not for how much.
+  </p>
+
+  <h2 id="what-this-is-not">What this is not</h2>
+  <ul>
+    <li>Not a model of Taiwan: one fault, with none of the others and none
+      of the plate interface, so there is no interaction and no shadow.</li>
+    <li>Not a slip-rate model: the load is a static stress and the answer a
+      static slip, with no time, no geodesy and no geologic rate fitted.</li>
+    <li>Not an absolute stress: everything is quoted relative to the
+      tensor&rsquo;s own first failure or in MPa of maximum shear, and the
+      150&nbsp;MPa and the pore ratio are assumptions, not measurements.</li>
+    <li>Not a converged mesh: the segments are used as supplied, at one
+      resolution, with their slivers.</li>
+    <li>Uniform friction and a fixed rake per element. Opening is not
+      modelled; where the load drives the normal stress through zero the
+      linear criterion is wrong and the manifest says where.</li>
+  </ul>
+
+  <h2 id="reproducing-it">Reproducing it</h2>
+  <pre><code class="language-sh">python studies/active_fractal/selfcheck.py -k taiwan
+python studies/active_fractal/taiwan.py assemble --workers 8   # the folded matrix, cached
+python studies/active_fractal/taiwan.py run                    # 70 tensors x 2 kernels x 13 loads
+python studies/active_fractal/taiwan.py figure                 # website/src/figures/taiwan_sweep.png
+python studies/active_fractal/taiwan.py payload                # website/public/data/taiwan_*</code></pre>
+
+  <script>
+    import { startTaiwan } from "../viz/taiwan";
+    startTaiwan(document.getElementById("viewer")!, import.meta.env.BASE_URL);
+  </script>
+</Base>

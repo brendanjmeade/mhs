@@ -6,7 +6,7 @@ interface Props {
   title: string;
   description?: string;
   current: "home" | "concepts" | "running" | "examples" | "fractal"
-         | "roughness" | "isosurface" | "onfault" | "avalanche";
+         | "roughness" | "isosurface" | "onfault" | "avalanche" | "taiwan";
 }
 const { title, description, current } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/?$/, "/");
@@ -19,6 +19,7 @@ const pages = [
   { key: "isosurface", href: `${base}isosurface/`, label: "Isosurfaces" },
   { key: "onfault", href: `${base}onfault/`, label: "On the fault" },
   { key: "avalanche", href: `${base}avalanche/`, label: "Avalanches" },
+  { key: "taiwan", href: `${base}taiwan/`, label: "Taiwan" },
 ];
 ---
 <!doctype html>

@@ -417,6 +417,14 @@ def build_friction(net, *, regime: str = "strike_slip",
     ``sigma_n_mode``: ``uniform`` (default, see the module docstring) or
     ``lithostatic``, which uses ``RHO_G`` and ``pore_ratio`` with each element's
     own centroid depth.
+
+    ``regime`` is a name from ``LOAD_TENSORS`` or an explicit symmetric
+    ``(3, 3)`` unit deviator in the same tension-positive convention, for a
+    study that sweeps the SHAPE of the regional stress and not only its
+    orientation (``taiwan.py``'s family between thrust and strike-slip). A
+    name resolves to its tensor and nothing else changes, so the two spellings
+    of one state give the same Friction bit for bit; ``meta["regime"]`` keeps
+    the name, or ``"tensor"``, with the tensor beside it either way.
     """
     tris = net.tris
     planes = None if nodes is None else nodes.normals
@@ -431,17 +439,25 @@ def build_friction(net, *, regime: str = "strike_slip",
             f" there is no strength drop, so quasi-static slip is continuous in"
             f" the load and the run would record events of zero size forever"
             f" instead of avalanches.")
-    if regime not in LOAD_TENSORS:
-        raise ValueError(f"regime must be one of {sorted(LOAD_TENSORS)}, "
-                         f"got {regime!r}")
+    if isinstance(regime, str):
+        if regime not in LOAD_TENSORS:
+            raise ValueError(f"regime must be one of {sorted(LOAD_TENSORS)}, "
+                             f"got {regime!r}")
+        tensor, regime_name = LOAD_TENSORS[regime], regime
+    else:
+        tensor = np.asarray(regime, float)
+        if tensor.shape != (3, 3) or not np.allclose(tensor, tensor.T, atol=1e-12):
+            raise ValueError("an explicit regime must be a symmetric (3, 3) "
+                             f"stress tensor; got shape {tensor.shape}")
+        tensor = 0.5 * (tensor + tensor.T)      # a rotation's 1e-17 asymmetry
+        regime_name = "tensor"
     if mean_stress_ratio < 0.0:
         raise ValueError(
             f"mean_stress_ratio must be >= 0; got {mean_stress_ratio}. A "
             f"negative value would make the loading path REDUCE the mean "
             f"stress, driving every plane toward tension at once.")
     tau_load, sigma_n_load = resolve_tensor(
-        tris, rotate_about_vertical(LOAD_TENSORS[regime], azimuth_deg),
-        planes=planes)
+        tris, rotate_about_vertical(tensor, azimuth_deg), planes=planes)
     # The isotropic part of the loading path. It resolves the same normal
     # stress onto every plane and no shear onto any, so folding it in here
     # leaves every downstream formula untouched. See the module docstring.
@@ -483,7 +499,8 @@ def build_friction(net, *, regime: str = "strike_slip",
     if np.any(flat):
         slip_dir[flat] = np.array([1.0, 0.0])
 
-    meta = {"regime": regime, "mu_mode": mu_mode, "mu_mean": mu_mean,
+    meta = {"regime": regime_name, "tensor": tensor.tolist(),
+            "mu_mode": mu_mode, "mu_mean": mu_mean,
             "mu_spread": mu_spread, "drop_ratio": drop_ratio,
             "sigma_n_mode": sigma_n_mode,
             "sigma_eff_GPa": sigma_eff, "pore_ratio": pore_ratio,

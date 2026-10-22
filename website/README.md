@@ -2,7 +2,7 @@
 
 The project site, published at <https://brendanjmeade.github.io/mhs/>.
 
-Astro, nine pages, no framework runtime. Built and deployed by
+Astro, ten pages, no framework runtime. Built and deployed by
 `.github/workflows/deploy-website.yml` on every push to `main` that touches
 `website/`. The workflow passes `SITE` and `BASE`, deriving the base path from
 the repository name, so `astro.config.mjs`'s defaults exist only for `npm run
@@ -44,6 +44,7 @@ python studies/active_fractal/isosurf.py field ... && ... mesh    # /isosurface/
 python studies/active_fractal/onfault.py solve && ... field --k 1 && ... payload   # /onfault/
 python studies/active_fractal/onfault.py thresholds                                 # /avalanche/, the opening figure
 python studies/active_fractal/avalanche.py assemble A && ... run A && ... lcp A && ... figure   # /avalanche/, per variant
+python studies/active_fractal/taiwan.py assemble && ... run && ... figure && ... payload       # /taiwan/
 ```
 
 The avalanche page is prose and four PNG figures in `src/figures/`, written

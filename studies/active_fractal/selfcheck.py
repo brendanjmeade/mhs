@@ -2977,6 +2977,102 @@ def c_nodal() -> None:
           NODAL_CENTROID_S_MAX)
 
 
+
+# ---------------------------------------------------------------- [taiwan] ---
+def c_taiwan() -> None:
+    """The Longitudinal Valley Fault study's inputs: the Gmsh reader against
+    meshio, the local frame, the winding and the surface snap, the manifold
+    tiling, the junction, and the stress-tensor family's conventions."""
+    print("\n[taiwan] two TEM segments as one Network, and the tensor family")
+    import onfault as OF                                       # noqa: PLC0415
+    import taiwan as Tw                                        # noqa: PLC0415
+    try:
+        import meshio                                          # noqa: PLC0415
+    except ImportError:                                        # pragma: no cover
+        meshio = None
+    segs = [Tw.read_gmsh(Tw.DATA / f) for _, f in Tw.SEGMENTS]
+    if meshio is not None:
+        for (name, f), (nodes, idx) in zip(Tw.SEGMENTS, segs):
+            m = meshio.read(Tw.DATA / f)
+            tri = np.vstack([c.data for c in m.cells if c.type == "triangle"])
+            check_true(f"{name}: the reader's nodes equal meshio's bit for bit",
+                       np.array_equal(nodes, m.points), f"{nodes.shape[0]} nodes")
+            check_true(f"{name}: the reader's triangles equal meshio's",
+                       np.array_equal(idx, tri), f"{idx.shape[0]} triangles")
+    lon0, lat0 = Tw.junction(segs)
+    nodes = segs[0][0]
+    xyz = Tw.project(nodes, lon0, lat0)
+    back_lon = lon0 + xyz[:, 0] / (Tw.KM_PER_DEG * math.cos(math.radians(lat0)))
+    back_lat = lat0 + xyz[:, 1] / Tw.KM_PER_DEG
+    check("the projection inverts to the degrees it was given",
+          float(max(np.abs(back_lon - nodes[:, 0]).max(),
+                    np.abs(back_lat - nodes[:, 1]).max())), 1e-9)
+    moved = np.flatnonzero(xyz[:, 2] != nodes[:, 2])
+    check_true("the surface snap moves only vertices within Z_SNAP of z = 0",
+               bool(np.all(np.abs(nodes[moved, 2]) < Tw.Z_SNAP)),
+               f"{moved.size} snapped")
+    net, meta = Tw.load_lvf()
+    check_true("no vertex is above the surface",
+               bool(np.all(net.tris[:, :, 2] <= 0.0)),
+               f"max z {net.tris[:, :, 2].max():+.1e}")
+    wound = np.cross(net.tris[:, 1] - net.tris[:, 0],
+                     net.tris[:, 2] - net.tris[:, 0])[:, 2]
+    check("every facet is wound upward (min n_z of the vertex order)",
+          float(wound.min()), Tw.NZ_FLOOR, below=False)
+    check("cutde's frame equals tdcs's on every facet",
+          OF.frame_gate(net.tris), 1e-12)
+    for i, (name, _) in enumerate(Tw.SEGMENTS):
+        t = net.tris[net.fault_id == i]
+        _, idx = N.weld_vertices(t, 1e-9 * net.h)
+        share = N.edge_sharing(idx)
+        check_true(f"{name}: a manifold tiling (edges shared by 1 or 2 facets)",
+                   share.size == 3 and int(share[0]) == 0,
+                   f"boundary {int(share[1])}, interior {int(share[2])}")
+    at_origin = ((np.abs(net.tris[:, :, 2]) < Tw.Z_SNAP)
+                 & (np.abs(net.tris[:, :, :2]).max(axis=2) < 1e-9))   # (n, 3)
+    owners = {int(f) for f in net.fault_id[at_origin.any(axis=1)]}
+    check_true("the two segments share the trace vertex at the origin",
+               owners == {0, 1}, f"facets of faults {sorted(owners)} touch it")
+    check("the strike azimuths are the fault's, about N20E",
+          float(np.abs(np.array([p["strike_azimuth_deg"] for p in meta["faults"]])
+                       - 20.0).max()), 10.0)
+    # the tensor family
+    check_true("tensor(theta, 0) is the thrust tensor rotated, bit for bit",
+               np.array_equal(Tw.tensor(110.0, 0.0),
+                              Fr.rotate_about_vertical(Fr.LOAD_TENSORS["thrust"], -20.0)))
+    check("tensor(theta, 1) is the strike-slip tensor with its compression "
+          "axis at theta",
+          float(np.abs(Tw.tensor(110.0, 1.0) - Fr.rotate_about_vertical(
+              Fr.LOAD_TENSORS["strike_slip"], 45.0 - 20.0)).max()), 1e-14)
+    worst = 0.0
+    for r in Tw.RS:
+        w = np.linalg.eigvalsh(Tw.tensor(130.0, r))
+        worst = max(worst, abs(0.5 * (w[-1] - w[0]) - 1.0))
+    check("unit maximum shear on the whole family", worst, 1e-14)
+    w, V = np.linalg.eigh(Tw.tensor(110.0, 0.25))
+    v = V[:, 0]
+    az = math.degrees(math.atan2(v[0], v[1])) % 180.0
+    check("the most compressive axis sits at the geographic azimuth asked for",
+          abs(az - 110.0), 1e-9)
+    check("and it is horizontal", abs(float(v[2])), 1e-12)
+    a = Fr.build_friction(net, regime="thrust", azimuth_deg=-20.0, mu_mean=Tw.MU_F,
+                          drop_ratio=Tw.DROP_RATIO, mean_stress_ratio=Tw.K_MEAN)
+    b = Tw.friction(net, 110.0, 0.0, "uniform")
+    check_true("build_friction by name and by tensor agree bit for bit",
+               all(np.array_equal(getattr(a, k), getattr(b, k)) for k in
+                   ("mu", "sigma_eff_0", "tau_load", "sigma_n_load", "slip_dir",
+                    "tau_load_mag")), "")
+    rk = Tw.rake_deg(b)
+    check("fault-normal thrust gives reverse slip (area-mean rake near 90)",
+          abs(float(np.sum(net.areas() * rk) / net.areas().sum()) - 90.0), 5.0)
+    rk1 = Tw.rake_deg(Tw.friction(net, 150.0, 1.0, "uniform"))
+    check_true("strike-slip compression at 150 gives a left-lateral component",
+               bool(np.median(rk1) < 90.0), f"median rake {np.median(rk1):.0f}")
+    with_tensor = Tw.friction(net, 110.0, 0.5, "lithostatic")
+    check_true("the lithostatic model's strength grows with depth",
+               bool(np.corrcoef(-net.tris[:, :, 2].mean(axis=1),
+                                with_tensor.sigma_eff_0)[0, 1] > 0.999), "")
+
 CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "network": c_network, "budget": c_budget, "cascade": c_cascade,
            "kernel": c_kernel, "crack": c_crack, "load": c_load,
@@ -2984,7 +3080,7 @@ CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "spectrum": c_spectrum, "slip": c_slip, "align": c_align,
            "cloud": c_cloud, "rough": c_rough, "iso": c_iso,
            "system": c_system, "onfault": c_onfault, "trace": c_trace,
-           "nodal": c_nodal}
+           "nodal": c_nodal, "taiwan": c_taiwan}
 
 
 def main() -> bool:

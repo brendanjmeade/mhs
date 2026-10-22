@@ -579,7 +579,7 @@ def _principal(fric, lam: float, k: float) -> dict:
     # reported two negative principal stresses on a load that is compressive
     # everywhere.
     sig = ((fric.sigma_eff_0.mean() + lam * k) * np.eye(3)
-           - lam * Fr.LOAD_TENSORS[fric.meta["regime"]])
+           - lam * np.asarray(fric.meta["tensor"]))
     vals, vecs = np.linalg.eigh(sig)           # already compression positive
     o = np.argsort(-vals)                      # sigma_1 >= sigma_2 >= sigma_3
     return {"regime": fric.meta["regime"], "mean_stress_ratio": float(k),
