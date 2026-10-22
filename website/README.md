@@ -44,7 +44,7 @@ python studies/active_fractal/isosurf.py field ... && ... mesh    # /isosurface/
 python studies/active_fractal/onfault.py solve && ... field --k 1 && ... payload   # /onfault/
 python studies/active_fractal/onfault.py thresholds                                 # /avalanche/, the opening figure
 python studies/active_fractal/avalanche.py assemble A && ... run A && ... lcp A && ... figure   # /avalanche/, per variant
-python studies/active_fractal/taiwan.py assemble && ... run && ... figure && ... payload       # /taiwan/
+python studies/active_fractal/taiwan.py assemble && ... assemble --form galerkin && ... run && ... figure && ... payload   # /taiwan/
 ```
 
 The avalanche page is prose and four PNG figures in `src/figures/`, written

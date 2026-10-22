@@ -119,7 +119,17 @@ def fold_tag() -> dict:
                 n_radial=d.FOLD_N_RADIAL, n_angular=d.FOLD_N_ANGULAR)
 
 
-def cache_key(tris: np.ndarray, mu: float, lam: float, eps: float) -> str:
+#: Receiver forms. ``collocation`` reads each row at the element's centroid;
+#: ``galerkin`` averages it over the element with a Duffy-Gauss rule of
+#: ``nq^2`` points (test = trial = P0), which by reciprocity makes the
+#: area-weighted shear block symmetric and, measured, positive definite
+#: where collocation is not (``assemble``).
+FORMS = ("collocation", "galerkin")
+GALERKIN_NQ = 3
+
+
+def cache_key(tris: np.ndarray, mu: float, lam: float, eps: float, *,
+              form: str = "collocation", nq: int = GALERKIN_NQ) -> str:
     """A short hash of everything the matrix depends on.
 
     KEYED ON THE VERTICES THEMSELVES, not on the generator's parameters. An
@@ -138,6 +148,9 @@ def cache_key(tris: np.ndarray, mu: float, lam: float, eps: float) -> str:
                "receiver": list(RECEIVER), "source": list(SOURCE),
                "layout": "source_major_(n_src,n_b,n_a,n_rec)",
                "kernel": fold_tag()}
+    if form != "collocation":              # the default's keys stay valid
+        payload["form"] = {"form": form, "nq": int(nq),
+                           "symmetrised": "area-weighted shear block"}
     blob = json.dumps(payload, sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
 
@@ -190,6 +203,59 @@ def _assemble_raw(tris: np.ndarray, mu: float, lam: float, eps: float,
                      tris_kw="tris")
 
 
+def _galerkin_chunk(tris, *, obs_tris, obs_pts, weights, n_rec, material, eps):
+    """One source chunk's rows at every receiver's quadrature points, reduced
+    to one averaged row per receiver: ``(n_rec, n_chunk, n_a, n_b)``. The
+    ``nq^2``-fold transient never leaves the worker."""
+    raw = mhs.interaction_matrix(tris=tris, material=material, eps=eps,
+                                 receiver=RECEIVER, source=SOURCE,
+                                 obs_tris=obs_tris, obs_pts=obs_pts)
+    q = weights.size
+    return np.einsum("fqjab,q->fjab", raw.reshape(n_rec, q, *raw.shape[1:]),
+                     weights)
+
+
+def _galerkin_raw(tris: np.ndarray, mu: float, lam: float, eps: float,
+                  nq: int, workers: int | None) -> np.ndarray:
+    """``(n_rec, n_src, n_a, n_b)`` with each row the AREA AVERAGE of the
+    traction over the receiver element, by the collapsed Gauss rule
+    ``mhs.fullspace.moments.gauss_triangle(nq)`` (``nq^2`` points, weights
+    summing to 1/2, doubled here). The receiver frame is the element's, as
+    for the centroid row; the fold treats a quadrature point exactly as it
+    treats a centroid."""
+    from mhs.fullspace.moments import gauss_triangle
+    xi1, xi2, w = gauss_triangle(nq)
+    L = np.stack([1.0 - xi1 - xi2, xi1, xi2], axis=1)           # (q, 3)
+    n = tris.shape[0]
+    pts = np.ascontiguousarray(np.einsum("qb,fbx->fqx", L, tris).reshape(-1, 3))
+    obs_tris = np.ascontiguousarray(np.repeat(tris, L.shape[0], axis=0))
+    mat = mhs.Material(mu=mu, lam=lam)
+    call = functools.partial(_galerkin_chunk, obs_tris=obs_tris, obs_pts=pts,
+                             weights=np.ascontiguousarray(2.0 * w), n_rec=n,
+                             material=mat, eps=eps)
+    if workers in (0, 1):
+        return call(tris=tris)
+    return by_source(call, tris, workers=workers, source_axis=1,
+                     tris_kw="tris")
+
+
+def symmetrise_shear(K: np.ndarray, areas: np.ndarray) -> float:
+    """Make the area-weighted shear block exactly symmetric, in place, and
+    return the asymmetry it had: ``|S - S^T|max / |S|max`` with
+    ``S[(i,a),(j,b)] = A_i K[j,b,a,i]``, the form reciprocity makes
+    symmetric in the continuum. What remains is quadrature error, and the
+    symmetrised operator is the one whose definiteness is a theorem's
+    hypothesis rather than a measurement's."""
+    n = K.shape[0]
+    S = np.transpose(K[:, :, :N_B, :], (3, 2, 0, 1)) * areas[:, None, None, None]
+    S = S.reshape(n * N_B, n * N_B)
+    asym = float(np.abs(S - S.T).max() / np.abs(S).max())
+    S = 0.5 * (S + S.T)
+    K[:, :, :N_B, :] = np.transpose(S.reshape(n, N_B, n, N_B)
+                                    / areas[:, None, None, None], (2, 3, 1, 0))
+    return asym
+
+
 def to_source_major(K: np.ndarray) -> np.ndarray:
     """``(n_rec, n_src, n_a, n_b)`` -> contiguous ``(n_src, n_b, n_a, n_rec)``."""
     return np.ascontiguousarray(np.transpose(K, (1, 3, 2, 0)))
@@ -198,7 +264,8 @@ def to_source_major(K: np.ndarray) -> np.ndarray:
 def assemble(net, *, mu: float = 30.0, lam: float = 30.0,
              eps: float | None = None, workers: int | None = None,
              cache_dir: pathlib.Path | None = None,
-             mmap: bool = False, verbose: bool = True):
+             mmap: bool = False, verbose: bool = True,
+             form: str = "collocation", nq: int = GALERKIN_NQ):
     """The source-major interaction matrix for ``net``, from cache or fresh.
 
     Returns ``(K, info)`` with ``K`` shaped ``(n_src, n_b, n_a, n_rec)``:
@@ -206,13 +273,29 @@ def assemble(net, *, mu: float = 30.0, lam: float = 30.0,
     direction ``a`` of its frame, from unit slip along direction ``b`` of
     source ``j``'s frame.
 
+    ``form="galerkin"`` reads each row as the AREA AVERAGE of the traction
+    over the receiver element (test = trial = P0, ``nq^2`` Gauss points)
+    instead of its value at the centroid, and then symmetrises the
+    area-weighted shear block exactly (``symmetrise_shear``; the measured
+    asymmetry, quadrature error, is in ``info["asymmetry"]``). Same layout,
+    same units, same sign gate, so every solver runs on it unchanged, and
+    the static problems become CONVEX: with ``sym(-A K)`` positive definite
+    the fixed-rake LCP has one solution by the P-matrix theorem and the
+    free-rake cone problem one by strong monotonicity, and the projected
+    sweeps converge by theorem rather than by measurement. The price,
+    measured on the gate's penny and on the on-fault page's fault B: a few
+    per cent of accuracy against collocation at the same eps, and ``nq^2``
+    times the assembly.
+
     ``mmap=True`` returns a read-only memory map instead of a resident array,
     which is what makes the 20k tier openable without 19 GB of RSS for a job
     that only reads columns.
     """
     eps = float(net.eps if eps is None else eps)
     n = net.n_elements
-    key = cache_key(net.tris, mu, lam, eps)
+    if form not in FORMS:
+        raise ValueError(f"form must be one of {FORMS}, got {form!r}")
+    key = cache_key(net.tris, mu, lam, eps, form=form, nq=nq)
     cache_dir = (pathlib.Path(__file__).resolve().parent / "cache"
                  if cache_dir is None else pathlib.Path(cache_dir))
     npy, side = cache_dir / f"K_{key}.npy", cache_dir / f"K_{key}.json"
@@ -238,12 +321,14 @@ def assemble(net, *, mu: float = 30.0, lam: float = 30.0,
     was = raise_ceiling(n, quiet=not verbose)
     t0 = time.time()
     try:
-        raw = _assemble_raw(net.tris, mu, lam, eps, workers)
+        raw = (_assemble_raw(net.tris, mu, lam, eps, workers) if form == "collocation"
+               else _galerkin_raw(net.tris, mu, lam, eps, nq, workers))
     finally:
         if was is not None:
             mhs_defaults.MATRIX_MAX_BYTES = was
     K = to_source_major(raw)
     del raw
+    asym = symmetrise_shear(K, net.areas()) if form == "galerkin" else None
     dt = time.time() - t0
     refuse_if_sign_wrong(K)
 
@@ -251,12 +336,15 @@ def assemble(net, *, mu: float = 30.0, lam: float = 30.0,
             "assemble_s": dt, "us_per_pair": 1e6 * dt / (n * n),
             "mu_GPa": mu, "lam_GPa": lam, "eps_km": eps,
             "workers": workers, "receiver": list(RECEIVER),
-            "source": list(SOURCE),
+            "source": list(SOURCE), "form": form,
+            "nq": int(nq) if form == "galerkin" else None, "asymmetry": asym,
             "layout": "(n_src, n_b, n_a, n_rec), C-contiguous",
             "git": _git(), "net": net.meta}
     if verbose:
         print(f"  assembled in {dt:.1f} s = {info['us_per_pair']:.2f} "
-              f"us/pair on {workers} workers")
+              f"us/pair on {workers} workers"
+              + (f"; galerkin nq {nq}, shear-block asymmetry {asym:.2e} "
+                 f"before symmetrising" if form == "galerkin" else ""))
     cache_dir.mkdir(parents=True, exist_ok=True)
     np.save(npy, K)
     side.write_text(json.dumps(info, indent=1, sort_keys=True, default=str))

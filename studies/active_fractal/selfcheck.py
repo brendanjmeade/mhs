@@ -3092,6 +3092,84 @@ def c_rake() -> None:
         check(f"C {tag}: complementarity (max ||t| - g| on active, GPa)", rim, 1e-8)
         check(f"C {tag}: locked inside the disc (max |t| / g)", inside, 1.0)
 
+
+# -------------------------------------------------------------- [galerkin] ---
+def c_galerkin() -> None:
+    """The P0 Galerkin form of the mollified kernel (``kernel.assemble(form=
+    "galerkin")``) on the crack clause's penny: its area-weighted shear block
+    is symmetric up to quadrature error and exactly so once symmetrised,
+    positive definite, a few per cent softer than collocation against
+    Eshelby, converged in the quadrature order, and the convex problems on
+    it are solved by the same sweeps."""
+    print("\n[galerkin] the symmetric P0 form of the kernel on a penny crack")
+    import mhs                                                # noqa: PLC0415
+    a, mu_, lam_, tau0, depth = 1.0, 30.0, 30.0, 0.01, -20.0
+    nu_ = mhs.Material(mu=mu_, lam=lam_).nu_if_you_must
+    pen = Gr.penny(nu_)
+    h = 0.1 * a
+    eps = 0.1 * h
+    tris = N.disc_mesh(a, h, depth=depth)
+    n = tris.shape[0]
+    net = N.Network(tris=tris, fault_id=np.zeros(n, np.int64),
+                    length=np.array([2 * a]), width=np.array([2 * a]),
+                    azimuth=np.zeros(1), dip=np.zeros(1),
+                    center=tris.reshape(-1, 3).mean(axis=0)[None], h=h, eps=eps,
+                    meta={})
+    areas = net.areas()
+    cen = tris.mean(axis=1)
+    r = np.hypot(cen[:, 0], cen[:, 1])
+    prof = np.sqrt(np.maximum(0.0, a * a - r * r))
+    inner = r < 0.5 * a
+    phi = math.radians(30.0)
+    tau = np.tile([tau0 * math.cos(phi), tau0 * math.sin(phi)], (n, 1))
+    drop = 0.4                                   # strength 0.6 tau0
+    g = np.full(n, (1.0 - drop) * tau0)
+    want = pen.slip * drop * tau0 * a / mu_ * prof
+    got = {}
+    with tempfile.TemporaryDirectory() as tmp:
+        for form, nq in (("collocation", 0), ("galerkin", 2), ("galerkin", 3)):
+            Kf, info = Kmod.assemble(net, mu=mu_, lam=lam_, workers=4, verbose=False,
+                                     cache_dir=pathlib.Path(tmp), form=form, nq=nq or 3)
+            Ksh = np.ascontiguousarray(Kf[:, :, :2, :])
+            S = (-np.transpose(Ksh, (3, 2, 0, 1)).reshape(2 * n, 2 * n)
+                 * np.repeat(areas, 2)[:, None])
+            ev = np.linalg.eigvalsh(0.5 * (S + S.T))
+            cone = St.solve_cone(Ksh, tau, g, 1.0)
+            sd = tau / np.linalg.norm(tau, axis=1, keepdims=True)
+            P = Kmod.project(Kf, sd, sd)
+            lcp = St.solve(P, np.linalg.norm(tau, axis=1), g, 1.0, max_sweeps=20000)
+            got[(form, nq)] = dict(
+                asym_raw=info["asymmetry"],
+                asym=float(np.abs(S - S.T).max() / np.abs(S).max()),
+                mineig=float(ev[0]), median=float(np.median(ev)),
+                ratio=float(np.median(cone.magnitude[inner] / want[inner])),
+                moment=float((areas * cone.magnitude).sum()),
+                moment_lcp=float((areas * lcp.delta).sum()),
+                sweeps=cone.sweeps, converged=cone.converged and lcp.converged,
+                same_active=bool(np.array_equal(cone.active, lcp.active)))
+            print(f"       {form:11s} nq {nq}: sym(-AK) min eig {ev[0]:+.3e} of median "
+                  f"{np.median(ev):.3e}; Eshelby ratio {got[(form, nq)]['ratio']:.4f}; "
+                  f"cone {cone.sweeps} sweeps")
+    gal, g2, col = got[("galerkin", 3)], got[("galerkin", 2)], got[("collocation", 0)]
+    check("the raw area-weighted shear block is symmetric up to quadrature "
+          "(|S - S^T| / |S|)", gal["asym_raw"], 0.1)
+    check("and exactly symmetric once symmetrised", gal["asym"], 1e-12)
+    check_true("the collocation block is not symmetrised (its asymmetry is its own)",
+               col["asym_raw"] is None and col["asym"] > 1e-4, f"{col['asym']:.1e}")
+    check("sym(-A K) is positive definite (min eig / median)",
+          gal["mineig"] / gal["median"], 0.0, below=False)
+    check("Galerkin against Eshelby in the interior (|ratio - 1|; measured 0.020)",
+          abs(gal["ratio"] - 1.0), 0.04)
+    check("Galerkin moment / collocation moment (measured 0.959)",
+          abs(gal["moment"] / col["moment"] - 0.96), 0.02)
+    check("converged in the quadrature order: nq 2 against 3 (|moment ratio - 1|)",
+          abs(g2["moment"] / gal["moment"] - 1.0), 5e-3)
+    check_true("both sweeps converge on the Galerkin operator", gal["converged"],
+               f"cone {gal['sweeps']} sweeps")
+    check("and agree under a uniform load (cone / scalar moment - 1)",
+          abs(gal["moment"] / gal["moment_lcp"] - 1.0), 1e-3)
+    check_true("with the same active set", gal["same_active"], "")
+
 # ---------------------------------------------------------------- [taiwan] ---
 def c_taiwan() -> None:
     """The Longitudinal Valley Fault study's inputs: the Gmsh reader against
@@ -3194,7 +3272,8 @@ CLAUSES = {"estimator": c_estimator, "subset": c_subset,
            "spectrum": c_spectrum, "slip": c_slip, "align": c_align,
            "cloud": c_cloud, "rough": c_rough, "iso": c_iso,
            "system": c_system, "onfault": c_onfault, "trace": c_trace,
-           "nodal": c_nodal, "taiwan": c_taiwan, "rake": c_rake}
+           "nodal": c_nodal, "taiwan": c_taiwan, "rake": c_rake,
+           "galerkin": c_galerkin}
 
 
 def main() -> bool:

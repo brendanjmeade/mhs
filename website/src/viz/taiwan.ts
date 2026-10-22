@@ -13,7 +13,7 @@ import type { Preset } from "./stage";
 interface Case {
   lam0_MPa: number; lam_half_MPa: number | null; never_fail: number;
   never_fail_area: number; active_fraction: number[]; moment_Nm: number[];
-  max_slip_m: number[]; rake_mean_deg: number; min_eig_sym_negP: number;
+  max_slip_m: number[]; rake_mean_deg: number; min_eig_sym_negPA: number;
   branching_ratio: number; newton_solves: number; lam_tensile_over_lam0: number;
   sweeps: number;
   // free rule only
@@ -381,7 +381,7 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
           + (rm === null || rm === undefined ? "" : `, rake turned ${rm.toFixed(1)}° (median), ${(rp ?? 0).toFixed(1)}° (p90)`)
           + `, ${c.n_on?.[il] ?? 0} elements switched on, ${c.n_off?.[il] ?? 0} off, ${c.n_reversed?.[il] ?? 0} reversed`);
       }
-      bits.push(`min eig sym(−P) ${c.min_eig_sym_negP.toFixed(1)}, branching ratio ${c.branching_ratio.toFixed(3)}`
+      bits.push(`min eig sym(−PA) ${c.min_eig_sym_negPA.toFixed(3)} of its median, branching ratio ${c.branching_ratio.toFixed(3)}`
         + (c.newton_solves ? `, ${c.newton_solves} of ${S.loads.length} loads by the active-set solver` : ""));
     }
     if (current && (metric === "slip" || metric === "d")) {

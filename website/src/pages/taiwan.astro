@@ -37,8 +37,10 @@ const sections = [
       slip at a chosen load, the load at which the element first slipped, the
       rake of that slip, the rake the tensor imposes, or how fast the tensor
       loads the element toward failure. Two effective-normal-stress models
-      and two kernels, so that neither the strength profile nor the kernel
-      can be mistaken for the result.
+      and three kernels, one of them symmetric and positive definite, so
+      that neither the strength profile nor the kernel can be mistaken for
+      the result, and the uniqueness of the answer is a theorem on at
+      least one of them.
     </p>
     <nav class="toc">
       <h3>Contents</h3>
@@ -146,9 +148,7 @@ const sections = [
     exactly when the slip is confined to the tensor&rsquo;s direction. The
     two differ where the neighbours turn an element&rsquo;s shear off the
     regional rake, and where the fixed rule&rsquo;s non-negativity forbids
-    an element from slipping against it. One unique answer at each load in
-    either rule, measured rather than proven: warm and cold starts agree to
-    better than a nanometre. No events. The load is scanned from
+    an element from slipping against it. No events. The load is scanned from
     &lambda;<sub>0</sub>, the load at which the best-oriented element reaches
     its strength with no interaction under the uniform model, to
     6&nbsp;&lambda;<sub>0</sub>, warm-started, and the lithostatic model is
@@ -164,6 +164,29 @@ const sections = [
     load drives through zero would open rather than slip; the manifest
     records the area in that state at every load; it stays below 1.2&nbsp;%
     of the fault on either model within the scan.
+  </p>
+  <p>
+    <b>Three operators, one of them a theorem.</b> The collocation kernels,
+    mollified and classical, read each element&rsquo;s traction at its
+    centroid, and the matrix that results is not symmetric. The fixed-rake
+    problem still has exactly one solution whenever the symmetric part of
+    the area-weighted operator is positive definite (that makes it a
+    P-matrix), and on this mesh it is, for every kernel and every tensor;
+    but for a non-symmetric matrix that is a fact about this mesh, checked
+    by an eigenvalue after the fact, and the convergence of the sweeps
+    stays a measurement. The third kernel is the mollified one in its
+    <b>Galerkin</b> form: each row is the traction averaged over the
+    receiver element with nine Gauss points, test and trial space both the
+    piecewise constant, which by reciprocity makes the area-weighted matrix
+    symmetric up to quadrature error, and it is then symmetrised exactly.
+    With that operator symmetric and positive definite the fixed-rake
+    problem is a strictly convex quadratic programme, the free-rake problem
+    a strongly convex minimisation, each with one solution, and the
+    projected Gauss&ndash;Seidel sweeps converge by theorem. The price is
+    a few per cent of accuracy at the same mollification width (2&nbsp;%
+    softer than Eshelby on the gate&rsquo;s penny, where collocation is
+    1&nbsp;% stiff) and ten times the assembly: 29&nbsp;minutes against 3
+    on this mesh with eight workers.
   </p>
 
   <h2 id="what-the-sweep-says">What the sweep says</h2>
@@ -256,15 +279,37 @@ const sections = [
     solve.</b> Under either rule the classical dislocation and the mollified
     kernel put the half-active load within 1.4&nbsp;% of each other on every
     tensor, the active fraction within 0.011 at every load, and the moment
-    within 4&nbsp;%. The symmetric part of the classical operator is
-    strongly indefinite on this mesh (smallest eigenvalue &minus;95 against
-    &minus;1.1 for the mollified kernel, the slivers&rsquo; self-stiffness),
-    and the projected Gauss&ndash;Seidel sweeps still converged in all 3,640
-    solves, scalar and cone alike, without the active-set fallback. The
-    slips themselves, tens of metres at three times the first failure, are
-    what a static load of several hundred MPa produces on a frictional
-    surface with no other faults to share it: read the maps for where slip
-    goes, not for how much.
+    within 4&nbsp;% at the median. The uniqueness indicator for the
+    collocation kernels is the smallest eigenvalue of the symmetric part of
+    the area-weighted operator, as a fraction of its median eigenvalue:
+    it is positive on all 35 tensors for both, +0.0007 to +0.0009 for the
+    mollified kernel and +0.03 to +0.08 for the classical one, the small
+    values being the fault&rsquo;s softest mode, slip of the whole
+    100&nbsp;km surface at once, against the element-scale median. So the
+    uniqueness hypothesis holds here for every kernel, and the projected
+    Gauss&ndash;Seidel sweeps converged in all 5,460 solves, scalar and
+    cone alike, without the active-set fallback. The slips themselves, tens of metres at three
+    times the first failure, are what a static load of several hundred MPa
+    produces on a frictional surface with no other faults to share it: read
+    the maps for where slip goes, not for how much.
+  </p>
+  <p>
+    <b>The Galerkin kernel draws the same map with less slip, and it is the
+    one with a proof.</b> Its area-weighted operator is positive definite
+    on all 35 tensors (smallest eigenvalue +0.0004 to +0.0006 of the
+    median, the same whole-fault mode), so each of its 1,820 solves has one
+    solution by theorem and the sweeps converge by theorem; they did, with
+    no fallback. It puts the half-active load within 2.1&nbsp;% of the
+    mollified collocation kernel on every tensor (median 0.6&nbsp;% lower)
+    and the active fraction within 0.013 at every load, under either rule:
+    the same elements slip. Each slips a little less, so the moment is
+    7&nbsp;% lower at the median and between 0 and 17&nbsp;% lower across the sweep,
+    in the same proportion at every depth, because averaging the
+    self-traction over an element reads it higher than the centroid does.
+    The same operator is 3&nbsp;% softer than collocation on the
+    gate&rsquo;s penny; here, with the supplied 0.12&nbsp;km slivers at the
+    same mollification width, the gap is twice that. The map is the
+    robust product and the moment the fragile one, on every kernel.
   </p>
 
   <h2 id="what-this-is-not">What this is not</h2>
@@ -288,8 +333,10 @@ const sections = [
   <h2 id="reproducing-it">Reproducing it</h2>
   <pre><code class="language-sh">python studies/active_fractal/selfcheck.py -k taiwan    # the inputs
 python studies/active_fractal/selfcheck.py -k rake      # the free-rake solver on a penny
-python studies/active_fractal/taiwan.py assemble --workers 8   # the folded matrix, cached
-python studies/active_fractal/taiwan.py run                    # 70 tensors x 2 kernels x 2 rules x 13 loads
+python studies/active_fractal/selfcheck.py -k galerkin  # the symmetric form of the kernel
+python studies/active_fractal/taiwan.py assemble --workers 8                   # the folded matrix, cached
+python studies/active_fractal/taiwan.py assemble --workers 8 --form galerkin   # its Galerkin form, 9 points per element
+python studies/active_fractal/taiwan.py run                    # 70 tensors x 3 kernels x 2 rules x 13 loads
 python studies/active_fractal/taiwan.py figure                 # website/src/figures/taiwan_sweep.png
 python studies/active_fractal/taiwan.py payload                # website/public/data/taiwan_*</code></pre>
 

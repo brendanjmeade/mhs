@@ -54,9 +54,12 @@ each scan load; the summary quotes ``lambda0`` and the load at which half
 the fault's area is active, both in MPa of maximum shear, which is what
 makes tensors of different shape comparable. Two
 effective-normal-stress models: uniform 150 MPa, and lithostatic minus a
-pore-pressure ratio of 0.4, which makes the shallow rows weak. Two kernels:
-the mollified half-space kernel with the free surface folded in (eps 0.1 h)
-and the classical triangular dislocation as the control. Friction 0.6
+pore-pressure ratio of 0.4, which makes the shallow rows weak. Three
+kernels: the mollified half-space kernel with the free surface folded in
+(eps 0.1 h), the classical triangular dislocation as the control, and the
+mollified kernel in its Galerkin form, whose area-weighted operator is
+symmetric positive definite (uniqueness and PGS convergence by theorem;
+the same map, a moment 7 % lower at the median). Friction 0.6
 everywhere, mean-stress ratio 2/3, the on-fault page's values. Under
 the fixed rule the rake of each element is set by the tensor alone
 (``friction.build_friction``), so that rake map is a prediction of the
@@ -131,7 +134,13 @@ NZ_FLOOR = 1e-3
 THETAS = (90.0, 100.0, 110.0, 120.0, 130.0, 140.0, 150.0)
 RS = (0.0, 0.25, 0.5, 0.75, 1.0)
 MODELS = ("uniform", "lithostatic")
-KERNELS = ("mollified", "classical")
+#: Three operators on one mesh: the mollified collocation kernel, the
+#: classical dislocation as the control, and the mollified kernel in its
+#: GALERKIN form (``kernel.assemble(form="galerkin")``), symmetric and
+#: positive definite, on which the solves are convex and their uniqueness a
+#: theorem rather than a measurement.
+KERNELS = ("mollified", "classical", "galerkin")
+GALERKIN_NQ = K.GALERKIN_NQ
 #: The slip rule: ``fixed`` is the scalar LCP along the tensor's rake
 #: (``static.solve``), ``free`` the cone problem in which each element's
 #: slip vector may turn (``static.solve_cone``). Both are run; the page
@@ -159,8 +168,9 @@ MODEL_LABEL = {"uniform": "uniform 150 MPa",
                "lithostatic": "lithostatic, pore ratio 0.4"}
 RAKE_LABEL = {"fixed": "fixed rake: slip along the tensor's shear",
               "free": "free rake: slip vector on the Coulomb disc"}
-KERNEL_LABEL = {"mollified": "mollified P0, folded (mhs)",
-                "classical": "classical TDE (cutde)"}
+KERNEL_LABEL = {"mollified": "mollified P0, folded (mhs): collocation",
+                "classical": "classical TDE (cutde): collocation",
+                "galerkin": "mollified P0, folded (mhs): Galerkin, symmetric PD"}
 
 
 # ------------------------------------------------------------------ mesh --
@@ -358,15 +368,17 @@ def cmd_assemble(a) -> int:
     net, meta = load_lvf()
     describe(net, meta)
     t0 = time.time()
-    Km, info = K.assemble(net, mu=OF.MU, lam=OF.LAM, workers=a.workers, verbose=True)
-    print(f"  matrix {Km.shape} ready in {time.time() - t0:.0f} s (key {info['key']})",
-          flush=True)
+    Km, info = K.assemble(net, mu=OF.MU, lam=OF.LAM, workers=a.workers, verbose=True,
+                          form=a.form, nq=GALERKIN_NQ)
+    print(f"  {a.form} matrix {Km.shape} ready in {time.time() - t0:.0f} s "
+          f"(key {info['key']})", flush=True)
     return 0
 
 
 def solve_any(P, d, g, lam, warm):
     """PGS, and the active-set Newton solver where PGS does not converge
-    (an indefinite sym(-P) is possible on a mesh this uneven)."""
+    (the collocation kernels' area-weighted symmetric part is indefinite on
+    a mesh this uneven; the Galerkin kernel's is positive definite)."""
     sol = St.solve(P, d, g, lam, warm=warm)
     if sol.converged:
         return sol, 0
@@ -381,8 +393,10 @@ def cmd_run(a) -> int:
     areas = net.areas()
     asum = areas.sum()
     Km, info = K.assemble(net, mu=OF.MU, lam=OF.LAM, workers=1, verbose=True)
+    Kg, info_g = K.assemble(net, mu=OF.MU, lam=OF.LAM, workers=1, verbose=True,
+                            form="galerkin", nq=GALERKIN_NQ)
     Kc = OF.classical_matrix(net.tris)
-    mats = {"mollified": Km, "classical": Kc}
+    mats = {"mollified": Km, "classical": Kc, "galerkin": Kg}
     shear = {k: np.ascontiguousarray(v[:, :, :2, :]) for k, v in mats.items()}
     nR, nk, nm = len(RAKES), len(KERNELS), len(MODELS)
     nt, nr, nl = len(THETAS), len(RS), len(LOADS)
@@ -402,6 +416,12 @@ def cmd_run(a) -> int:
     dcoef = np.zeros((nt, nr, n))
     tau_mag = np.zeros((nt, nr, n))
     sn_load = np.zeros((nt, nr, n))
+    #: The uniqueness indicator: the smallest eigenvalue of sym(-P A), P the
+    #: projected operator (source-major) and A the receiver areas, as a
+    #: fraction of the median eigenvalue. This is the matrix the Galerkin
+    #: form makes symmetric, so positive here is the P-matrix theorem; the
+    #: unweighted sym(-P) is the wrong object (an area scaling of a definite
+    #: matrix is a P-matrix, not a definite one).
     mineig = np.zeros((nk, nt, nr))
     branch = np.zeros((nk, nt, nr))
     iq = LOADS.index(LOAD_QUOTED)
@@ -416,8 +436,9 @@ def cmd_run(a) -> int:
             P = {}
             for ik, kern in enumerate(KERNELS):
                 P[kern] = K.project(mats[kern], fr0.slip_dir, fr0.slip_dir)
-                S = -0.5 * (P[kern] + P[kern].T)
-                mineig[ik, it, ir] = float(np.linalg.eigvalsh(S)[0])
+                M = -P[kern] * areas[None, :]
+                ev = np.linalg.eigvalsh(0.5 * (M + M.T))
+                mineig[ik, it, ir] = float(ev[0] / np.median(ev))
                 branch[ik, it, ir] = float(np.median(K.branching_ratio(P[kern])))
             for im, model in enumerate(MODELS):
                 fric = fr0 if im == 0 else friction(net, theta, r, model)
@@ -461,7 +482,7 @@ def cmd_run(a) -> int:
                               f"{mom[iR, ik, im, it, ir, iq]:.3e}; {nl} loads {time.time() - t0:4.0f} s, "
                               f"sweeps {int(sweeps[iR, ik, im, it, ir].sum())}, not converged "
                               f"{int((~converged[iR, ik, im, it, ir]).sum())}, min eig "
-                              f"{mineig[ik, it, ir]:+.3f}", flush=True)
+                              f"sym(-PA) {mineig[ik, it, ir]:+.3f} of median", flush=True)
     print(f"  sweep done in {(time.time() - t_all) / 60:.1f} min; not converged: "
           f"{int((~converged).sum())} of {converged.size}", flush=True)
     OUT.mkdir(exist_ok=True)
@@ -473,7 +494,8 @@ def cmd_run(a) -> int:
         act=act, slip=slip, srake=srake, frac=frac, mom=mom, sweeps=sweeps,
         method=method, converged=converged, lam0=lam0, lam_tensile=lam_tensile,
         never=never, rake=rake, dcoef=dcoef, tau_mag=tau_mag, sn_load=sn_load,
-        mineig=mineig, branch=branch, key=info["key"],
+        mineig=mineig, branch=branch, key=info["key"], key_galerkin=info_g["key"],
+        galerkin_asymmetry=float(info_g["asymmetry"]), galerkin_nq=GALERKIN_NQ,
         meta=json.dumps(meta), git=str(K._git()))
     print(f"  saved {path}", flush=True)
     return 0
@@ -525,9 +547,10 @@ def figure(z, out: pathlib.Path):
     iq = list(loads).index(LOAD_QUOTED)
     cmap = plt.get_cmap("viridis")
     cols = [cmap(0.1 + 0.8 * i / (nr - 1)) for i in range(nr)]
-    half = np.full((2, 2, 2, nt, nr), np.nan)          # rake, kernel, model
+    nk = len(z["kernels"])
+    half = np.full((2, nk, 2, nt, nr), np.nan)         # rake, kernel, model
     for iR in range(2):
-        for ik in range(2):
+        for ik in range(nk):
             for im in range(2):
                 for it in range(nt):
                     for ir in range(nr):
@@ -649,16 +672,22 @@ def cmd_figure(a) -> int:
         print(f"    az {th:3.0f}: " + " ".join(f"{rot_med[0, it, ir]:6.2f}"
                                               for ir in range(len(z["rs"]))))
     for iR, rule in enumerate(RAKES):
-        good = np.isfinite(half[iR, 0]) & np.isfinite(half[iR, 1])
-        q = half[iR, 1][good] / half[iR, 0][good]
-        print(f"  {rule}: kernels, half-active load classical/mollified {np.median(q):.3f} "
-              f"median, {q.min():.3f}-{q.max():.3f}; max |active fraction difference| "
-              f"{np.abs(z['frac'][iR, 0] - z['frac'][iR, 1]).max():.3f}; moment ratio "
-              f"classical/mollified at {LOAD_QUOTED} lam0 "
-              f"{np.median(z['mom'][iR, 1, ..., iq] / z['mom'][iR, 0, ..., iq]):.3f}")
-    print(f"  min eig sym(-P): mollified {z['mineig'][0].min():+.3f}, classical "
-          f"{z['mineig'][1].min():+.3f}; newton solves {int((z['method'] == 1).sum())}; "
-          f"not converged {int((~z['converged']).sum())}")
+        for ik in range(1, len(KERNELS)):
+            good = np.isfinite(half[iR, 0]) & np.isfinite(half[iR, ik])
+            q = half[iR, ik][good] / half[iR, 0][good]
+            print(f"  {rule}: {KERNELS[ik]}/mollified half-active load {np.median(q):.3f} "
+                  f"median, {q.min():.3f}-{q.max():.3f}; max |active fraction difference| "
+                  f"{np.abs(z['frac'][iR, 0] - z['frac'][iR, ik]).max():.3f}; moment ratio "
+                  f"at {LOAD_QUOTED} lam0 "
+                  f"{np.median(z['mom'][iR, ik, ..., iq] / z['mom'][iR, 0, ..., iq]):.3f} "
+                  f"median, {(z['mom'][iR, ik, ..., iq] / z['mom'][iR, 0, ..., iq]).min():.3f}-"
+                  f"{(z['mom'][iR, ik, ..., iq] / z['mom'][iR, 0, ..., iq]).max():.3f}")
+    print("  min eig sym(-PA) of median, worst tensor: "
+          + ", ".join(f"{k} {z['mineig'][ik].min():+.4f}"
+                                           for ik, k in enumerate(KERNELS))
+          + f"; newton solves {int((z['method'] == 1).sum())}; not converged "
+          f"{int((~z['converged']).sum())}; galerkin raw asymmetry "
+          f"{float(z['galerkin_asymmetry']):.2e}")
     return 0
 
 
@@ -746,7 +775,7 @@ def cmd_payload(a) -> int:
                             never_fail_area=float(np.sum(w * (z["dcoef"][it, ir] <= 0.0))),
                             tension_area=tension,
                             rake_mean_deg=float(np.sum(w * z["rake"][it, ir])),
-                            min_eig_sym_negP=float(z["mineig"][ik, it, ir]),
+                            min_eig_sym_negPA=float(z["mineig"][ik, it, ir]),
                             branching_ratio=float(z["branch"][ik, it, ir]),
                             newton_solves=int((z["method"][iR, ik, im, it, ir] == 1).sum()),
                             sweeps=int(z["sweeps"][iR, ik, im, it, ir].sum()))
@@ -779,7 +808,11 @@ def cmd_payload(a) -> int:
         dict(faults=geom, units="km"), allow_nan=False))
     man = dict(
         schema=SCHEMA, units="km, GPa, degrees", git=str(z["git"]), source="taiwan.py",
-        matrix_key=str(z["key"]), n_elements=int(tris.shape[0]),
+        matrix_key=str(z["key"]), matrix_key_galerkin=str(z["key_galerkin"]),
+        galerkin=dict(nq=int(z["galerkin_nq"]), raw_asymmetry=float(z["galerkin_asymmetry"]),
+                      form="rows averaged over the receiver element, area-weighted shear "
+                           "block symmetrised"),
+        n_elements=int(tris.shape[0]),
         h_km=meta["h_km"], eps_km=meta["eps_km"], frame=meta["frame"],
         origin=dict(lon=meta["lon0"], lat=meta["lat0"]), km_per_deg=meta["km_per_deg"],
         faults=meta["faults"], data_source=meta["source"],
@@ -813,7 +846,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("assemble", help="the mollified matrix into the cache, in "
                                         "its own process")
     s.add_argument("--workers", type=int, default=8)
-    sub.add_parser("run", help="the stress-tensor sweep, both kernels, both slip rules")
+    s.add_argument("--form", default="collocation", choices=K.FORMS)
+    sub.add_parser("run", help="the stress-tensor sweep, three kernels, both slip rules")
     f = sub.add_parser("figure", help="the summary figure from out/taiwan_sweep.npz")
     f.add_argument("--out", default=str(FIGURES))
     p = sub.add_parser("payload", help="out/taiwan_sweep.npz -> website/public/data")
