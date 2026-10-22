@@ -7,7 +7,7 @@
 // the manifest differ.
 
 import { OnFaultScene } from "./onfault";
-import type { MapName } from "./colormaps";
+import { cssGradient, lut, type MapName } from "./colormaps";
 import type { Preset } from "./stage";
 
 interface Case {
@@ -67,6 +67,43 @@ const fmt = (v: number, d = 1) => {
   const a = Math.abs(v);
   return a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(d) : v.toPrecision(2);
 };
+
+/** The saved PNG with the colour bar and its caption drawn in, so that the
+ * image stands on its own: the WebGL frame is copied onto a 2-D canvas and
+ * the bar is painted from the same LUT the shader samples. */
+function composeShot(dataUrl: string, map: MapName, lo: string, hi: string,
+                     caption: string): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const W = img.width, H = img.height;
+      const c = document.createElement("canvas");
+      c.width = W; c.height = H;
+      const g = c.getContext("2d")!;
+      g.drawImage(img, 0, 0);
+      const s = Math.max(1, Math.round(W / 750));           // device-pixel scale
+      const bw = Math.round(0.28 * W), bh = 12 * s;
+      const x0 = W - bw - 24 * s, y0 = H - bh - 40 * s;
+      const table = lut(map);
+      for (let i = 0; i < bw; i++) {
+        const k = Math.min(255, Math.floor((i / (bw - 1)) * 255)) * 4;
+        g.fillStyle = `rgb(${table[k]},${table[k + 1]},${table[k + 2]})`;
+        g.fillRect(x0 + i, y0, 1, bh);
+      }
+      g.strokeStyle = "#3c4046"; g.lineWidth = s;
+      g.strokeRect(x0 + 0.5, y0 + 0.5, bw - 1, bh - 1);
+      g.fillStyle = "#2a2d31";
+      g.font = `${12 * s}px system-ui, -apple-system, sans-serif`;
+      g.textBaseline = "top";
+      g.textAlign = "left"; g.fillText(lo, x0, y0 + bh + 4 * s);
+      g.textAlign = "right"; g.fillText(hi, x0 + bw, y0 + bh + 4 * s);
+      g.textAlign = "center"; g.textBaseline = "bottom";
+      g.fillText(caption, x0 + bw / 2, y0 - 4 * s, bw + 80 * s);
+      resolve(c.toDataURL("image/png"));
+    };
+    img.src = dataUrl;
+  });
+}
 const az3 = (t: number) => String(Math.round(t)).padStart(3, "0");
 const r2 = (r: number) => r.toFixed(2);
 
@@ -75,6 +112,7 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
   const canvasEl = root.querySelector<HTMLElement>("[data-canvas]")!;
   const status = root.querySelector<HTMLElement>("[data-status]")!;
   const legend = root.querySelector<HTMLElement>("[data-legend]");
+  const bar = root.querySelector<HTMLElement>("[data-bar]");
   const base = baseUrl.replace(/\/?$/, "/") + "data/";
 
   let man: TaiwanManifest;
@@ -202,10 +240,14 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
     const b = document.createElement("button");
     b.type = "button"; b.textContent = "save PNG";
     b.addEventListener("click", () => {
-      const a = document.createElement("a");
-      a.href = view.screenshot();
-      a.download = `mhs-taiwan-${caseKey()}-${metric}${metric === "slip" ? "-" + loadF : ""}.png`;
-      a.click();
+      const e = barEnds();
+      void composeShot(view.screenshot(), METRICS[metric].map, e.lo, e.hi,
+                       `${e.mid} — ${describe()}`).then((url) => {
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `mhs-taiwan-${caseKey()}-${metric}${metric === "slip" ? "-" + loadF : ""}.png`;
+        a.click();
+      });
     });
     shotWrap.appendChild(b);
   }
@@ -232,8 +274,31 @@ export async function startTaiwan(root: HTMLElement, baseUrl: string,
         : metric === "rake" ? "0 – 180°"
         : metric === "d" ? `±${fmt(win)}` : `0 – ${fmt(win)} m`;
     }
+    paintBar();
     paintLegend();
     paintStatus();
+  }
+
+  /** The bar's two ends and its caption, in the metric's own unit. */
+  function barEnds(): { lo: string; hi: string; mid: string } {
+    const top = S.loads[S.loads.length - 1];
+    if (metric === "act") return { lo: "1", hi: `${top}`, mid: "activation load λ/λ₀ (grey: not active by the last load)" };
+    if (metric === "rake") return { lo: "0 sinistral", hi: "180 dextral", mid: "rake (deg), 90 reverse" };
+    if (metric === "d") return { lo: `−${fmt(win)}`, hi: `+${fmt(win)}`, mid: "Coulomb loading rate per unit λ (≤ 0 never fails)" };
+    return { lo: "0", hi: `${fmt(win)} m`, mid: `slip at ${loadF} λ₀ (m)` };
+  }
+
+  function paintBar() {
+    if (!bar) return;
+    const e = barEnds();
+    bar.innerHTML = "";
+    const strip = document.createElement("div");
+    strip.className = "strip";
+    strip.style.background = cssGradient(METRICS[metric].map);
+    const ends = document.createElement("div");
+    ends.className = "ends";
+    ends.innerHTML = `<span>${e.lo}</span><span class="mid">${e.mid}</span><span>${e.hi}</span>`;
+    bar.append(strip, ends);
   }
 
   const describe = () => `S_Hmax ${theta}°, r ${r} (${REGIME(r).split(":")[1].trim()}), `
